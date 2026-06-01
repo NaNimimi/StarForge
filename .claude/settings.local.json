@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter --version)",
+      "Bash(flutter create *)",
+      "Bash(rm -f test/widget_test.dart)",
+      "Bash(flutter pub *)",
+      "Bash(flutter analyze *)",
+      "Bash(flutter build *)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(nohup flutter run -d web-server --web-port 8080 --web-hostname 0.0.0.0)",
+      "Bash(echo \"started, PID $!\")",
+      "Read(//tmp/**)",
+      "Bash(break)"
+    ]
+  }
+}
