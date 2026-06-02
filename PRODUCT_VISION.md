@@ -55,7 +55,8 @@
   education center is different. Create custom roles (e.g. "assistant"), define
   their permissions, assign to one or many users.
 - **HARD REQUIREMENT — backend checks live permissions on every request.**
-  **localStorage and checked only on the frontend**; logging in as a normal
+  The previous system he used stored permissions in **localStorage and checked
+  only on the frontend**; logging in as a normal
   teacher, he had full admin control in **under a minute**. The backend never
   verified. This must never happen here: the server is the sole authority, checks
   permissions live (no client-trusted state), and revocation takes effect
@@ -178,6 +179,280 @@
 - Clarified: **"Meta AI" is genuinely Meta's AI** (founder saw "Meta sell AI") —
   likely WhatsApp Business / Meta Business AI for handling & summarizing calls/
   chats. Integration path + legality both need the research pass.
+
+## Batch 3 — business model + the camera differentiator (2026-06-02)
+This reframes the pricing/positioning challenge from the research: Starforge is
+**NOT** a commodity shared-SaaS CRM. It's a **premium, managed, AI-heavy, dedicated-
+infrastructure** product that "brings the education center to life."
+
+- **Real demand, now:** 3 education centers ready to buy, combined **5,000+ students,
+  ~10+ branches.** Founder has used the 3 big incumbents' demos — confirms they're
+  slow/buggy. (Concentration risk: 3 logos — see notes.)
+- **Dedicated server per center**, paid for out of the subscription. Want more
+  programs / capacity? A server is granted. This is the premium justification — and
+  it's why the "$79–225 is 2–5× too high" finding is **largely answered**: it's a
+  different category (managed/dedicated/AI), not the commodity CRM price axis.
+- **Premium AI tiering** (not "cheap shitty AI"): **Claude Opus 4.8 (high-effort)**
+  for heavy reasoning, **Sonnet** for basic, **Haiku** for fast tasks. Cost control
+  matters (Opus high-effort is real money — meter per-center, see TASKS §18 budgets).
+- **AI camera system built in** — the product "looks into cameras." Headline
+  differentiator; founder is confident no competitor has it. (This is the concrete
+  form of the earlier "keep an eye" idea, §13.) Likely uses: presence/attendance,
+  safety/monitoring, behavior insights.
+  - **Architecture win:** camera/face = **biometric data**, which by UZ law MUST stay
+    on **domestic servers** (see uz-market-research). The dedicated **in-country**
+    server-per-center model handles this *perfectly* — the premium model and the law
+    line up. Still need **consent + signage**; keep biometric/video data on the
+    center's own server, never in foreign cloud.
+  - django-tenants (schema-per-tenant) deploys cleanly onto a dedicated per-center
+    server (one/few tenants per box) — **no architectural rework needed**; the same
+    codebase is the managed deployment.
+
+## Batch 4 — camera design, exams, and the student engagement layer (2026-06-02 night)
+
+### AI camera analysis — design
+- **Edge box in the center** (e.g. i5 7th-gen + GPU) or the center's own server; **data
+  never leaves the building** (satisfies biometric-localization law + huge trust line).
+- Replaces today's ritual where a manager/auditor drags a teacher into a room and
+  watches camera footage together for ~2h/week → slow, resentment-breeding.
+- **Pipeline reality:** "Llama" is a TEXT model — it can't watch video. Real stack =
+  CV (YOLO-type detection/presence) + **ASR (Whisper) on lesson audio** → local LLM
+  (Llama/Qwen) writes the analysis. **Lead with audio→transcript analysis** (cheap,
+  covers "was the teacher on time / did they teach / cover material / tone") + light
+  presence detection; add deep video understanding later.
+- **Batch at end of lesson** (non-real-time) to survive a modest GPU; mind queue
+  spikes when many classes end at once. Hardware floor is really **VRAM** — a used
+  RTX 3060 12GB (~$250) beats a GTX 1650 4GB by a lot.
+- **Who sees the analysis: DYNAMIC — let each center's teachers vote, then configure.**
+  Teacher sees their OWN report (= fairness/self-improvement), not just the manager
+  (= surveillance). Same data, opposite soul. Consent + signage + short retention.
+
+### Mock exams
+- Centers currently BUY mock exams (recurring cost). Starforge provides them:
+  **AI-generated (Opus)** + **government-licensed official sets** (bought by us,
+  distributed to centers as a recurring promise, monthly / quarterly).
+- **The real gold = AI auto-scoring + feedback** on writing/speaking (band score +
+  criterion feedback in seconds; teacher reviews/overrides). Removes the slow,
+  subjective weekend work; makes students feel measurably better.
+- **AI-generated content dodges the copyright landmine** (your own content, not
+  Cambridge/BC). Keep a quality bar early (human glance before students see a mock).
+
+### Typing + computer-based-test (CBT) experience
+- IELTS (and more) is now **computer-based**; many UZ students can't navigate the
+  test UI / type fast → lose bands on mechanics, not English.
+- Build a **faithful CBT simulator** (real timer, listening-plays-once, highlighter,
+  word counter, navigation) + typing practice. Nobody in center-software does this.
+  Open question: flagship for IELTS exam-prep centers vs universal digital-literacy
+  on-ramp for every center.
+
+### Voting / polls primitive
+- Generic poll/vote in the platform (decide analysis visibility, rule-book changes,
+  event adoption). A center that runs on **consent, not decree** — founder's DNA.
+
+### Student engagement layer (the "daily attention" surface)
+- **In-app podcasts** for students — clean UI, listening practice. (Use TTS-generated
+  or licensed audio to stay copyright-clean; control difficulty.)
+- **Focus / study board** — timer + calm widgets (Forest/Pomodoro-style) to study
+  inside the app.
+- **Gamified competition (Blooket/Kahoot/Gimkit-style)** — vocab/translation games
+  ("pull a fish → find the translation → score"), live leaderboards, prizes. These
+  tools are huge globally but **unknown/unadopted in UZ** → real gap. Founder is
+  intensely competitive and wants study + games + social in ONE app.
+  - AI can **generate the game content** from the lesson (vocab quizzes) → ties Opus
+    back in. Digitize the "chocolate prize" into a **points/rewards + badges** system;
+    the teacher can still hand out the real chocolate.
+
+### Theme this batch crystallizes: TWO surfaces, one app
+Starforge is becoming **(a) the ops platform the center OWNER pays for** (payments,
+camera, attendance, payroll, accountability) **AND (b) the daily-attention surface the
+STUDENT opens every day** (games, podcasts, focus, mocks, CBT). Owning the student's
+daily attention is what makes the product **un-rip-out-able** — the ops tool wins the
+sale, the engagement layer wins retention. Different build tracks + audiences; sequence
+accordingly (owner-paid ops first, student delight layer as the retention flywheel).
+
+## Batch 5 — AI speaking partner + lesson media (2026-06-02 night)
+
+### AI speaking partner / IELTS speaking simulator  ⭐ (flagship candidate)
+- Founder had no one to practice IELTS speaking with in his town → practiced **with
+  AI**. Put that in the app: **you talk to the AI, it runs an actual IELTS speaking
+  test (3 parts: interview / cue-card long turn / discussion), and scores you
+  instantly.** Nobody in the market has this.
+- Stack: **ASR (Whisper)** → **LLM examiner (Opus)** for questions + band scoring →
+  **TTS** for the examiner's voice. 24/7, infinitely patient, no social anxiety
+  (ties to the dignity/shame-reduction theme — shy learners, scarce partners).
+- **Honesty flag:** fluency/coherence, lexical, grammar score well from transcript;
+  **pronunciation is the genuinely hard band** (needs phoneme-level analysis).
+  Approximate it early, label it clearly, improve later — do NOT overpromise a
+  precise pronunciation score.
+
+### Progress tracking
+- Save **voice recordings**; show an **improvement graph by date** + **approximate
+  band trajectory**. The "I can see myself getting better" dopamine = motivation for
+  the student, ROI proof for the parent, retention proof for the center. (Secure/
+  local storage + consent — these are often minors.)
+
+### YouTube lesson-linked clips (teacher time-saver)
+- Founder's teacher used to pull YouTube clips (movies/cartoons) that used **exactly
+  the grammar/vocab from the lesson**. Provide this in-app for the teacher.
+- **Tech/legal:** use the **YouTube API to search + EMBED** the official player —
+  never download/rip (ToS + copyright). Clever matching: search video **captions**
+  for the lesson's target phrases/structures; AI suggests the search terms. v1 =
+  topic/keyword + caption match (precise "uses this grammar" is approximate).
+
+## Batch 6 — the joy layer: student rewards + the living yearbook (2026-06-02 night)
+
+### Student rewards program (company-funded generosity)
+- Top students at **every branch of every center** get real rewards:
+  - **Digital subscriptions** gifted instantly through the app (enter email → granted):
+    **Spotify**, **Netflix** (cap ~5 students), **Crunchyroll** (anime).
+  - **Physical rewards** the company hosts: budget-but-high-perceived-value hardware —
+    e.g. **CMF Buds** (noise-cancelling earbuds). Founder's insight: students have
+    never owned/known noise-cancelling headphones; cheap for us, life-changing for
+    them. "Give them everything."
+- Purpose: this is **marketing + retention + word-of-mouth in one** — a rewarded
+  student evangelizes to everyone; parents see it; near-zero CAC. On-brand with the
+  founder's generosity. "Not a CRM to compete — something else entirely. Not just
+  data — the FUN we'll have while learning."
+- **⚠️ Business guardrail (Claude):** company-funded rewards across every branch is an
+  **unbounded cost that grows with success** — must be made PREDICTABLE, not a vibe:
+  - Fixed/capped reward pool per branch/term; points→catalog redemption with a monthly cap.
+  - **Co-fund with the center** (it's their retention win) and/or land **sponsor deals**
+    (Spotify/local brands love education tie-ins); bulk-buy hardware at cost.
+  - The CMF instinct (max perceived value per dollar) is exactly right — systematize it.
+  - **Every reward is a money-movement → log it in the ledger** (accountability/audit).
+
+### Living yearbook (the group-photo journey)
+- Teachers attach the **group photo** periodically (e.g. daily); over a term/year the
+  cohort sees its **growth/journey** on the app — a living yearbook. Cheap to build,
+  high emotion: belonging + memory + retention glue. Ties to the Cohort model.
+- Consent for minors; visibility scoped to the cohort.
+
+### Theme: the JOY layer is the un-copyable soul
+Incumbents are accountants of education; this adds a generosity/joy/belonging layer
+they will never build. It's the soul of the product — pair the soul with the budget
+discipline above so the dream survives a P&L.
+
+## Batch 7 — points economy + redemption store (2026-06-02 night)
+- **Known brands only** for hardware rewards: **Apple AirPods, Nothing Ear / CMF buds,
+  Samsung Buds.** Quality/trust/aspiration over cheap — "money isn't the most important
+  part." A knockoff reward would cheapen the whole program.
+- **Points economy:** students **earn points from studying** (attendance, scores,
+  improvement, game wins — maybe on-time payment) and **spend them in an in-app store**
+  on a **tiered catalog**:
+  - cheap/frequent: pens, notebooks, accessories (easy to build, low cost);
+  - aspirational/rare: branded earbuds at the top (drives months of grinding even if
+    few redeem — the top prize is the *engine*, not the cost).
+- **This is the disciplined form of Batch 6's generosity:** you control the **earn rate**
+  and the **catalog prices**, so total cost is predictable/capped by design.
+- **Economy discipline:** balance earn vs burn (don't over-issue → inflation/raids),
+  tie earning to real achievement. Points are an **issued currency → track issuance +
+  redemption in the ledger** (auditable, same spine as tuition/salary/rewards).
+- **Unify with the earlier in-app book/material market (Batch 1):** ONE marketplace,
+  TWO currencies — **UZS** for books/materials, **points** for rewards. Reuse the build.
+- Fulfillment: the branch operator hands out physical items + marks it in the app
+  (inventory + accountability; ties to the branch/operator model).
+
+## Batch 8 — "watch together" co-watch social learning (2026-06-02 night)
+- Concept: you're home on your bed, I'm home on mine; I open the app, see you
+  **online**, **request to watch a movie together** (English-only, content set by the
+  center). We watch **synced**, **chat** about the film, learn new words, enjoy each
+  other's company digitally. (Founder unsure whether to include — Claude verdict below.)
+- **Why it's good:** deeply on-brand (joy + companionship + "fun while learning"),
+  co-presence kills the loneliness of self-study, and co-watching + discussing English
+  film is genuinely effective input + speaking practice. Strong daily-engagement /
+  retention driver. Reuses the spine: presence + in-app chat + realtime (Channels is
+  already in the stack) + vocab games from the film.
+- **⚠️ Catch 1 — licensing:** do NOT host/stream copyrighted movies. Use the
+  **Teleparty model: never host video — sync the timeline + chat over each user's own
+  legal playback**, or embed YouTube/public-domain/CC English films. Same "embed/sync,
+  never host/rip" rule as the YouTube clips + podcasts.
+- **⚠️ Catch 2 — child safety (these are minors):** this is a social network for kids.
+  Must be **cohort/center-scoped only (no strangers)**, **center-approved English
+  content only**, **chat moderated + logged to audit**, parent/center-visible. Frame it
+  as **"study together,"** not "social app." A co-watch + chat between minors the center
+  can't see = liability.
+- **Verdict:** KEEP — but as a **later engagement-layer feature**, not a launch item
+  (the 3 waiting centers pay for ops/payments/camera first). Build it safe-by-design.
+
+## Batch 9 — supervised in-app communication: the governed Telegram alternative (2026-06-02)
+- Today centers run on **Telegram** (student/parent groups) → zero oversight, strangers
+  can join, no record. Starforge moves **group chats + all communication INTO the app,
+  fully supervised.** This turns the child-safety risk (Batch 8) into the **value prop**:
+  the **governed alternative to Telegram** — control for the owner, safety for the parent.
+- **Center-provisioned logins (no open signup) → no strangers can log in.** Aligns with
+  the existing auth model (center creates users, OTP login, no public registration).
+- **Weekly high audit of all groups** → ties to the audit log/feed. Make it scalable with
+  **AI moderation**: cheap model (Haiku) scans for profanity/bullying/concern → escalate
+  flagged items to a human/manager (don't make someone read everything).
+- **Profanity ban:** wordlist filter + AI for context (bullying without swear words).
+  **Must cover Uzbek + Russian + English**, not just English.
+- **Co-watch refined (resolves Batch 8 catches):** only **short, approved English
+  LEARNING clips fetched/embedded from YouTube** — "not long horror movies lol." This
+  sidesteps licensing (embed, short, educational) AND safety/attention at once.
+- **Strategy nuance vs "Telegram-first for parents":** not contradictory — **notify via
+  Telegram (reach), but keep supervised group chat in-app (control).** Bonus: in-app
+  comms keeps the data in the center's system (oversight + lock-in + less leakage).
+
+## Batch 10 — the Intelligence layer + growth/ops (2026-06-02)
+
+**KEY INSIGHT (Claude):** most of this batch is ONE thing — an **Intelligence /
+analytics layer** computed from data Days 2–4 already collect (attendance, grades,
+submissions, payments). Risk flags, family health, branch ranking, teacher
+leaderboards, reputation are all *views/scores* on the same metric pipeline. Build
+the pipeline once; these become configured readouts. (Same "one engine" pattern as
+the ledger + approvals.)
+
+### Student risk prediction ⭐ (killer + easy to start)
+- Flag at-risk students from signals already captured: **attendance dropping,
+  homework not submitted, scores declining, tuition delayed.** Staff see it instantly
+  → call the parent → save the student. **Dropout = the center's #1 revenue leak,** so
+  this is probably the highest-ROI metric feature.
+- **Start as transparent RULES** (attendance <X%, N missed HW, negative score trend,
+  overdue payment), NOT a black-box "AI prediction." Explainable, cheap, shippable
+  now; add ML later. (Don't ship International-style "AI" vapor — ship the real simple thing.)
+
+### Family health / relationship scores
+- Per-student/family scores: attendance, payment reliability, parent responsiveness,
+  performance trend. Manager sees "happy / needs-attention / at-risk" families.
+- **Caution (Claude):** avoid a visible "problem families" label — frame as
+  **"needs attention"** (neutral, action-oriented), keep internal/permissioned. Same
+  data, kinder framing (dignity DNA).
+
+### Teacher performance intelligence  ⚠️ (double-edged)
+- Teachers earn points/rankings; "you're #1 of 20 teachers" messages.
+- **Caution (Claude):** naive leaderboards breed toxicity + gaming + recreate the
+  unfairness the founder hated (teachers with pre-strong students always "win").
+  Measure **value-added / improvement**, not raw scores; teacher sees their own first;
+  reuse the camera-analysis decision (teachers vote on visibility). Fairness DNA.
+
+### Branch ranking
+- Compare branches within a center (and across, for chains). A view on the same metrics.
+
+### Classroom-IQ QR dashboard
+- Teacher scans a QR on entry → instantly sees attendance, homework status, lesson
+  plan, materials for that class. Fast, paperless lesson cockpit.
+
+### Smart group formation / matching
+- Auto-suggest student placement + schedule matching + teacher matching by **level +
+  availability.** **Reuses the schedule conflict/availability engine (Day 3).** v1 =
+  simple suggestions (group by level + matching free windows); real optimization later.
+
+### Student journey timeline (parent-facing)
+- Parent opens the app: "joined 2024 · passed 20 exams · earned a scholarship · won
+  Best Student." A visual portfolio/life-story. Ties to living yearbook + progress
+  graph + rewards/badges. Cheap (a view on existing data), huge emotion + retention.
+
+### Growth & ops
+- **Referral system:** student invites a friend → more students. Pair with the
+  **points/rewards economy** (refer → points). Classic, cheap growth loop.
+- **Teacher marketplace:** a teacher's sick → get a substitute. v1 = within-center
+  **substitute pool**; a cross-center marketplace is a later network-effect play.
+- **Equipment tracking:** who holds which laptop/camera/etc. Simple asset registry;
+  same anti-fraud DNA as the ledger ("equipment can't disappear"). Easy win.
+- **Reputation dashboard: BOTH** (founder confirmed) — an **internal** center-health
+  score (aggregate of the metrics above, for the owner) AND **public reviews/ratings**.
+  Public reviews need anti-gaming + moderation (verified students only, no anonymous
+  brigading, center can respond) — treat like the supervised-comms safety model.
 
 ## Themes Claude sees across the dump (to discuss)
 1. **Accountability & anti-fraud** runs through everything (cash logging, live

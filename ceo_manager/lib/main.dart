@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme.dart';
 import 'data.dart';
+import 'store.dart';
 import 'console.dart';
 import 'widgets.dart';
 
@@ -17,24 +18,28 @@ class CeoManagerApp extends StatefulWidget {
 
 class _CeoManagerAppState extends State<CeoManagerApp> {
   SfRole? role;
+  final AppStore store = AppStore.seed();
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'StarForge EDU · CEO Manager',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        scaffoldBackgroundColor: SfColors.light.bg,
-        fontFamily: SfType.ui,
-        splashFactory: InkRipple.splashFactory,
-        useMaterial3: true,
+    return AppScope(
+      store: store,
+      child: MaterialApp(
+        title: 'StarForge EDU · CEO Manager',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          scaffoldBackgroundColor: SfColors.light.bg,
+          fontFamily: SfType.ui,
+          splashFactory: InkRipple.splashFactory,
+          useMaterial3: true,
+        ),
+        home: role == null
+            ? RolePicker(onPick: (r) => setState(() => role = r))
+            : Console(
+                cfg: kRoleConfigs[role]!,
+                onSwitchRole: () => setState(() => role = null),
+              ),
       ),
-      home: role == null
-          ? RolePicker(onPick: (r) => setState(() => role = r))
-          : Console(
-              cfg: kRoleConfigs[role]!,
-              onSwitchRole: () => setState(() => role = null),
-            ),
     );
   }
 }

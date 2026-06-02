@@ -139,19 +139,66 @@ const List<Branch> kBranches = [
 ];
 
 class Approval {
+  final String id;
   final String title;
   final String who;
   final String sub;
   final num amount;
   final Color rail;
-  const Approval(this.title, this.who, this.sub, this.amount, this.rail);
+
+  /// When approved, a money request moves cash IN (true) or OUT (false) of the till.
+  final bool inflow;
+  const Approval(this.id, this.title, this.who, this.sub, this.amount, this.rail,
+      {this.inflow = false});
 }
 
 const List<Approval> kApprovals = [
-  Approval("To'lov qaytarish", 'Akbarov Akmal', 'Ortiqcha · iyun', 600000, Color(0xFF4F7B3B)),
-  Approval("Ta'til", 'Yusupova N.', '24–26 May', 0, Color(0xFFB85535)),
-  Approval('Yangi guruh', 'Ingliz B2', "18 o'rin", 0, Color(0xFFD89A2E)),
-  Approval('Chiqarish', 'Eshmatov O.', '3+ oy qarz', 1200000, Color(0xFFB33A2A)),
+  Approval('A-1', "To'lov qaytarish", 'Akbarov Akmal', 'Ortiqcha · iyun', 600000, Color(0xFF4F7B3B)),
+  Approval('A-2', "Ta'til", 'Yusupova N.', '24–26 May', 0, Color(0xFFB85535)),
+  Approval('A-3', 'Yangi guruh', 'Ingliz B2', "18 o'rin", 0, Color(0xFFD89A2E)),
+  Approval('A-4', 'Chiqarish', 'Eshmatov O.', '3+ oy qarz', 1200000, Color(0xFFB33A2A)),
+];
+
+// ── Ledger: the anti-fraud money-movement spine ─────────────────────────
+// Every som that moves is one immutable row: tuition in, salary out, book
+// sale, cash logged, refund. "Pulni yo'qotib bo'lmaydi" — money can't vanish.
+class LedgerEntry {
+  final String id;
+  final String title;
+  final String who;
+  final num amount;
+  final bool inflow; // true = money in, false = money out
+  final String kind; // To'lov | Oylik | Kitob | Naqd | Tasdiq | Qaytarish
+  final String channel; // Click | Payme | Uzum | Naqd | Tizim
+  final String time;
+  const LedgerEntry({
+    required this.id,
+    required this.title,
+    required this.who,
+    required this.amount,
+    required this.inflow,
+    required this.kind,
+    required this.channel,
+    required this.time,
+  });
+}
+
+const List<LedgerEntry> kLedgerSeed = [
+  LedgerEntry(
+      id: 'L-2048', title: "Oylik to'lov", who: 'Azizova Madina', amount: 600000,
+      inflow: true, kind: "To'lov", channel: 'Payme', time: '09:14'),
+  LedgerEntry(
+      id: 'L-2047', title: "Oylik to'lov", who: 'Halimova Zilola', amount: 600000,
+      inflow: true, kind: "To'lov", channel: 'Click', time: '09:02'),
+  LedgerEntry(
+      id: 'L-2046', title: 'Kitob sotuvi · Grammar 4', who: "G'aniyev Jasur", amount: 85000,
+      inflow: true, kind: 'Kitob', channel: 'Naqd', time: 'Kecha 17:40'),
+  LedgerEntry(
+      id: 'L-2045', title: "O'qituvchi oyligi", who: 'Nigora Karimova', amount: 4200000,
+      inflow: false, kind: 'Oylik', channel: 'Tizim', time: 'Kecha 15:20'),
+  LedgerEntry(
+      id: 'L-2044', title: 'Naqd · qabul', who: 'Ibragimov Sardor', amount: 600000,
+      inflow: true, kind: 'Naqd', channel: 'Naqd', time: 'Kecha 11:05'),
 ];
 
 class Anomaly {

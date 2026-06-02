@@ -647,6 +647,171 @@ class LegendRow extends StatelessWidget {
   }
 }
 
+/// Scaffold for pushed module routes — they have no [SfTheme] ancestor, so
+/// [colors] is passed in and re-provided.
+class SfScaffold extends StatelessWidget {
+  final SfColors colors;
+  final String title;
+  final List<Widget>? actions;
+  final Widget body;
+  final Widget? bottomBar;
+  const SfScaffold({
+    super.key,
+    required this.colors,
+    required this.title,
+    required this.body,
+    this.actions,
+    this.bottomBar,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          iconTheme: IconThemeData(color: c.ink),
+          shape: Border(bottom: BorderSide(color: c.border)),
+          title: Text(title,
+              style: TextStyle(fontFamily: SfType.ui, fontSize: 16, fontWeight: FontWeight.w800, color: c.ink)),
+          actions: actions,
+        ),
+        body: body,
+        bottomNavigationBar: bottomBar,
+      ),
+    );
+  }
+}
+
+/// A small labelled stat block on a `surface2` background.
+class SfStatTile extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const SfStatTile(this.label, this.value, this.color, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(color: c.surface2, borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label.toUpperCase(),
+              style: TextStyle(
+                  fontFamily: SfType.ui, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4, color: c.muted)),
+          const SizedBox(height: 3),
+          Text(value, style: TextStyle(fontFamily: SfType.mono, fontSize: 17, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Single-select chip row (dark "ink" pill = active).
+class SfSelectChips extends StatelessWidget {
+  final List<String> items;
+  final int selected;
+  final ValueChanged<int> onSelect;
+  const SfSelectChips({super.key, required this.items, required this.selected, required this.onSelect});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return SizedBox(
+      height: 34,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: items.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 6),
+        itemBuilder: (_, i) {
+          final on = i == selected;
+          return GestureDetector(
+            onTap: () => onSelect(i),
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: on ? c.ink : Colors.transparent,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: on ? Colors.transparent : c.border),
+              ),
+              child: Text(items[i],
+                  style: TextStyle(
+                      fontFamily: SfType.ui, fontSize: 12, fontWeight: FontWeight.w600, color: on ? c.bg : c.muted)),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Primary/secondary pill button used in module action bars.
+class SfButton extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final bool primary;
+  final VoidCallback onTap;
+  const SfButton({super.key, this.icon, required this.label, required this.primary, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Material(
+      color: primary ? c.primary : c.surface2,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
+          decoration: BoxDecoration(
+            border: primary ? null : Border.all(color: c.border),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 17, color: primary ? Colors.white : c.ink2),
+                const SizedBox(width: 7),
+              ],
+              Flexible(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: primary ? Colors.white : c.ink2)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating snackbar that does not pop the current route.
+void sfSnack(BuildContext context, String msg, {Color? bg}) {
+  ScaffoldMessenger.of(context)
+    ..clearSnackBars()
+    ..showSnackBar(SnackBar(
+      duration: const Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: bg ?? const Color(0xFF3A332A),
+      content: Text(msg, style: const TextStyle(fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w600)),
+    ));
+}
+
 PillTone toneFromString(String s) {
   switch (s) {
     case 'success':
