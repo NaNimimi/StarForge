@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
+import 'settings.dart';
+import 'i18n.dart';
 import 'console.dart';
 import 'widgets.dart';
 
@@ -22,6 +24,18 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   // clean slate. The initial value is a placeholder the login screen never reads.
   AppStore store = AppStore.seed(SfRole.ceo);
 
+  // Global theme/language — survives sign-out and rebuilds the whole app on
+  // change so every screen re-themes and re-translates instantly.
+  late final AppSettings settings = AppSettings()..addListener(_onSettings);
+  void _onSettings() => setState(() {});
+
+  @override
+  void dispose() {
+    settings.removeListener(_onSettings);
+    settings.dispose();
+    super.dispose();
+  }
+
   void _login(SfRole r) => setState(() {
         role = r;
         store = AppStore.seed(r);
@@ -29,43 +43,116 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
 
   @override
   Widget build(BuildContext context) {
-    return AppScope(
-      store: store,
-      child: MaterialApp(
-        title: 'StarForge EDU · CEO Manager',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          scaffoldBackgroundColor: SfColors.light.bg,
-          fontFamily: SfType.ui,
-          splashFactory: InkRipple.splashFactory,
-          useMaterial3: true,
-        ),
-        // Animated swap between the login shell and the active console.
-        home: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 520),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: (child, anim) {
-            final fade = FadeTransition(opacity: anim, child: child);
-            return ScaleTransition(
-              scale: Tween<double>(begin: 0.96, end: 1).animate(anim),
-              child: fade,
+    final c = settings.colors;
+    return SettingsScope(
+      settings: settings,
+      child: AppScope(
+        store: store,
+        child: MaterialApp(
+          title: 'StarForge EDU · CEO Manager',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            scaffoldBackgroundColor: c.bg,
+            fontFamily: SfType.ui,
+            splashFactory: InkRipple.splashFactory,
+            useMaterial3: true,
+            brightness: settings.dark ? Brightness.dark : Brightness.light,
+          ),
+          // Apply the live density (text-scale) tweak globally and paint the
+          // chosen background pattern behind every route.
+          builder: (context, child) {
+            final mq = MediaQuery.of(context);
+            return MediaQuery(
+              data: mq.copyWith(textScaler: TextScaler.linear(settings.textScale)),
+              child: settings.pattern == SfPattern.none
+                  ? child!
+                  : Stack(
+                      children: [
+                        child!,
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: CustomPaint(
+                                painter: _PatternPainter(settings.pattern, c.muted2.withValues(alpha: 0.22))),
+                          ),
+                        ),
+                      ],
+                    ),
             );
           },
-          child: role == null
-              ? LoginScreen(
-                  key: const ValueKey('login'),
-                  onLogin: _login,
-                )
-              : Console(
-                  key: ValueKey('console-${role!.name}'),
-                  cfg: kRoleConfigs[role]!,
-                  onSwitchRole: () => setState(() => role = null),
-                ),
+          // Animated swap between the login shell and the active console.
+          home: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 520),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, anim) {
+              final fade = FadeTransition(opacity: anim, child: child);
+              return ScaleTransition(
+                scale: Tween<double>(begin: 0.96, end: 1).animate(anim),
+                child: fade,
+              );
+            },
+            child: role == null
+                ? LoginScreen(
+                    key: const ValueKey('login'),
+                    onLogin: _login,
+                  )
+                : Console(
+                    key: ValueKey('console-${role!.name}'),
+                    cfg: kRoleConfigs[role]!,
+                    onSwitchRole: () => setState(() => role = null),
+                  ),
+          ),
         ),
       ),
     );
   }
+}
+
+/// Faint canvas pattern (dots / grid / tile / topo) painted over the app bg.
+class _PatternPainter extends CustomPainter {
+  final SfPattern pattern;
+  final Color color;
+  _PatternPainter(this.pattern, this.color);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
+    switch (pattern) {
+      case SfPattern.dots:
+        for (double y = 0; y < size.height; y += 22) {
+          for (double x = 0; x < size.width; x += 22) {
+            canvas.drawCircle(Offset(x, y), 1, p);
+          }
+        }
+        break;
+      case SfPattern.grid:
+        for (double x = 0; x < size.width; x += 28) {
+          canvas.drawLine(Offset(x, 0), Offset(x, size.height), p);
+        }
+        for (double y = 0; y < size.height; y += 28) {
+          canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
+        }
+        break;
+      case SfPattern.tile:
+        for (double d = -size.height; d < size.width; d += 14) {
+          canvas.drawLine(Offset(d, 0), Offset(d + size.height, size.height), p);
+          canvas.drawLine(Offset(d, size.height), Offset(d + size.height, 0), p);
+        }
+        break;
+      case SfPattern.topo:
+        for (double y = 0; y < size.height; y += 18) {
+          canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
+        }
+        break;
+      case SfPattern.none:
+        break;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PatternPainter old) => old.pattern != pattern || old.color != color;
 }
 
 /// Animated sign-in shell. Three demo accounts (one per console); tap a card to
@@ -126,9 +213,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     if (match == null) {
       setState(() {
         _busy = false;
-        _error = login.isEmpty
-            ? 'Login va parolni kiriting'
-            : "Login yoki parol noto'g'ri";
+        _error = login.isEmpty ? 'err_empty' : 'err_wrong';
       });
       return;
     }
@@ -156,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    final c = SfColors.light;
+    final c = SettingsScope.of(context).colors;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -173,11 +258,11 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                     shrinkWrap: true,
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
                     children: [
-                  _stagger(0.0, _brand(c)),
+                  _stagger(0.04, _brand(c)),
                   const SizedBox(height: 30),
                   _stagger(0.08, _heading(c)),
                   const SizedBox(height: 18),
-                  _stagger(0.16, _field(c, 'Login', _loginCtrl, Icons.person_outline_rounded)),
+                  _stagger(0.16, _field(c, tr(context, 'login_hint'), _loginCtrl, Icons.person_outline_rounded)),
                   const SizedBox(height: 12),
                   _stagger(0.22, _passwordField(c)),
                   _errorBar(c),
@@ -229,7 +314,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.4,
                       color: c.ink)),
-              Text("O'quv markazi boshqaruvi",
+              Text(tr(context, 'brand_sub'),
                   style: TextStyle(fontFamily: SfType.ui, fontSize: 12, color: c.muted)),
             ],
           ),
@@ -239,14 +324,14 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
   Widget _heading(SfColors c) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Hisobga kirish',
+          Text(tr(context, 'login_title'),
               style: TextStyle(
                   fontFamily: SfType.display,
                   fontSize: 30,
                   height: 1.05,
                   color: c.ink)),
           const SizedBox(height: 4),
-          Text('Konsolingizga kirish uchun login va parol',
+          Text(tr(context, 'login_sub'),
               style: TextStyle(fontFamily: SfType.ui, fontSize: 13, color: c.muted)),
         ],
       );
@@ -283,7 +368,7 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
 
   Widget _passwordField(SfColors c) => _field(
         c,
-        'Parol',
+        tr(context, 'pass_hint'),
         _passCtrl,
         Icons.lock_outline_rounded,
         obscure: _obscure,
@@ -306,8 +391,8 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                     Icon(Icons.error_outline_rounded, size: 16, color: const Color(0xFFB33A2A)),
                     const SizedBox(width: 7),
                     Expanded(
-                      child: Text(_error!,
-                          style: const TextStyle(
+                      child: Text(tr(context, _error!),
+                          style: TextStyle(
                               fontFamily: SfType.ui,
                               fontSize: 12.5,
                               fontWeight: FontWeight.w600,
@@ -351,15 +436,15 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                   : Row(
                       key: const ValueKey('label'),
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Text('Kirish',
+                      children: [
+                        Text(tr(context, 'sign_in'),
                             style: TextStyle(
                                 fontFamily: SfType.ui,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white)),
-                        SizedBox(width: 8),
-                        Icon(Icons.arrow_forward_rounded, size: 19, color: Colors.white),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.arrow_forward_rounded, size: 19, color: Colors.white),
                       ],
                     ),
             ),

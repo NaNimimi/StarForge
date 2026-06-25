@@ -1,8 +1,47 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 
-/// Format an amount in UZS with space thousands separators, e.g. "1 284 000 000 so'm".
+/// Display currency for all money formatting. Switchable from the design panel.
+enum SfCurrency { uzs, usd, eur, rub }
+
+const Map<SfCurrency, double> _rates = {
+  SfCurrency.uzs: 1,
+  SfCurrency.usd: 1 / 12650,
+  SfCurrency.eur: 1 / 13700,
+  SfCurrency.rub: 1 / 138,
+};
+const Map<SfCurrency, String> kCurrencyCode = {
+  SfCurrency.uzs: 'UZS',
+  SfCurrency.usd: 'USD',
+  SfCurrency.eur: 'EUR',
+  SfCurrency.rub: 'RUB',
+};
+const Map<SfCurrency, String> kCurrencySym = {
+  SfCurrency.uzs: "so'm",
+  SfCurrency.usd: '\$',
+  SfCurrency.eur: '€',
+  SfCurrency.rub: '₽',
+};
+
+/// Global current currency — set by [AppSettings.setCurrency]; read by the money
+/// formatters so a switch re-renders every amount on the next rebuild.
+SfCurrency gCurrency = SfCurrency.uzs;
+
+/// Converted compact amount for non-UZS currencies: "$1.28M", "€680.0k", "₽142".
+String _fmtConverted(num uzs) {
+  final v = uzs * _rates[gCurrency]!;
+  final sym = kCurrencySym[gCurrency]!;
+  final neg = v < 0 ? '-' : '';
+  final a = v.abs();
+  if (a >= 1e6) return '$neg$sym${(a / 1e6).toStringAsFixed(2)}M';
+  if (a >= 1e3) return '$neg$sym${(a / 1e3).toStringAsFixed(1)}k';
+  return '$neg$sym${a.toStringAsFixed(gCurrency == SfCurrency.rub ? 0 : 1)}';
+}
+
+/// Format an amount with space thousands separators, e.g. "1 284 000 000 so'm".
+/// Converts to the active [gCurrency] for non-UZS.
 String fmtMoney(num uzs, {bool withSuffix = true}) {
+  if (gCurrency != SfCurrency.uzs) return _fmtConverted(uzs);
   final neg = uzs < 0;
   final s = uzs.abs().round().toString();
   final buf = StringBuffer();
@@ -13,11 +52,24 @@ String fmtMoney(num uzs, {bool withSuffix = true}) {
   return '${neg ? '-' : ''}${buf.toString()}${withSuffix ? " so'm" : ''}';
 }
 
-/// Compact money for tight spaces: 342m, 1.3mlrd.
+/// Compact money for tight spaces: 342m, 1.3mlrd (UZS) or converted symbol form.
 String fmtMoneyShort(num uzs) {
+  if (gCurrency != SfCurrency.uzs) return _fmtConverted(uzs);
   if (uzs.abs() >= 1e9) return '${(uzs / 1e9).toStringAsFixed(1)} mlrd';
   if (uzs.abs() >= 1e6) return '${(uzs / 1e6).toStringAsFixed(0)}m';
   return uzs.toStringAsFixed(0);
+}
+
+/// Web-style compact money: "1.28 mlrd", "342.0 mln", "680k". Matches the
+/// fmtMoney() formatting used across the React prototype's dashboards.
+String fmtMoneyMln(num uzs) {
+  if (gCurrency != SfCurrency.uzs) return _fmtConverted(uzs);
+  final a = uzs.abs();
+  final sign = uzs < 0 ? '-' : '';
+  if (a >= 1e9) return '$sign${(a / 1e9).toStringAsFixed(2)} mlrd';
+  if (a >= 1e6) return '$sign${(a / 1e6).toStringAsFixed(1)} mln';
+  if (a >= 1e3) return '$sign${(a / 1e3).round()}k';
+  return '$sign${a.round()}';
 }
 
 enum SfRole { ceo, manager, audit }

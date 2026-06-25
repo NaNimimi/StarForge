@@ -88,6 +88,62 @@ class SfColors {
     aiBorder: Color(0xFFE2BC72),
   );
 
+  /// Returns a copy with a different primary/accent (and tones derived from
+  /// them). Used by the live Tweaks panel to swap the palette app-wide.
+  SfColors copyWith({
+    Color? primary,
+    Color? primaryHover,
+    Color? primarySoft,
+    Color? primaryInk,
+    Color? accent,
+    Color? accentSoft,
+    Color? accentInk,
+  }) =>
+      SfColors(
+        bg: bg,
+        surface: surface,
+        surface2: surface2,
+        surface3: surface3,
+        ink: ink,
+        ink2: ink2,
+        muted: muted,
+        muted2: muted2,
+        border: border,
+        borderStrong: borderStrong,
+        primary: primary ?? this.primary,
+        primaryHover: primaryHover ?? this.primaryHover,
+        primarySoft: primarySoft ?? this.primarySoft,
+        primaryInk: primaryInk ?? this.primaryInk,
+        accent: accent ?? this.accent,
+        accentSoft: accentSoft ?? this.accentSoft,
+        accentInk: accentInk ?? this.accentInk,
+        success: success,
+        successSoft: successSoft,
+        warn: warn,
+        warnSoft: warnSoft,
+        danger: danger,
+        dangerSoft: dangerSoft,
+        ai: ai,
+        aiBg: aiBg,
+        aiBorder: aiBorder,
+      );
+
+  /// Re-skin the whole palette around a chosen primary + accent colour,
+  /// deriving the hover / soft / ink tones so contrast stays sensible.
+  SfColors withPalette(Color basePrimary, Color baseAccent, {required bool dark}) {
+    final p = dark ? sfLighten(basePrimary, 0.16) : basePrimary;
+    final a = dark ? sfLighten(baseAccent, 0.14) : baseAccent;
+    return copyWith(
+      primary: p,
+      primaryHover: dark ? sfLighten(p, 0.07) : sfDarken(p, 0.08),
+      primarySoft: Color.alphaBlend(p.withValues(alpha: dark ? 0.22 : 0.18), surface),
+      primaryInk: dark ? sfLighten(p, 0.30) : sfDarken(p, 0.28),
+      accent: a,
+      accentSoft: Color.alphaBlend(a.withValues(alpha: dark ? 0.22 : 0.20), surface),
+      accentInk: dark ? sfLighten(a, 0.28) : sfDarken(a, 0.30),
+    );
+  }
+
   static const SfColors dark = SfColors(
     bg: Color(0xFF14110D),
     surface: Color(0xFF1D1914),
@@ -118,12 +174,31 @@ class SfColors {
   );
 }
 
-/// Typography helpers mirroring the Manrope / Instrument Serif / JetBrains Mono stack.
+/// Lighten/darken a colour in HSL space — used to derive accent tones.
+Color sfLighten(Color c, double amt) {
+  final h = HSLColor.fromColor(c);
+  return h.withLightness((h.lightness + amt).clamp(0.0, 1.0)).toColor();
+}
+
+Color sfDarken(Color c, double amt) {
+  final h = HSLColor.fromColor(c);
+  return h.withLightness((h.lightness - amt).clamp(0.0, 1.0)).toColor();
+}
+
+/// Typography helpers mirroring the Manrope / Instrument Serif / JetBrains Mono
+/// stack. [ui] is mutable so the design panel can swap the body font app-wide.
 class SfType {
-  static const String ui = 'Manrope';
+  static String ui = 'Manrope';
   static const String display = 'InstrumentSerif';
   static const String mono = 'JetBrainsMono';
 }
+
+/// Selectable body fonts for the design panel (all bundled).
+const List<(String, String)> kFonts = [
+  ('Manrope', 'Manrope'),
+  ('JetBrainsMono', 'Mono'),
+  ('InstrumentSerif', 'Serif'),
+];
 
 /// Inherited theme so widgets can read [SfColors] by role/brightness.
 class SfTheme extends InheritedWidget {

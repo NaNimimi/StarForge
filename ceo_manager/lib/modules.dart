@@ -309,7 +309,7 @@ class ExamsScreen extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(9)),
-                    child: const Text('Boshlash',
+                    child: Text('Boshlash',
                         style: TextStyle(fontFamily: SfType.ui, fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
                   ),
                 ),
@@ -611,7 +611,7 @@ class _RewardsScreenState extends State<RewardsScreen> {
               const SfStar(size: 30, color: Colors.white),
               const SizedBox(width: 14),
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Sizning ballaringiz',
+                Text('Sizning ballaringiz',
                     style: TextStyle(fontFamily: SfType.ui, fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white70)),
                 Text('$points',
                     style: const TextStyle(fontFamily: SfType.mono, fontSize: 28, fontWeight: FontWeight.w700, color: Colors.white)),

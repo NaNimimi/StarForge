@@ -62,7 +62,21 @@
       "Bash(curl -s -o /dev/null -w \"web: HTTP %{http_code}\\\\n\" http://localhost:8080)",
       "Bash(ip route *)",
       "Bash(pkill -f \"http.server 8080\")",
-      "Bash(curl -s -m 8 -o /tmp/t.jpg -w \"HTTP %{http_code} size=%{size_download}\\\\n\" https://randomuser.me/api/portraits/men/32.jpg)"
+      "Bash(curl -s -m 8 -o /tmp/t.jpg -w \"HTTP %{http_code} size=%{size_download}\\\\n\" https://randomuser.me/api/portraits/men/32.jpg)",
+      "Bash(pkill -f \"http.server 8731\")",
+      "Bash(nohup python3 -m http.server 8731)",
+      "Bash(curl -s -o /dev/null -w \"server http %{http_code}\\\\n\" http://localhost:8731)",
+      "Bash(curl -s -o /dev/null -w \"preview http %{http_code}\\\\n\" http://localhost:8731)",
+      "Bash(flutter test *)",
+      "Bash(grep -v \"^00:0[0-9].*loading\\\\|Resolving\\\\|Downloading\\\\|available\\\\|Got depend\\\\|packages have\\\\|Try \\\\`flutter\")",
+      "Bash(grep -n \"class ModulesHub\\\\|modules\\\\[i\\\\].\\\\$4\\\\|=> .*Screen\\(colors\\\\|class .*Screen extends StatelessWidget\" lib/screens.dart)",
+      "Bash(grep -v \"Resolving\\\\|Downloading\\\\|available\\\\|Got depend\\\\|packages have\\\\|Try \\\\`flutter\\\\| \\(0.12\\\\| \\(1.18\\\\| \\(0.7\\\\| \\(2.2\")",
+      "Bash(sed -n '20,30p' lib/pages.dart)",
+      "Bash(sed -n '64,72p' lib/pages.dart)",
+      "Bash(git -C /home/mitsu/Downloads/mob status --short)",
+      "Bash(flutter clean *)",
+      "Bash(cp -f build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/StarForge-EDU.apk)",
+      "Bash(cp -f build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/ceo_manager.apk)"
     ]
   }
 }

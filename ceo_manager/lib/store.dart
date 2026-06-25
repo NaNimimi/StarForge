@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'data.dart';
+import 'widgets.dart';
 
 /// A chat turn in the AI assistant.
 class AiTurn {
@@ -51,6 +52,14 @@ class AppStore extends ChangeNotifier {
 
   /// Headline KPI numbers for this console's dashboard.
   DashStats get stats => kDashStats[role]!;
+
+  /// The logged-in user's chosen avatar (null = their default photo). Set from
+  /// the avatar picker; read by the top bar and profile so it updates live.
+  AvatarChoice? avatarChoice;
+  void setAvatar(AvatarChoice? choice) {
+    avatarChoice = choice;
+    notifyListeners();
+  }
 
   /// Build the demo state for [role] — each console gets its own slice of data.
   factory AppStore.seed(SfRole role) => AppStore(

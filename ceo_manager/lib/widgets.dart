@@ -64,13 +64,43 @@ const Map<String, String> kUserPhotos = {
   'Jamshid Qodirov': 'assets/avatars/jamshid.jpg',
 };
 
+/// A user-selectable avatar: either a bundled [photo] or a [gradient] badge with
+/// an [emoji]. Stored on the [AppStore] so the choice shows everywhere at once.
+class AvatarChoice {
+  final String? photo;
+  final List<Color>? gradient;
+  final String? emoji;
+  const AvatarChoice({this.photo, this.gradient, this.emoji});
+}
+
+/// Real-photo avatar options offered in the picker.
+const List<AvatarChoice> kAvatarPhotos = [
+  AvatarChoice(photo: 'assets/avatars/sardor.jpg'),
+  AvatarChoice(photo: 'assets/avatars/dilnoza.jpg'),
+  AvatarChoice(photo: 'assets/avatars/jamshid.jpg'),
+];
+
+/// Colourful emoji badge options offered in the picker.
+const List<AvatarChoice> kAvatarBadges = [
+  AvatarChoice(gradient: [Color(0xFFB85535), Color(0xFFD89A2E)], emoji: '🦁'),
+  AvatarChoice(gradient: [Color(0xFF2E9B8F), Color(0xFF4F7B3B)], emoji: '🌿'),
+  AvatarChoice(gradient: [Color(0xFF7A4A82), Color(0xFF2A3D8F)], emoji: '🔮'),
+  AvatarChoice(gradient: [Color(0xFF2A3D8F), Color(0xFF2E9B8F)], emoji: '🌊'),
+  AvatarChoice(gradient: [Color(0xFFB33A2A), Color(0xFFD89A2E)], emoji: '🔥'),
+  AvatarChoice(gradient: [Color(0xFF4F7B3B), Color(0xFFC68423)], emoji: '⭐'),
+];
+
 /// Deterministic warm avatar from initials; branded users get a real photo
 /// (with their gradient as the loading/fallback backdrop).
 class SfAvatar extends StatelessWidget {
   final String name;
   final double size;
   final Color? color;
-  const SfAvatar({super.key, required this.name, this.size = 34, this.color});
+
+  /// When set, overrides the name-derived avatar — used for the logged-in user
+  /// after they pick a custom photo or badge in the avatar picker.
+  final AvatarChoice? choice;
+  const SfAvatar({super.key, required this.name, this.size = 34, this.color, this.choice});
 
   String get _initials {
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -78,9 +108,33 @@ class SfAvatar extends StatelessWidget {
     return (parts[0].characters.first + parts[1].characters.first).toUpperCase();
   }
 
+  /// Render a [photo] / gradient+emoji avatar at [size].
+  Widget _choice(AvatarChoice ch) {
+    final grad = ch.gradient ?? const [Color(0xFFB85535), Color(0xFFD89A2E)];
+    return Container(
+      width: size,
+      height: size,
+      clipBehavior: Clip.antiAlias,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: grad, begin: Alignment.topLeft, end: Alignment.bottomRight),
+        borderRadius: BorderRadius.circular(size * 0.3),
+        boxShadow: [
+          BoxShadow(color: grad.last.withValues(alpha: 0.32), blurRadius: size * 0.2, offset: Offset(0, size * 0.07)),
+        ],
+      ),
+      child: ch.photo != null
+          ? Image.asset(ch.photo!, width: size, height: size, fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Text(_initials,
+                  style: TextStyle(fontFamily: SfType.ui, fontSize: size * 0.4, fontWeight: FontWeight.w800, color: Colors.white)))
+          : Text(ch.emoji ?? _initials, style: TextStyle(fontSize: size * 0.5)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
+    if (choice != null) return _choice(choice!);
     // Branded users: a vivid gradient backdrop with their real photo on top.
     final grad = kUserAvatars[name];
     if (grad != null) {
@@ -167,6 +221,79 @@ class SfAvatar extends StatelessWidget {
     );
   }
 }
+
+/// Public KPI tile (icon + value + trend + sub or sparkline) — used by the
+/// ported web pages. Mirrors the dashboard's private `_Kpi`.
+class SfKpi extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+  final ({bool up, String v})? trend;
+  final List<double>? spark;
+  final String? sub;
+  final IconData? icon;
+  const SfKpi({super.key, required this.label, required this.value, this.color, this.trend, this.spark, this.sub, this.icon});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.border), borderRadius: BorderRadius.circular(13)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(label.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontFamily: SfType.ui, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.3, color: c.muted)),
+            ),
+            if (icon != null) Icon(icon, size: 15, color: color ?? c.muted2),
+          ]),
+          const SizedBox(height: 6),
+          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    style: TextStyle(fontFamily: SfType.mono, fontSize: 21, fontWeight: FontWeight.w700, height: 1, color: color ?? c.ink)),
+              ),
+            ),
+            if (trend != null) ...[
+              const SizedBox(width: 6),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text('${trend!.up ? '↑' : '↓'}${trend!.v}',
+                    style: TextStyle(fontFamily: SfType.ui, fontSize: 10, fontWeight: FontWeight.w700, color: trend!.up ? c.success : c.danger)),
+              ),
+            ],
+          ]),
+          if (sub != null) ...[
+            const SizedBox(height: 4),
+            Text(sub!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontFamily: SfType.ui, fontSize: 9.5, color: c.muted)),
+          ] else if (spark != null) ...[
+            const SizedBox(height: 6),
+            Sparkline(data: spark!, color: color ?? c.primary, height: 22),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 2-column KPI grid for the ported pages.
+Widget sfKpiGrid(List<Widget> tiles, {double ratio = 1.6}) => GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 9,
+      crossAxisSpacing: 9,
+      childAspectRatio: ratio,
+      children: tiles,
+    );
 
 enum PillTone { success, danger, warn, primary, accent, neutral }
 
@@ -342,13 +469,17 @@ class AreaChart extends StatelessWidget {
   final List<double> data;
   final Color color;
   final double height;
-  const AreaChart({super.key, required this.data, required this.color, this.height = 130});
+
+  /// Optional x-axis labels (e.g. months); when set, a dot is drawn at every
+  /// point and the labels are rendered along the bottom (web "Daromad" chart).
+  final List<String>? labels;
+  const AreaChart({super.key, required this.data, required this.color, this.height = 130, this.labels});
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return CustomPaint(
       size: Size(double.infinity, height),
-      painter: _AreaPainter(data, color, c.border),
+      painter: _AreaPainter(data, color, c.border, labels, c.muted, c.surface),
     );
   }
 }
@@ -357,15 +488,21 @@ class _AreaPainter extends CustomPainter {
   final List<double> data;
   final Color color;
   final Color grid;
-  _AreaPainter(this.data, this.color, this.grid);
+  final List<String>? labels;
+  final Color labelColor;
+  final Color dotFill;
+  _AreaPainter(this.data, this.color, this.grid, this.labels, this.labelColor, this.dotFill);
   @override
   void paint(Canvas canvas, Size size) {
     if (data.length < 2) return;
+    final labelH = labels != null ? 16.0 : 0.0;
+    final chartH = size.height - labelH;
+    final padX = labels != null ? 6.0 : 0.0;
     final lo = data.reduce(math.min) * 0.96, hi = data.reduce(math.max);
     final range = (hi - lo) == 0 ? 1 : (hi - lo);
     Offset pt(int i) => Offset(
-          i / (data.length - 1) * size.width,
-          size.height - (data[i] - lo) / range * (size.height - 6) - 3,
+          padX + i / (data.length - 1) * (size.width - padX * 2),
+          chartH - (data[i] - lo) / range * (chartH - 6) - 3,
         );
 
     // baseline grid
@@ -373,7 +510,7 @@ class _AreaPainter extends CustomPainter {
       ..color = grid
       ..strokeWidth = 1;
     for (int g = 1; g <= 3; g++) {
-      final y = size.height / 4 * g;
+      final y = chartH / 4 * g;
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
@@ -382,8 +519,8 @@ class _AreaPainter extends CustomPainter {
       line.lineTo(pt(i).dx, pt(i).dy);
     }
     final fill = Path.from(line)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
+      ..lineTo(pt(data.length - 1).dx, chartH)
+      ..lineTo(pt(0).dx, chartH)
       ..close();
     canvas.drawPath(
       fill,
@@ -392,7 +529,7 @@ class _AreaPainter extends CustomPainter {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [color.withValues(alpha: 0.28), color.withValues(alpha: 0.0)],
-        ).createShader(Offset.zero & size),
+        ).createShader(Rect.fromLTWH(0, 0, size.width, chartH)),
     );
     canvas.drawPath(
       line,
@@ -403,13 +540,36 @@ class _AreaPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..strokeCap = StrokeCap.round,
     );
-    // end dot
-    final end = pt(data.length - 1);
-    canvas.drawCircle(end, 3.5, Paint()..color = color);
+    if (labels != null) {
+      // dot at every point
+      final dotStroke = Paint()
+        ..color = color
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      final dotCore = Paint()..color = dotFill;
+      for (int i = 0; i < data.length; i++) {
+        canvas.drawCircle(pt(i), 3, dotCore);
+        canvas.drawCircle(pt(i), 3, dotStroke);
+      }
+      // month labels
+      for (int i = 0; i < labels!.length && i < data.length; i++) {
+        final tp = TextPainter(
+          text: TextSpan(
+              text: labels![i],
+              style: TextStyle(
+                  fontFamily: SfType.mono, fontSize: 9, color: labelColor, fontWeight: FontWeight.w600)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(pt(i).dx - tp.width / 2, size.height - tp.height));
+      }
+    } else {
+      // end dot only
+      canvas.drawCircle(pt(data.length - 1), 3.5, Paint()..color = color);
+    }
   }
 
   @override
-  bool shouldRepaint(_AreaPainter old) => old.data != data || old.color != color;
+  bool shouldRepaint(_AreaPainter old) => old.data != data || old.color != color || old.labels != labels;
 }
 
 class DonutSegment {
@@ -489,51 +649,94 @@ class HBarRow {
   final double value;
   final String display;
   final Color color;
-  const HBarRow(this.label, this.value, this.display, this.color);
+
+  /// Show a coloured star badge before the label (branch ranking style).
+  final bool mark;
+
+  /// When set, the row becomes tappable (shows a chevron) — used to drill into
+  /// a branch's detail from a ranking/compliance chart.
+  final VoidCallback? onTap;
+  const HBarRow(this.label, this.value, this.display, this.color, {this.mark = false, this.onTap});
 }
 
 class HBars extends StatelessWidget {
   final List<HBarRow> rows;
-  const HBars({super.key, required this.rows});
+
+  /// Prefix each row with its 1-based rank number (web "Filiallar reytingi").
+  final bool ranked;
+  const HBars({super.key, required this.rows, this.ranked = false});
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final max = rows.map((r) => r.value).reduce(math.max);
     return Column(
       children: [
-        for (final r in rows)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 5),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 64,
-                  child: Text(r.label,
-                      style: TextStyle(fontFamily: SfType.ui, fontSize: 11.5, color: c.ink2)),
-                ),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      value: r.value / max,
-                      minHeight: 8,
-                      backgroundColor: c.surface2,
-                      valueColor: AlwaysStoppedAnimation(r.color),
+        for (int i = 0; i < rows.length; i++)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: rows[i].onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  if (ranked) ...[
+                    SizedBox(
+                      width: 14,
+                      child: Text('${i + 1}',
+                          style: TextStyle(
+                              fontFamily: SfType.mono, fontSize: 11, fontWeight: FontWeight.w700, color: c.muted2)),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  if (rows[i].mark) ...[
+                    Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(color: rows[i].color, borderRadius: BorderRadius.circular(7)),
+                      child: const Center(child: SfStar(size: 11, color: Color(0xFFFFFCF5))),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  SizedBox(
+                    width: ranked ? 70 : 64,
+                    child: Text(rows[i].label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 11.5,
+                            fontWeight: ranked ? FontWeight.w600 : FontWeight.w400,
+                            color: ranked ? c.ink : c.ink2)),
+                  ),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: rows[i].value / max,
+                        minHeight: 8,
+                        backgroundColor: c.surface2,
+                        valueColor: AlwaysStoppedAnimation(rows[i].color),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                SizedBox(
-                  width: 52,
-                  child: Text(r.display,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                          fontFamily: SfType.mono,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                          color: c.ink)),
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 62,
+                    child: Text(rows[i].display,
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                            fontFamily: SfType.mono,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: c.ink)),
+                  ),
+                  if (rows[i].onTap != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Icon(Icons.arrow_forward_ios_rounded, size: 11, color: c.muted2),
+                    ),
+                ],
+              ),
             ),
           ),
       ],
@@ -647,7 +850,8 @@ class SfHead extends StatelessWidget {
 class SfChips extends StatefulWidget {
   final List<String> chips;
   final bool aiStyle;
-  const SfChips(this.chips, {super.key, this.aiStyle = false});
+  final ValueChanged<int>? onChanged;
+  const SfChips(this.chips, {super.key, this.aiStyle = false, this.onChanged});
   @override
   State<SfChips> createState() => _SfChipsState();
 }
@@ -667,7 +871,10 @@ class _SfChipsState extends State<SfChips> {
           final on = i == sel && !widget.aiStyle;
           final ai = widget.aiStyle;
           return GestureDetector(
-            onTap: () => setState(() => sel = i),
+            onTap: () {
+              setState(() => sel = i);
+              widget.onChanged?.call(i);
+            },
             child: Container(
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -934,7 +1141,7 @@ void sfSnack(BuildContext context, String msg, {Color? bg}) {
       duration: const Duration(seconds: 2),
       behavior: SnackBarBehavior.floating,
       backgroundColor: bg ?? const Color(0xFF3A332A),
-      content: Text(msg, style: const TextStyle(fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w600)),
+      content: Text(msg, style: TextStyle(fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w600)),
     ));
 }
 
