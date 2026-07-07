@@ -128,8 +128,8 @@ const Map<SfRole, RoleConfig> kRoleConfigs = {
     dark: false,
     tabs: [
       TabSpec('dash', 'Panel', Icons.home_rounded),
+      TabSpec('groups', 'Guruh', Icons.workspaces_rounded),
       TabSpec('students', "O'quvchi", Icons.groups_rounded),
-      TabSpec('messages', 'Xabar', Icons.chat_bubble_rounded),
       TabSpec('ai', 'AI', Icons.auto_awesome_rounded),
       TabSpec('me', 'Profil', Icons.person_rounded),
     ],
@@ -176,6 +176,92 @@ class Student {
   final num debt;
   const Student(this.name, this.group, this.attendance, this.pay, this.debt);
 }
+
+/// A full, deterministic demo profile derived from a student's name. The demo
+/// has no backend, so per-student contact details (phones, parents, level) are
+/// synthesised from the name — stable across rebuilds, never random.
+class StudentProfile {
+  final String firstName, lastName, level, phone;
+  final String fatherName, fatherPhone, motherName, motherPhone;
+  final int age;
+  final String studentId, enrolled, branch;
+  const StudentProfile({
+    required this.firstName,
+    required this.lastName,
+    required this.level,
+    required this.phone,
+    required this.fatherName,
+    required this.fatherPhone,
+    required this.motherName,
+    required this.motherPhone,
+    required this.age,
+    required this.studentId,
+    required this.enrolled,
+    required this.branch,
+  });
+}
+
+const _kMaleNames = ['Rustam', 'Bobur', 'Jasur', 'Sardor', 'Otabek', 'Akmal',
+    'Sherzod', 'Bekzod', 'Aziz', 'Davron', 'Farrux', "Ulug'bek"];
+const _kFemaleNames = ['Dilbar', 'Nilufar', 'Madina', 'Zilola', 'Sevinch',
+    'Gulnora', 'Malika', 'Shahnoza', 'Kamola', 'Feruza', 'Nigora', 'Saodat'];
+const _kLevels = ['Beginner', 'Elementary', 'Pre-Intermediate', 'Intermediate',
+    'Upper-Intermediate', 'Advanced'];
+const _kDistricts = ['Yunusobod', 'Chilonzor', 'Mirobod', 'Sebzor', 'Yashnobod', 'Olmazor'];
+const _kOpCodes = ['90', '91', '93', '94', '97', '98', '99', '88', '33'];
+
+int _seedOf(String s) {
+  var h = 0;
+  for (final r in s.runes) {
+    h = (h * 31 + r) & 0x7fffffff;
+  }
+  return h;
+}
+
+String _phoneFrom(int seed) {
+  final op = _kOpCodes[seed % _kOpCodes.length];
+  final a = ((seed ~/ 7) % 1000).toString().padLeft(3, '0');
+  final b = ((seed ~/ 13) % 100).toString().padLeft(2, '0');
+  final c = ((seed ~/ 17) % 100).toString().padLeft(2, '0');
+  return '+998 $op $a-$b-$c';
+}
+
+/// Build the full profile for [s] (deterministic on the student's name).
+StudentProfile studentProfile(Student s) {
+  final parts = s.name.trim().split(RegExp(r'\s+'));
+  final last = parts.first;
+  final first = parts.length > 1 ? parts.sublist(1).join(' ') : '';
+  final h = _seedOf(s.name);
+  // Surname stem → male (-ov) and female (-ova) family forms.
+  var stem = last;
+  for (final suf in ['ova', 'ov', 'a']) {
+    if (stem.length > suf.length && stem.endsWith(suf)) {
+      stem = stem.substring(0, stem.length - suf.length);
+      break;
+    }
+  }
+  final enrYear = 2023 + h % 3;
+  final enrMonth = (1 + (h ~/ 5) % 12).toString().padLeft(2, '0');
+  final enrDay = (1 + (h ~/ 11) % 28).toString().padLeft(2, '0');
+  return StudentProfile(
+    firstName: first.isEmpty ? s.name : first,
+    lastName: last,
+    level: _kLevels[h % _kLevels.length],
+    phone: _phoneFrom(h),
+    fatherName: '${stem}ov ${_kMaleNames[h % _kMaleNames.length]}',
+    fatherPhone: _phoneFrom(h ~/ 2 + 41),
+    motherName: '${stem}ova ${_kFemaleNames[(h ~/ 3) % _kFemaleNames.length]}',
+    motherPhone: _phoneFrom(h ~/ 4 + 77),
+    age: 13 + h % 6,
+    studentId: 'SF-${10000 + h % 89999}',
+    enrolled: '$enrDay.$enrMonth.$enrYear',
+    branch: s.group.contains('·') ? s.group.split('·').first.trim() : _kDistricts[h % _kDistricts.length],
+  );
+}
+
+/// Days since the last call to this student's parents (demo: deterministic on
+/// the name, range 0–37). Drives the green/amber/red "call status" indicator.
+int studentCallDays(Student s) => _seedOf('call·${s.name}') % 38;
 
 const List<Student> kStudents = [
   Student('Akbarov Akmal', '9-B Algebra', 96, 'paid', 0),

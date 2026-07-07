@@ -23,6 +23,13 @@ class ChatThread {
   ChatThread(this.meta, this.messages);
 }
 
+/// One saved AI conversation — its title (from the first question) and turns.
+class AiConversation {
+  String title;
+  final List<AiTurn> turns;
+  AiConversation(this.title, this.turns);
+}
+
 /// In-memory app state for the demo (no backend yet — "Backend ulanmagan").
 ///
 /// Holds the live approval queue, the money-movement ledger, and the AI chat
@@ -37,7 +44,36 @@ class AppStore extends ChangeNotifier {
   final List<Anomaly> anomalies;
   final List<AuditCase> cases;
   final List<ChatThread> threads;
-  final List<AiTurn> chat = [];
+
+  // ── AI assistant: multiple conversations with a history sidebar ─────────
+  final List<AiConversation> conversations = [
+    AiConversation('Yangi suhbat', []),
+    AiConversation('Churn tahlili · Sebzor', const [
+      AiTurn('Sebzorda churn nega oshdi?', mine: true),
+      AiTurn("Sebzorda churn 6.2% — 3 o'qituvchi almashdi va 6 o'quvchi davomati tushdi. "
+          "Ota-onalarga qo'ng'iroq tavsiya etaman.", mine: false),
+    ]),
+    AiConversation('Daromad prognozi', const [
+      AiTurn('Kelgusi oy daromadi qancha?', mine: true),
+      AiTurn("~1.34 mlrd so'm (+4%). Ingliz B2 yangi guruhi +52 mln so'm qo'shadi.", mine: false),
+    ]),
+  ];
+  int activeConv = 0;
+  List<AiTurn> get chat => conversations[activeConv].turns;
+
+  /// Start a fresh conversation (reuses an already-empty one).
+  void newConversation() {
+    if (chat.isNotEmpty) {
+      conversations.insert(0, AiConversation('Yangi suhbat', []));
+      activeConv = 0;
+    }
+    notifyListeners();
+  }
+
+  void selectConversation(int i) {
+    activeConv = i;
+    notifyListeners();
+  }
 
   AppStore({
     required this.role,
@@ -58,6 +94,29 @@ class AppStore extends ChangeNotifier {
   AvatarChoice? avatarChoice;
   void setAvatar(AvatarChoice? choice) {
     avatarChoice = choice;
+    notifyListeners();
+  }
+
+  /// User-edited profile fields (null = fall back to the role config defaults).
+  String? nameOverride;
+  String? titleOverride;
+  void setProfile({String? name, String? title}) {
+    if (name != null) nameOverride = name.trim().isEmpty ? null : name.trim();
+    if (title != null) titleOverride = title.trim().isEmpty ? null : title.trim();
+    notifyListeners();
+  }
+
+  // ── Messages: pin & archive (Telegram-style) ───────────────────────────
+  final Set<int> pinned = {};
+  final Set<int> archived = {};
+  void togglePin(int idx) {
+    pinned.contains(idx) ? pinned.remove(idx) : pinned.add(idx);
+    notifyListeners();
+  }
+
+  void toggleArchive(int idx) {
+    archived.contains(idx) ? archived.remove(idx) : archived.add(idx);
+    pinned.remove(idx);
     notifyListeners();
   }
 
@@ -147,8 +206,12 @@ class AppStore extends ChangeNotifier {
   void sendChat(String text) {
     final t = text.trim();
     if (t.isEmpty) return;
-    chat.add(AiTurn(t, mine: true));
-    chat.add(AiTurn(_reply(t), mine: false));
+    final conv = conversations[activeConv];
+    if (conv.turns.isEmpty) {
+      conv.title = t.length > 32 ? '${t.substring(0, 32)}…' : t;
+    }
+    conv.turns.add(AiTurn(t, mine: true));
+    conv.turns.add(AiTurn(_reply(t), mine: false));
     notifyListeners();
   }
 

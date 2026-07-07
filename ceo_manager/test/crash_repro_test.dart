@@ -80,6 +80,28 @@ void main() {
   testWidgets('ChatScreen', (t) async {
     await _smoke(t, store, ChatScreen(threadIdx: 0, colors: c));
   });
+  testWidgets('NotificationsScreen', (t) async {
+    await _smoke(t, store, NotificationsScreen(colors: c));
+  });
+  testWidgets('AnomalyDetailScreen', (t) async {
+    await _smoke(t, store, AnomalyDetailScreen(a: store.anomalies.first, store: store, colors: c));
+  });
+  testWidgets('CaseDetailScreen', (t) async {
+    await _smoke(t, store, CaseDetailScreen(cs: store.cases.first, store: store, colors: c));
+  });
+  testWidgets('StudentChatScreen', (t) async {
+    await _smoke(t, store, StudentChatScreen(student: store.students.first, colors: c));
+  });
+  testWidgets('EditProfileScreen', (t) async {
+    await _smoke(t, store, EditProfileScreen(cfg: kRoleConfigs[SfRole.ceo]!, colors: c));
+  });
+  testWidgets('GroupDetailScreen', (t) async {
+    const g = GroupInfo('9-B Algebra', 'Yunusobod', 'Intermediate', 'Nigora Karimova', 'Du·Cho·Ju · 10:00', 8, 90, 2);
+    await _smoke(t, store, GroupDetailScreen(group: g, colors: c));
+  });
+  testWidgets('MenuHub', (t) async {
+    await _smoke(t, store, MenuHub(colors: c, role: SfRole.ceo));
+  });
   testWidgets('module screens', (t) async {
     for (final m in [
       PaymentsScreen(colors: c),

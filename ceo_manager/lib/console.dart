@@ -51,6 +51,8 @@ class _ConsoleState extends State<Console> {
 
   Widget _screen() {
     switch (tab) {
+      case 'groups':
+        return const GroupsScreen();
       case 'students':
         return const StudentsScreen();
       case 'anomalies':

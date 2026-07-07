@@ -76,7 +76,19 @@
       "Bash(git -C /home/mitsu/Downloads/mob status --short)",
       "Bash(flutter clean *)",
       "Bash(cp -f build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/StarForge-EDU.apk)",
-      "Bash(cp -f build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/ceo_manager.apk)"
+      "Bash(cp -f build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/ceo_manager.apk)",
+      "Bash(awk 'NR>=1466 && NR<=1700 && \\(/[Kk]assa|[Ll]edger|[Dd]aftar|LedgerScreen|kassa/\\)' lib/screens.dart)",
+      "Bash(flutter devices *)",
+      "Bash(timeout 600 flutter drive --driver=test_driver/integration_test.dart --target=integration_test/app_test.dart -d linux --profile)",
+      "Bash(echo \"=== EXIT $? ===\")",
+      "Bash(cp build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/StarForge-EDU.apk)",
+      "Bash(cp build/app/outputs/flutter-apk/app-release.apk /home/mitsu/Downloads/ceo_manager.apk)",
+      "Bash(flutter drive *)",
+      "Bash(grep -vE \"Warning: integration_test|If you|how to|https|are in the|that you|^$\" /tmp/claude-1000/-home-mitsu-Downloads-mob/4523f606-e5a2-41ec-bdec-c4767cfb1e10/tasks/bokhwvcoc.output)",
+      "Bash(awk '/edit-profile renders · ceo\\\\/uz\\\\/light/{f=1} f{print} /end of failure 1$/{if\\(f\\)exit}' /tmp/claude-1000/-home-mitsu-Downloads-mob/4523f606-e5a2-41ec-bdec-c4767cfb1e10/tasks/bokhwvcoc.output)",
+      "Bash(grep -rnB2 -A1 \"alignment: Alignment.center\" lib/screens.dart lib/widgets.dart lib/modules.dart lib/pages.dart)",
+      "Bash(sed -i \"/^import 'package:flutter\\\\/rendering.dart';$/d\" integration_test/app_test.dart test/phone_size_test.dart)",
+      "Bash(sed -i \"\\\\#^import 'package:ceo_manager/theme.dart';\\\\$#d\" integration_test/app_test.dart test/nav_flow_test.dart)"
     ]
   }
 }

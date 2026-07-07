@@ -1102,14 +1102,18 @@ class SfButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
-          alignment: Alignment.center,
           padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
           decoration: BoxDecoration(
             border: primary ? null : Border.all(color: c.border),
             borderRadius: BorderRadius.circular(12),
           ),
+          // mainAxisSize.max + center keeps the button full-width and its label
+          // centred WITHOUT making the box greedily expand to fill all available
+          // height — an aligned Container in a Scaffold.bottomNavigationBar slot
+          // (loose, full-screen height) would balloon and collapse the body.
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: MainAxisSize.max,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (icon != null) ...[
                 Icon(icon, size: 17, color: primary ? Colors.white : c.ink2),
