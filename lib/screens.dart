@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
@@ -16,38 +18,6 @@ import 'pages.dart';
 import 'widgets.dart';
 
 const _pad = EdgeInsets.fromLTRB(16, 4, 16, 24);
-
-/// A focused dark palette for person/group pages and conversations. It keeps
-/// the messaging experience coherent even when the rest of the school console
-/// uses its light Saroy theme.
-const _telegramColors = SfColors(
-  bg: Color(0xFF101114),
-  surface: Color(0xFF1B1C20),
-  surface2: Color(0xFF292B30),
-  surface3: Color(0xFF36383E),
-  ink: Color(0xFFF4F5F7),
-  ink2: Color(0xFFD3D5DA),
-  muted: Color(0xFF9B9DA5),
-  muted2: Color(0xFF656871),
-  border: Color(0xFF2C2E34),
-  borderStrong: Color(0xFF45474F),
-  primary: Color(0xFF2AABEE),
-  primaryHover: Color(0xFF49B8F2),
-  primarySoft: Color(0xFF17394B),
-  primaryInk: Color(0xFFBDE9FF),
-  accent: Color(0xFF7B9CFF),
-  accentSoft: Color(0xFF202D4C),
-  accentInk: Color(0xFFD5DEFF),
-  success: Color(0xFF57C777),
-  successSoft: Color(0xFF173D25),
-  warn: Color(0xFFF2B84B),
-  warnSoft: Color(0xFF453615),
-  danger: Color(0xFFFF7770),
-  dangerSoft: Color(0xFF482426),
-  ai: Color(0xFFC2A6FF),
-  aiBg: [Color(0xFF27223B), Color(0xFF1D273C)],
-  aiBorder: Color(0xFF4A4166),
-);
 
 Widget _mono(
   BuildContext c,
@@ -595,8 +565,11 @@ class DashboardScreen extends StatelessWidget {
     final c = SfTheme.of(context);
     final store = AppScope.of(context);
     final ceo = cfg.role == SfRole.ceo;
-    final num rev = ceo ? 1284000000 : 342000000;
-    final num debt = ceo ? 84000000 : 22400000;
+    final num baseRev = ceo ? 1284000000 : 342000000;
+    final num rev = store.scopedRevenue(baseRev);
+    final num debt = ((ceo ? 84000000 : 22400000) * store.rangeFactor).round();
+    final studentsTotal = store.scopedStudents(ceo ? 1842 : 512);
+    final attendance = store.scopedAttendance(91);
     return ListView(
       padding: EdgeInsets.zero,
       children: [
@@ -626,18 +599,23 @@ class DashboardScreen extends StatelessWidget {
                 ),
                 sub: tr(context, ceo ? 'dash_sub_ceo' : 'dash_sub_manager'),
                 reportLabel: tr(context, 'btn_report'),
-                newLabel: tr(context, ceo ? 'btn_new_branch' : 'btn_new_group'),
+                // CEO no longer has the unused "new branch" action here.
+                newLabel: ceo ? null : tr(context, 'btn_new_group'),
                 accent: c.primary,
                 onReport: () => Navigator.of(
                   context,
                 ).push(sfPageRoute(ReportScreen(colors: c, role: cfg.role))),
-                onNew: () => _showCreateSheet(
-                  context,
-                  SettingsScope.of(context),
-                  ceo ? 'create_branch' : 'create_group',
-                ),
+                onNew: ceo
+                    ? null
+                    : () => _showCreateSheet(
+                        context,
+                        SettingsScope.of(context),
+                        'create_group',
+                      ),
               ),
               const SizedBox(height: 14),
+              _CeoContextFilter(showBranches: ceo),
+              const SizedBox(height: 12),
               _kpiGrid([
                 _Kpi(
                   label: tr(context, 'kpi_revenue'),
@@ -665,7 +643,7 @@ class DashboardScreen extends StatelessWidget {
                 ),
                 _Kpi(
                   label: tr(context, 'kpi_students'),
-                  value: ceo ? '1 842' : '512',
+                  value: '$studentsTotal',
                   icon: Icons.groups_rounded,
                   trend: (up: true, v: '4.1%'),
                   spark: const [
@@ -686,7 +664,7 @@ class DashboardScreen extends StatelessWidget {
                 ),
                 _Kpi(
                   label: tr(context, 'kpi_attendance'),
-                  value: '91.2%',
+                  value: '$attendance%',
                   color: c.primary,
                   icon: Icons.check_circle_outline_rounded,
                   trend: (up: true, v: '0.8%'),
@@ -771,7 +749,11 @@ class DashboardScreen extends StatelessWidget {
                                 fmtMoneyMln(b.revenue),
                                 b.mark,
                                 mark: true,
-                                onTap: () => _showBranchSheet(context, b),
+                                onTap: () => Navigator.of(context).push(
+                                  sfPageRoute(
+                                    BranchWorkspaceScreen(branch: b, colors: c),
+                                  ),
+                                ),
                               ),
                           ],
                         ),
@@ -848,6 +830,186 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              if (ceo) ...[
+                const SizedBox(height: 12),
+                _CeoDashboardExtras(colors: c),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// CEO-only decision feed at the bottom of the dashboard: teacher leaders and
+/// recent operational history are both tappable, instead of static screenshots.
+class _CeoDashboardExtras extends StatelessWidget {
+  final SfColors colors;
+  const _CeoDashboardExtras({required this.colors});
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final store = AppScope.of(context);
+    Widget teacher(
+      String name,
+      String branch,
+      String attendance,
+      String rating, {
+      bool last = false,
+    }) => InkWell(
+      onTap: () {
+        final member = store.staff.firstWhere(
+          (item) => item.fullName == name,
+          orElse: () {
+            final parts = name.split(' ');
+            return StaffMember(
+              firstName: parts.first,
+              lastName: parts.skip(1).join(' '),
+              username: parts.first.toLowerCase(),
+              phone: '—',
+              email: null,
+              branch: branch,
+              department: 'Teaching',
+              subject: 'Education',
+              qualification: 'Teacher',
+              salaryType: 'Monthly',
+              rate: '—',
+              gender: '—',
+              hireDate: '—',
+            );
+          },
+        );
+        Navigator.of(
+          context,
+        ).push(sfPageRoute(StaffDetailScreen(member: member, colors: c)));
+      },
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            SfAvatar(name: name, size: 29),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                name,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: c.ink,
+                ),
+              ),
+            ),
+            Text(
+              branch,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 10,
+                color: c.muted,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              attendance,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: c.warn,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Pill(rating, tone: PillTone.success),
+          ],
+        ),
+      ),
+    );
+    Widget event(
+      IconData icon,
+      Color color,
+      String title,
+      String time, {
+      bool last = false,
+    }) => InkWell(
+      onTap: () => Navigator.of(
+        context,
+      ).push(sfPageRoute(ActivityHistoryScreen(colors: c))),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: c.ink,
+                ),
+              ),
+            ),
+            Text(
+              time,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 9.5,
+                color: c.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return Column(
+      children: [
+        SfCard(
+          child: Column(
+            children: [
+              const SfCardHeader('O‘qituvchilar reytingi · top'),
+              teacher('Madina Halimova', 'Yunusobod', '87%', '★5'),
+              teacher('Sevara Ibragimova', 'Chilonzor', '90%', '★5'),
+              teacher('Munira Tosheva', 'Mirobod', '93%', '★5', last: true),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        SfCard(
+          child: Column(
+            children: [
+              const SfCardHeader('So‘nggi hodisalar'),
+              event(
+                Icons.trending_up_rounded,
+                c.success,
+                'Yangi to‘lov · 1.2 mln',
+                '2 daq',
+              ),
+              event(
+                Icons.notifications_active_rounded,
+                c.warn,
+                'Qarz eslatmasi yuborildi',
+                '14 daq',
+              ),
+              event(
+                Icons.flag_rounded,
+                c.danger,
+                'Audit flag · davomati past',
+                '2 soat',
+                last: true,
+              ),
             ],
           ),
         ),
@@ -896,20 +1058,204 @@ class _SearchPill extends StatelessWidget {
   }
 }
 
+/// Shared branch + calendar context for CEO reporting. It deliberately writes
+/// to [AppStore], so every report and dashboard widget rebuilds against the
+/// same selected branch and date window.
+class _CeoContextFilter extends StatelessWidget {
+  final bool showBranches;
+  const _CeoContextFilter({required this.showBranches});
+
+  String _shortDate(DateTime date) {
+    const months = [
+      'Yan',
+      'Fev',
+      'Mar',
+      'Apr',
+      'May',
+      'Iyn',
+      'Iyl',
+      'Avg',
+      'Sen',
+      'Okt',
+      'Noy',
+      'Dek',
+    ];
+    return '${date.day} ${months[date.month - 1]}';
+  }
+
+  Future<void> _chooseRange(BuildContext context, AppStore store) async {
+    final c = SfTheme.of(context);
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now(),
+      initialDateRange: store.selectedRange,
+      helpText: 'Hisobot davrini tanlang',
+      saveText: 'Qo‘llash',
+      cancelText: 'Bekor qilish',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: c.primary,
+            surface: c.surface,
+            onSurface: c.ink,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (range != null) store.setDateRange(range);
+  }
+
+  void _chooseBranch(BuildContext context, AppStore store) {
+    final c = SfTheme.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SfTheme(
+        colors: c,
+        child: _SheetShell(
+          children: [
+            Text(
+              'Filialni tanlang',
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+            const SizedBox(height: 10),
+            for (final item in ['__all', ...store.branches.map((b) => b.name)])
+              InkWell(
+                onTap: () {
+                  store.setBranchScope(item);
+                  Navigator.of(sheetContext).pop();
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  decoration: BoxDecoration(
+                    border: Border(bottom: BorderSide(color: c.border)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item == '__all' ? 'Barcha filiallar' : item,
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: c.ink,
+                          ),
+                        ),
+                      ),
+                      if (store.selectedBranch == item)
+                        Icon(Icons.check_rounded, color: c.primary, size: 19),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final store = AppScope.of(context);
+    final changed = store.hasCustomReportFilters;
+    Widget action({
+      required IconData icon,
+      required String value,
+      required VoidCallback onTap,
+    }) => Expanded(
+      child: Material(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 11),
+            decoration: BoxDecoration(
+              border: Border.all(color: c.border),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: c.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: c.ink,
+                    ),
+                  ),
+                ),
+                Icon(Icons.expand_more_rounded, size: 17, color: c.muted),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return Row(
+      children: [
+        if (showBranches) ...[
+          action(
+            icon: Icons.account_tree_rounded,
+            value: store.allBranchesSelected
+                ? 'Barcha filiallar'
+                : store.selectedBranch,
+            onTap: () => _chooseBranch(context, store),
+          ),
+          const SizedBox(width: 8),
+        ],
+        action(
+          icon: Icons.date_range_rounded,
+          value:
+              '${_shortDate(store.selectedRange.start)} — ${_shortDate(store.selectedRange.end)}',
+          onTap: () => _chooseRange(context, store),
+        ),
+        if (changed) ...[
+          const SizedBox(width: 7),
+          IconButton(
+            tooltip: 'Filtrlarni tiklash',
+            onPressed: store.resetReportFilters,
+            icon: Icon(Icons.restart_alt_rounded, color: c.muted),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 /// Dashboard page header: dated eyebrow, big title, sub, and two action buttons.
 class _DashHeader extends StatelessWidget {
-  final String eyebrow, title, sub, reportLabel, newLabel;
+  final String eyebrow, title, sub, reportLabel;
+  final String? newLabel;
   final Color accent;
-  final VoidCallback onReport, onNew;
+  final VoidCallback onReport;
+  final VoidCallback? onNew;
   const _DashHeader({
     required this.eyebrow,
     required this.title,
     required this.sub,
     required this.reportLabel,
-    required this.newLabel,
+    this.newLabel,
     required this.accent,
     required this.onReport,
-    required this.onNew,
+    this.onNew,
   });
   @override
   Widget build(BuildContext context) {
@@ -944,29 +1290,41 @@ class _DashHeader extends StatelessWidget {
           style: TextStyle(fontFamily: SfType.ui, fontSize: 12, color: c.muted),
         ),
         const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _ActionBtn(
-                icon: Icons.download_rounded,
-                label: reportLabel,
-                primary: false,
-                accent: accent,
-                onTap: onReport,
-              ),
+        if (newLabel == null)
+          SizedBox(
+            width: double.infinity,
+            child: _ActionBtn(
+              icon: Icons.download_rounded,
+              label: reportLabel,
+              primary: false,
+              accent: accent,
+              onTap: onReport,
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _ActionBtn(
-                icon: Icons.add_rounded,
-                label: newLabel,
-                primary: true,
-                accent: accent,
-                onTap: onNew,
+          )
+        else
+          Row(
+            children: [
+              Expanded(
+                child: _ActionBtn(
+                  icon: Icons.download_rounded,
+                  label: reportLabel,
+                  primary: false,
+                  accent: accent,
+                  onTap: onReport,
+                ),
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ActionBtn(
+                  icon: Icons.add_rounded,
+                  label: newLabel!,
+                  primary: true,
+                  accent: accent,
+                  onTap: onNew!,
+                ),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -1076,6 +1434,7 @@ class _RevenueCardState extends State<_RevenueCard> {
     'May',
   ];
   int seg = 0; // 0 = 12 oy, 1 = 6 oy, 2 = YTD
+  int? point;
 
   @override
   Widget build(BuildContext context) {
@@ -1085,7 +1444,9 @@ class _RevenueCardState extends State<_RevenueCard> {
         : seg == 2
         ? 7
         : 0;
-    final data = _all.sublist(start).map((e) => e * 1e6).toList();
+    final baseline = widget.ceo ? 1284000000 : 342000000;
+    final scale = widget.rev / baseline;
+    final data = _all.sublist(start).map((e) => e * 1e6 * scale).toList();
     final labels = _labels.sublist(start);
     final segLabels = [
       tr(context, 'seg_12mo'),
@@ -1160,11 +1521,70 @@ class _RevenueCardState extends State<_RevenueCard> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-            child: AreaChart(
-              color: widget.color,
-              height: 144,
-              data: data,
-              labels: labels,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                void pick(Offset position) {
+                  final usable = constraints.maxWidth - 12;
+                  final x = (position.dx - 6).clamp(0.0, usable);
+                  final next = (x / usable * (data.length - 1)).round();
+                  if (next != point) setState(() => point = next);
+                }
+
+                return MouseRegion(
+                  onHover: (event) => pick(event.localPosition),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapDown: (details) => pick(details.localPosition),
+                    onLongPressEnd: (_) => setState(() => point = null),
+                    child: Stack(
+                      children: [
+                        AreaChart(
+                          color: widget.color,
+                          height: 144,
+                          data: data,
+                          labels: labels,
+                        ),
+                        if (point != null)
+                          Positioned(
+                            top: 6,
+                            left: point! < data.length / 2 ? 8 : null,
+                            right: point! >= data.length / 2 ? 8 : null,
+                            child: IgnorePointer(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 9,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: c.ink,
+                                  borderRadius: BorderRadius.circular(8),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: 0.18,
+                                      ),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Text(
+                                  '${labels[point!]} · ${fmtMoneyMln(data[point!])}',
+                                  style: TextStyle(
+                                    fontFamily: SfType.mono,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: c.bg,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           ),
           Container(
@@ -1271,7 +1691,7 @@ class _ManagerApprovalsPreview extends StatelessWidget {
             for (int i = 0; i < rows.length; i++)
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () => go('approvals'),
+                onTap: () => _openApproval(context, store, rows[i], c),
                 child: Container(
                   decoration: BoxDecoration(
                     border: Border(
@@ -1323,76 +1743,16 @@ class _ManagerApprovalsPreview extends StatelessWidget {
                           ],
                         ),
                       ),
-                      _MiniBtn(
-                        ok: true,
-                        onTap: () => _quick(context, store, rows[i], true),
-                      ),
-                      const SizedBox(width: 4),
-                      _MiniBtn(
-                        ok: false,
-                        onTap: () => _quick(context, store, rows[i], false),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: c.primary,
+                        size: 20,
                       ),
                     ],
                   ),
                 ),
               ),
         ],
-      ),
-    );
-  }
-
-  void _quick(BuildContext context, AppStore store, Approval a, bool approved) {
-    store.resolve(a, approved: approved);
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: approved
-              ? const Color(0xFF4F7B3B)
-              : const Color(0xFF8A4232),
-          content: Text(
-            approved
-                ? '✓ "${a.title}" tasdiqlandi'
-                : '✗ "${a.title}" rad etildi',
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      );
-  }
-}
-
-class _MiniBtn extends StatelessWidget {
-  final bool ok;
-  final VoidCallback? onTap;
-  const _MiniBtn({required this.ok, this.onTap});
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Material(
-      color: c.surface,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: Container(
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            border: Border.all(color: c.border),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            ok ? Icons.check_rounded : Icons.close_rounded,
-            size: 15,
-            color: ok ? c.success : c.danger,
-          ),
-        ),
       ),
     );
   }
@@ -1805,6 +2165,7 @@ const _studentTones = {
   'paid': (PillTone.success, "To'langan"),
   'debt': (PillTone.danger, 'Qarz'),
   'partial': (PillTone.warn, 'Qisman'),
+  'left': (PillTone.neutral, 'Ketgan'),
 };
 
 /// Maps "days since last parent call" to a tone + label key. Green ≤3 days,
@@ -1829,7 +2190,7 @@ class StudentsScreen extends StatefulWidget {
 
 class _StudentsScreenState extends State<StudentsScreen> {
   String query = '';
-  int statusSel = 0; // all / debtor / paid / partial / risk
+  int statusSel = 0; // all / debtor / paid / partial / risk / exited
   int callSel = 0; // all / recent / mid / overdue
   int branchSel = 0;
   int levelSel = 0;
@@ -1840,6 +2201,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
     2 => s.pay == 'paid',
     3 => s.pay == 'partial',
     4 => s.attendance < 85 || s.debt >= 1000000,
+    5 => s.pay == 'left',
     _ => true,
   };
 
@@ -1856,7 +2218,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final all = AppScope.of(context).students;
+    final all = [...AppScope.of(context).students, ...kExitedStudents];
     final branches = <String>[
       '__all',
       ...{for (final s in all) studentProfile(s).branch},
@@ -1890,6 +2252,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
       tr(context, 'f_paid'),
       tr(context, 'f_partial'),
       tr(context, 'f_risky'),
+      'Ketganlar',
     ];
     final callF = [
       tr(context, 'f_all'),
@@ -1922,6 +2285,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _CeoContextFilter(showBranches: false),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
@@ -1935,6 +2300,16 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     active: showFilters,
                     count: activeCount,
                     onTap: () => setState(() => showFilters = !showFilters),
+                  ),
+                  const SizedBox(width: 8),
+                  _RoundAction(
+                    icon: Icons.person_add_alt_1_rounded,
+                    tooltip: 'O‘quvchi qabul qilish',
+                    onTap: () => Navigator.of(context).push(
+                      sfPageRoute(
+                        AdmitStudentScreen(colors: SfTheme.of(context)),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1965,6 +2340,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
                   (i) => setState(() => levelSel = i),
                 ),
               ],
+              const SizedBox(height: 12),
+              _StudentLifecycleCard(
+                students: all,
+                onOpen: (category, title) => Navigator.of(context).push(
+                  sfPageRoute(
+                    StudentCategoryScreen(
+                      title: title,
+                      category: category,
+                      students: _studentsForFlow(all, category),
+                      colors: SfTheme.of(context),
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(height: 12),
               if (list.isEmpty)
                 _EmptyState(
@@ -2064,6 +2453,139 @@ class _FilterToggle extends StatelessWidget {
   }
 }
 
+/// Student Flow is an inbox, not a decorative counter. Only tapping the large
+/// number opens a dedicated, drill-down list; choosing a row there opens the
+/// student's complete profile.
+enum StudentFlowCategory { newlyAdmitted, active, left, graduated, risk, debt }
+
+List<Student> _studentsForFlow(
+  List<Student> all,
+  StudentFlowCategory category,
+) {
+  final active = all.where((student) => student.pay != 'left').toList();
+  return switch (category) {
+    StudentFlowCategory.newlyAdmitted => active.take(3).toList(),
+    StudentFlowCategory.active => active,
+    StudentFlowCategory.left =>
+      all.where((student) => student.pay == 'left').toList(),
+    StudentFlowCategory.graduated =>
+      active
+          .where((student) => student.attendance >= 95 && student.debt == 0)
+          .toList(),
+    StudentFlowCategory.risk =>
+      active
+          .where(
+            (student) => student.attendance < 85 || student.debt >= 1000000,
+          )
+          .toList(),
+    StudentFlowCategory.debt =>
+      active.where((student) => student.debt > 0).toList(),
+  };
+}
+
+class _StudentLifecycleCard extends StatelessWidget {
+  final List<Student> students;
+  final void Function(StudentFlowCategory category, String title) onOpen;
+  const _StudentLifecycleCard({required this.students, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    Widget metric(
+      String label,
+      String value,
+      Color color,
+      StudentFlowCategory category,
+    ) {
+      void open() => onOpen(category, label);
+      return Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Semantics(
+                button: true,
+                label: '$label: $value',
+                onTap: open,
+                child: ExcludeSemantics(
+                  child: InkWell(
+                    key: ValueKey('student-flow-${category.name}'),
+                    onTap: open,
+                    borderRadius: BorderRadius.circular(9),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 2,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        value,
+                        style: TextStyle(
+                          fontFamily: SfType.mono,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: color,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  color: c.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final categories = <(String, StudentFlowCategory, Color)>[
+      ('New', StudentFlowCategory.newlyAdmitted, c.primary),
+      ('Active', StudentFlowCategory.active, c.success),
+      ('Left', StudentFlowCategory.left, c.danger),
+      ('Graduated', StudentFlowCategory.graduated, c.accent),
+      ('In Risk', StudentFlowCategory.risk, c.warn),
+      ('In Debt', StudentFlowCategory.debt, c.danger),
+    ];
+    final chunks = <Widget>[];
+    for (int i = 0; i < categories.length; i += 3) {
+      chunks.add(
+        Row(
+          children: [
+            for (final item in categories.sublist(i, i + 3))
+              metric(
+                item.$1,
+                '${_studentsForFlow(students, item.$2).length}',
+                item.$3,
+                item.$2,
+              ),
+          ],
+        ),
+      );
+      if (i + 3 < categories.length) chunks.add(const SizedBox(height: 4));
+    }
+    return SfCard(
+      child: Column(
+        children: [
+          const SfCardHeader('Student Flow · period'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Column(children: chunks),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StudentRow extends StatelessWidget {
   final Student s;
   final bool last;
@@ -2099,6 +2621,8 @@ class _StudentRow extends StatelessWidget {
                 children: [
                   Text(
                     s.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontFamily: SfType.ui,
                       fontSize: 13,
@@ -2106,47 +2630,64 @@ class _StudentRow extends StatelessWidget {
                       color: c.ink,
                     ),
                   ),
-                  Row(
-                    children: [
-                      Text(
-                        '${s.group} · ',
-                        style: TextStyle(
-                          fontFamily: SfType.ui,
-                          fontSize: 10.5,
-                          color: c.muted,
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '${s.group} · ',
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 10.5,
+                            color: c.muted,
+                          ),
                         ),
-                      ),
-                      Text(
-                        '${s.attendance}%',
-                        style: TextStyle(
-                          fontFamily: SfType.mono,
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700,
-                          color: aColor,
+                        TextSpan(
+                          text: '${s.attendance}%',
+                          style: TextStyle(
+                            fontFamily: SfType.mono,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: aColor,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Call-recency is now the primary signal (not payment status).
-                Pill(tr(context, call.key), tone: call.tone),
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: Text(
-                    s.debt > 0 ? fmtMoney(s.debt) : _callAgo(context, days),
-                    style: TextStyle(
-                      fontFamily: SfType.mono,
-                      fontSize: 10,
-                      color: s.debt > 0 ? c.danger : c.muted,
+            SizedBox(
+              width: 128,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Pill(
+                    s.pay == 'left' ? 'Ketgan' : tr(context, call.key),
+                    tone: s.pay == 'left' ? PillTone.neutral : call.tone,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      s.pay == 'left'
+                          ? studentExitReason(s)
+                          : s.debt > 0
+                          ? fmtMoney(s.debt)
+                          : _callAgo(context, days),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.mono,
+                        fontSize: 10,
+                        color: s.pay == 'left' || s.debt > 0
+                            ? c.danger
+                            : c.muted,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ],
         ),
@@ -2171,6 +2712,9 @@ class StudentDetailScreen extends StatelessWidget {
     final c = colors;
     final s = student;
     final p = studentProfile(s);
+    final username =
+        s.username ??
+        '@${p.firstName.toLowerCase()}.${p.lastName.toLowerCase()}';
     final aColor = s.attendance >= 92
         ? c.success
         : s.attendance >= 85
@@ -2253,6 +2797,59 @@ class StudentDetailScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
+            if (s.pay == 'left') ...[
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: c.dangerSoft,
+                  border: Border.all(color: c.danger.withValues(alpha: 0.35)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.person_off_rounded, size: 19, color: c.danger),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Ta’limdan chiqish sababi',
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                              color: c.danger,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            studentExitReason(s),
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 11.5,
+                              color: c.ink2,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Ketgan sana · ${studentExitDate(s)}',
+                            style: TextStyle(
+                              fontFamily: SfType.mono,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              color: c.danger,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
             // Call-status banner — green/amber/red by how long since the last
             // parent call. Tapping places a (demo) call to the father.
             Container(
@@ -2355,6 +2952,7 @@ class StudentDetailScreen extends StatelessWidget {
                 children: [
                   _InfoRow(tr(context, 'stu_fname'), p.firstName),
                   _InfoRow(tr(context, 'stu_lname'), p.lastName),
+                  _InfoRow('Username', username),
                   _InfoRow(
                     tr(context, 'stu_age'),
                     '${p.age} ${tr(context, 'stu_years')}',
@@ -2406,6 +3004,23 @@ class StudentDetailScreen extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 4),
+            _setSec(c, 'TA’LIM TARIXI'),
+            SfCard(
+              child: Column(
+                children: [
+                  _InfoRow('Qabul qilingan', p.enrolled, mono: true),
+                  _InfoRow('Filial', p.branch),
+                  _InfoRow('Guruh', s.group),
+                  _InfoRow(
+                    s.pay == 'left' ? 'Ketgan sana' : 'Joriy holat',
+                    s.pay == 'left' ? studentExitDate(s) : 'Faol o‘qiyapti',
+                    mono: s.pay == 'left',
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               children: [
@@ -2453,6 +3068,97 @@ class StudentDetailScreen extends StatelessWidget {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Drill-down list opened by a Student Flow number. The category stays visible
+/// in the title, and every row leads to the same complete student profile.
+class StudentCategoryScreen extends StatelessWidget {
+  final String title;
+  final StudentFlowCategory category;
+  final List<Student> students;
+  final SfColors colors;
+  const StudentCategoryScreen({
+    super.key,
+    required this.title,
+    required this.category,
+    required this.students,
+    required this.colors,
+  });
+
+  String get _subtitle => switch (category) {
+    StudentFlowCategory.newlyAdmitted => 'Yaqinda qabul qilingan o‘quvchilar',
+    StudentFlowCategory.active => 'Hozir ta’lim olayotgan o‘quvchilar',
+    StudentFlowCategory.left => 'Ta’limni tark etgan o‘quvchilar',
+    StudentFlowCategory.graduated => 'Yakunlagan o‘quvchilar',
+    StudentFlowCategory.risk => 'Diqqat talab qiladigan o‘quvchilar',
+    StudentFlowCategory.debt => 'To‘lov qarzdorligi mavjud o‘quvchilar',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            Text(
+              '${students.length} ta o‘quvchi',
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: c.primary,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              _subtitle,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12,
+                color: c.muted,
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (students.isEmpty)
+              _EmptyState(
+                icon: Icons.groups_rounded,
+                title: 'Ro‘yxat bo‘sh',
+                sub: 'Tanlangan davr uchun o‘quvchi topilmadi.',
+              )
+            else
+              SfCard(
+                child: Column(
+                  children: [
+                    for (int index = 0; index < students.length; index++)
+                      _StudentRow(
+                        s: students[index],
+                        last: index == students.length - 1,
+                      ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -2525,7 +3231,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final c = _telegramColors;
+    final c = widget.colors;
     final p = studentProfile(widget.student);
     return SfTheme(
       colors: c,
@@ -2794,6 +3500,12 @@ void _toast(BuildContext context, String msg) {
       SnackBar(
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          MediaQuery.of(context).size.height - 92,
+        ),
         backgroundColor: const Color(0xFF3A332A),
         content: Text(
           msg,
@@ -3479,50 +4191,34 @@ String _anomalyReco(Anomaly a) {
 }
 
 // ── Approvals (manager) ────────────────────────────────────────────────
+// A decision is deliberately made only on the detail route. The list is an
+// inbox: tapping a request opens its full context, so an accidental tap can
+// never approve or reject a request.
+Future<void> _openApproval(
+  BuildContext context,
+  AppStore store,
+  Approval item,
+  SfColors colors,
+) async {
+  final decision = await Navigator.of(
+    context,
+  ).push<bool>(sfPageRoute(ApprovalDetailScreen(item: item, colors: colors)));
+  if (decision == null || !context.mounted) return;
+  store.resolve(item, approved: decision);
+  final posted = decision && item.amount > 0;
+  sfSnack(
+    context,
+    decision
+        ? (posted
+              ? '✓ Tasdiqlandi · ${fmtMoney(item.amount)} kassa daftariga yozildi'
+              : '✓ "${item.title}" tasdiqlandi')
+        : '✗ "${item.title}" rad etildi',
+    bg: decision ? const Color(0xFF4F7B3B) : const Color(0xFF8A4232),
+  );
+}
+
 class ApprovalsScreen extends StatelessWidget {
   const ApprovalsScreen({super.key});
-
-  void _resolve(
-    BuildContext context,
-    AppStore store,
-    Approval it,
-    bool approved,
-  ) {
-    store.resolve(it, approved: approved);
-    final posted = approved && it.amount > 0;
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 3),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: approved
-              ? const Color(0xFF4F7B3B)
-              : const Color(0xFF8A4232),
-          content: Text(
-            approved
-                ? (posted
-                      ? '✓ Tasdiqlandi · ${fmtMoney(it.amount)} kassa daftariga yozildi'
-                      : '✓ "${it.title}" tasdiqlandi')
-                : '✗ "${it.title}" rad etildi',
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          action: posted
-              ? SnackBarAction(
-                  label: 'Daftar',
-                  textColor: Colors.white,
-                  onPressed: () => Navigator.of(context).push(
-                    sfPageRoute(LedgerScreen(colors: SfTheme.of(context))),
-                  ),
-                )
-              : null,
-        ),
-      );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -3540,8 +4236,6 @@ class ApprovalsScreen extends StatelessWidget {
           padding: _pad,
           child: Column(
             children: [
-              // The cash ledger banner was removed from Approvals — it lives in
-              // its own module, not on the requests screen.
               if (items.isEmpty)
                 _EmptyState(
                   icon: Icons.task_alt_rounded,
@@ -3550,123 +4244,124 @@ class ApprovalsScreen extends StatelessWidget {
                 )
               else
                 for (final it in items)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    clipBehavior: Clip.antiAlias,
-                    decoration: BoxDecoration(
-                      color: c.surface,
-                      border: Border.all(color: c.border),
+                  Material(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(13),
+                    child: InkWell(
                       borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: IntrinsicHeight(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Container(width: 4, color: it.rail),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.all(13),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
+                      onTap: () => _openApproval(context, store, it, c),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        clipBehavior: Clip.antiAlias,
+                        decoration: BoxDecoration(
+                          color: c.surface,
+                          border: Border.all(color: c.border),
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Container(width: 4, color: it.rail),
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(13),
+                                  child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
+                                      Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  it.title,
+                                                  style: TextStyle(
+                                                    fontFamily: SfType.ui,
+                                                    fontSize: 12.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: c.ink,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  it.who,
+                                                  style: TextStyle(
+                                                    fontFamily: SfType.ui,
+                                                    fontSize: 10.5,
+                                                    color: c.muted,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (it.amount > 0)
                                             Text(
-                                              it.title,
+                                              '${it.inflow ? '+' : '−'}${fmtMoney(it.amount)}',
                                               style: TextStyle(
-                                                fontFamily: SfType.ui,
-                                                fontSize: 12.5,
-                                                fontWeight: FontWeight.w600,
-                                                color: c.ink,
+                                                fontFamily: SfType.mono,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: it.inflow
+                                                    ? c.success
+                                                    : c.ink,
                                               ),
                                             ),
-                                            Text(
-                                              it.who,
-                                              style: TextStyle(
-                                                fontFamily: SfType.ui,
-                                                fontSize: 10.5,
-                                                color: c.muted,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                                        ],
                                       ),
-                                      if (it.amount > 0)
-                                        Text(
-                                          '${it.inflow ? '+' : '−'}${fmtMoney(it.amount)}',
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 9,
+                                          vertical: 7,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: c.surface2,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          it.sub,
                                           style: TextStyle(
-                                            fontFamily: SfType.mono,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: it.inflow
-                                                ? c.success
-                                                : c.ink,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 9,
-                                      vertical: 7,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: c.surface2,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      it.sub,
-                                      style: TextStyle(
-                                        fontFamily: SfType.ui,
-                                        fontSize: 11.5,
-                                        color: c.ink2,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: _ApprBtn(
-                                          label: tr(context, 'btn_reject'),
-                                          primary: false,
-                                          onTap: () => _resolve(
-                                            context,
-                                            store,
-                                            it,
-                                            false,
+                                            fontFamily: SfType.ui,
+                                            fontSize: 11.5,
+                                            color: c.ink2,
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
-                                      Expanded(
-                                        child: _ApprBtn(
-                                          label: tr(context, 'btn_approve'),
-                                          primary: true,
-                                          onTap: () => _resolve(
-                                            context,
-                                            store,
-                                            it,
-                                            true,
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            'Batafsil ko‘rish',
+                                            style: TextStyle(
+                                              fontFamily: SfType.ui,
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              color: c.primary,
+                                            ),
                                           ),
-                                        ),
+                                          const Spacer(),
+                                          Icon(
+                                            Icons.chevron_right_rounded,
+                                            size: 18,
+                                            color: c.primary,
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
-                                ],
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -3674,6 +4369,128 @@ class ApprovalsScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class ApprovalDetailScreen extends StatelessWidget {
+  final Approval item;
+  final SfColors colors;
+  const ApprovalDetailScreen({
+    super.key,
+    required this.item,
+    required this.colors,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final type = item.amount > 0 ? 'Moliyaviy so‘rov' : 'Operatsion so‘rov';
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'So‘rov tafsilotlari',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: c.surface,
+                border: Border.all(color: c.border),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  if (item.amount > 0) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      '${item.inflow ? '+' : '−'}${fmtMoney(item.amount)}',
+                      style: TextStyle(
+                        fontFamily: SfType.mono,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: item.inflow ? c.success : c.danger,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  _InfoRow('Yuborgan', item.who),
+                  _InfoRow('Yaratilgan vaqt', '17 Iyl 2026 · 14:30'),
+                  _InfoRow('So‘rov turi', type),
+                  _InfoRow('Tavsif', item.sub),
+                  _InfoRow(
+                    'Bog‘liq ma’lumot',
+                    item.amount > 0
+                        ? 'Kassa va o‘quvchi hisobi'
+                        : 'Filial operatsiyasi',
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Qaror',
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: c.muted,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _ApprBtn(
+                    label: tr(context, 'btn_reject'),
+                    primary: false,
+                    onTap: () => Navigator.of(context).pop(false),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ApprBtn(
+                    label: tr(context, 'btn_approve'),
+                    primary: true,
+                    onTap: () => Navigator.of(context).pop(true),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -4413,7 +5230,11 @@ class BranchesScreen extends StatelessWidget {
                   builder: (context) {
                     final b = branches[i];
                     return GestureDetector(
-                      onTap: () => _showBranchSheet(context, b),
+                      onTap: () => Navigator.of(context).push(
+                        sfPageRoute(
+                          BranchWorkspaceScreen(branch: b, colors: c),
+                        ),
+                      ),
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         clipBehavior: Clip.antiAlias,
@@ -4572,6 +5393,7 @@ class BranchesScreen extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 void _showBranchSheet(BuildContext context, Branch b) {
   final c = SfTheme.of(context);
   // Synthesise a 8-point revenue trend ending at the branch's current trend sign.
@@ -4708,6 +5530,587 @@ void _showBranchSheet(BuildContext context, Branch b) {
       ),
     ),
   );
+}
+
+/// Full mobile branch workspace. It replaces the old read-only bottom sheet
+/// when a CEO needs to review, configure, pause or export one branch.
+class BranchWorkspaceScreen extends StatefulWidget {
+  final Branch branch;
+  final SfColors colors;
+  const BranchWorkspaceScreen({
+    super.key,
+    required this.branch,
+    required this.colors,
+  });
+  @override
+  State<BranchWorkspaceScreen> createState() => _BranchWorkspaceScreenState();
+}
+
+class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
+  bool paused = false;
+
+  Future<void> _confirmPause() async {
+    final language = SettingsScope.of(context).lang;
+    final words = switch (language) {
+      SfLang.ru => (
+        'Приостановить филиал?',
+        'Вы уверены, что хотите приостановить работу филиала?',
+        'Отмена',
+        'Приостановить',
+      ),
+      SfLang.en => (
+        'Pause branch?',
+        'Are you sure you want to pause this branch?',
+        'Cancel',
+        'Pause',
+      ),
+      _ => (
+        'Filialni pauzaga qo‘yish?',
+        'Haqiqatan ham filial ishini pauzaga qo‘ymoqchimisiz?',
+        'Bekor qilish',
+        'Pauza',
+      ),
+    };
+    final answer = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final c = widget.colors;
+        return SfTheme(
+          colors: c,
+          child: AlertDialog(
+            backgroundColor: c.surface,
+            title: Text(
+              words.$1,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+            content: Text(
+              words.$2,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 13,
+                color: c.ink2,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(
+                  words.$3,
+                  style: TextStyle(fontFamily: SfType.ui, color: c.muted),
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(
+                  words.$4,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontWeight: FontWeight.w800,
+                    color: c.danger,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (answer == true && mounted) {
+      setState(() => paused = true);
+      AppScope.of(context).logActivity(
+        icon: Icons.pause_circle_filled_rounded,
+        title: 'Filial pauzaga qo‘yildi',
+        detail: widget.branch.name,
+        kind: 'branch',
+      );
+      _snack(
+        context,
+        language == SfLang.en
+            ? 'Branch paused'
+            : language == SfLang.ru
+            ? 'Филиал приостановлен'
+            : 'Filial pauzaga qo‘yildi',
+        bg: widget.colors.danger,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final b = widget.branch;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          iconTheme: IconThemeData(color: c.ink),
+          shape: Border(bottom: BorderSide(color: c.border)),
+          title: Text(
+            b.name,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Report',
+              icon: Icon(Icons.download_rounded, color: c.ink2),
+              onPressed: () {
+                AppScope.of(context).setBranchScope(b.name);
+                _showReportFormatPicker(context, SfRole.ceo, colors: c);
+              },
+            ),
+            IconButton(
+              tooltip: 'Configure',
+              icon: Icon(Icons.tune_rounded, color: c.ink2),
+              onPressed: () => Navigator.of(
+                context,
+              ).push(sfPageRoute(BranchConfigureScreen(branch: b, colors: c))),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [b.mark, b.mark.withValues(alpha: 0.68)],
+                ),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: const Center(
+                      child: SfStar(size: 22, color: Colors.white),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          b.name,
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Text(
+                          paused
+                              ? 'Pauzada · qayta faollashtirish kerak'
+                              : 'Faol filial · barcha ko‘rsatkichlar yangilanadi',
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 11.5,
+                            color: Colors.white.withValues(alpha: 0.86),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Pill(
+                    paused ? 'PAUZA' : 'FAOL',
+                    tone: paused ? PillTone.danger : PillTone.success,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _kpiGrid([
+              _Kpi(
+                label: 'Daromad',
+                value: fmtMoneyMln(b.revenue),
+                color: c.success,
+                icon: Icons.payments_rounded,
+                trend: (up: b.trend >= 0, v: '${b.trend.abs()}%'),
+              ),
+              _Kpi(
+                label: 'O‘quvchilar',
+                value: '${b.students}',
+                icon: Icons.groups_rounded,
+              ),
+              _Kpi(
+                label: 'Xodimlar',
+                value: '${(b.students / 31).round()}',
+                icon: Icons.badge_rounded,
+              ),
+              _Kpi(
+                label: 'Davomat',
+                value: '${b.attendance}%',
+                color: b.attendance >= 92 ? c.success : c.warn,
+                icon: Icons.fact_check_rounded,
+              ),
+            ]),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  const SfCardHeader('Davomat / karta salomatligi'),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    child: Row(
+                      children: [
+                        Tooltip(
+                          message: 'Yaxshi: 72%\nO‘rtacha: 19%\nPast: 9%',
+                          child: Donut(
+                            size: 92,
+                            thickness: 14,
+                            segments: [
+                              DonutSegment(72, c.success),
+                              DonutSegment(19, c.warn),
+                              DonutSegment(9, c.danger),
+                            ],
+                            // This State's build context is above the local
+                            // SfTheme wrapper. Build the label from the known
+                            // route colours instead of calling _mono(context).
+                            center: Text(
+                              '${b.attendance}%',
+                              style: TextStyle(
+                                fontFamily: SfType.mono,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: c.ink,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              LegendRow(c.success, 'Yaxshi (>90%)', '72%'),
+                              LegendRow(c.warn, 'O‘rtacha (80–90%)', '19%'),
+                              LegendRow(c.danger, 'Past (<80%)', '9%'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  const SfCardHeader('O‘qituvchilar reytingi · top'),
+                  _branchTeacherRow(
+                    c,
+                    'Madina Halimova',
+                    'Matematika',
+                    '87%',
+                    '★ 5',
+                  ),
+                  _branchTeacherRow(
+                    c,
+                    'Sevara Ibragimova',
+                    'Ingliz tili',
+                    '90%',
+                    '★ 5',
+                  ),
+                  _branchTeacherRow(
+                    c,
+                    'Munira Tosheva',
+                    'Fizika',
+                    '93%',
+                    '★ 5',
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  const SfCardHeader('So‘nggi hodisalar'),
+                  _branchEventRow(
+                    c,
+                    Icons.trending_up_rounded,
+                    'Yangi to‘lov · 1.2 mln',
+                    '2 daqiqa',
+                    c.success,
+                  ),
+                  _branchEventRow(
+                    c,
+                    Icons.notifications_active_rounded,
+                    'Qarz eslatmasi yuborildi',
+                    '14 daqiqa',
+                    c.warn,
+                  ),
+                  _branchEventRow(
+                    c,
+                    Icons.flag_rounded,
+                    'Audit flag · davomati past',
+                    '2 soat',
+                    c.danger,
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: SfButton(
+                    icon: Icons.tune_rounded,
+                    label: 'Configure',
+                    primary: false,
+                    onTap: () => Navigator.of(context).push(
+                      sfPageRoute(BranchConfigureScreen(branch: b, colors: c)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SfButton(
+                    icon: paused
+                        ? Icons.play_arrow_rounded
+                        : Icons.pause_rounded,
+                    label: paused ? 'Faollashtirish' : 'Pauza',
+                    primary: true,
+                    onTap: paused
+                        ? () => setState(() => paused = false)
+                        : _confirmPause,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _branchTeacherRow(
+    SfColors c,
+    String name,
+    String subject,
+    String attendance,
+    String rating, {
+    bool last = false,
+  }) => Container(
+    padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+    decoration: BoxDecoration(
+      border: Border(
+        bottom: last ? BorderSide.none : BorderSide(color: c.border),
+      ),
+    ),
+    child: Row(
+      children: [
+        SfAvatar(name: name, size: 31),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                name,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: c.ink,
+                ),
+              ),
+              Text(
+                subject,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 10,
+                  color: c.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Text(
+          attendance,
+          style: TextStyle(
+            fontFamily: SfType.mono,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: c.success,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Pill(rating, tone: PillTone.success),
+      ],
+    ),
+  );
+
+  Widget _branchEventRow(
+    SfColors c,
+    IconData icon,
+    String title,
+    String time,
+    Color color, {
+    bool last = false,
+  }) => InkWell(
+    onTap: () => _snack(context, '$title · $time'),
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: c.ink,
+              ),
+            ),
+          ),
+          Text(
+            time,
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 9.5,
+              color: c.muted,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class BranchConfigureScreen extends StatefulWidget {
+  final Branch branch;
+  final SfColors colors;
+  const BranchConfigureScreen({
+    super.key,
+    required this.branch,
+    required this.colors,
+  });
+  @override
+  State<BranchConfigureScreen> createState() => _BranchConfigureScreenState();
+}
+
+class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
+  String staff = 'Madina Halimova';
+  late String target = widget.branch.name;
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SfScaffold(
+      colors: c,
+      title: '${widget.branch.name} · Configure',
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          SfCard(
+            child: Column(
+              children: [
+                const SfCardHeader('Filial ma’lumotlari'),
+                _InfoRow('Menejer', 'Dilnoza Yo‘ldosheva'),
+                _InfoRow(
+                  'Xodimlar',
+                  '${(widget.branch.students / 31).round()}',
+                ),
+                _InfoRow('Xonalar', '12'),
+                _InfoRow('Ish vaqti', '08:00 — 21:00', last: true),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'XODIMNI FILIALGA O‘TKAZISH',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.7,
+              color: c.muted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SfCard(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: staff,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Xodim'),
+                  items:
+                      const [
+                            'Madina Halimova',
+                            'Sevara Ibragimova',
+                            'Munira Tosheva',
+                          ]
+                          .map(
+                            (v) => DropdownMenuItem(value: v, child: Text(v)),
+                          )
+                          .toList(),
+                  onChanged: (v) => setState(() => staff = v!),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: target,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Yangi filial'),
+                  items: AppScope.of(context).branches
+                      .map(
+                        (b) => DropdownMenuItem(
+                          value: b.name,
+                          child: Text(b.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => target = v!),
+                ),
+                const SizedBox(height: 14),
+                SfButton(
+                  icon: Icons.swap_horiz_rounded,
+                  label: 'Xodimni o‘tkazish',
+                  primary: true,
+                  onTap: () => _snack(context, '$staff → $target'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Cases (audit) ──────────────────────────────────────────────────────
@@ -5609,6 +7012,7 @@ class _ChatBubble extends StatelessWidget {
 class GroupInfo {
   final String name, branch, level, teacher, schedule;
   final int count, avgAtt, debtors;
+  final String status;
   const GroupInfo(
     this.name,
     this.branch,
@@ -5618,6 +7022,18 @@ class GroupInfo {
     this.count,
     this.avgAtt,
     this.debtors,
+  ) : status = 'active';
+
+  const GroupInfo.withStatus(
+    this.name,
+    this.branch,
+    this.level,
+    this.teacher,
+    this.schedule,
+    this.count,
+    this.avgAtt,
+    this.debtors,
+    this.status,
   );
 }
 
@@ -5638,7 +7054,10 @@ const _kSchedules = [
   'Ju·Sha · 09:00',
 ];
 
-List<GroupInfo> _groupsFrom(List<Student> students) {
+List<GroupInfo> _groupsFrom(
+  List<Student> students, [
+  List<ManagedGroup> extraGroups = const [],
+]) {
   final byName = <String, List<Student>>{};
   for (final s in students) {
     byName.putIfAbsent(s.group, () => []).add(s);
@@ -5664,6 +7083,22 @@ List<GroupInfo> _groupsFrom(List<Student> students) {
       ),
     );
   }
+  for (final group in extraGroups) {
+    if (byName.containsKey(group.name)) continue;
+    out.add(
+      GroupInfo.withStatus(
+        group.name,
+        group.branch,
+        group.level,
+        group.teacher,
+        group.schedule,
+        0,
+        0,
+        0,
+        group.status,
+      ),
+    );
+  }
   out.sort((a, b) => a.name.compareTo(b.name));
   return out;
 }
@@ -5686,13 +7121,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
   String query = '';
   int branchSel = 0;
   int levelSel = 0;
+  int teacherSel = 0;
+  int statusSel = 0;
   bool showFilters = false;
 
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    final students = AppScope.of(context).students;
-    final groups = _groupsFrom(students);
+    final store = AppScope.of(context);
+    final students = store.students;
+    final groups = _groupsFrom(students, store.extraGroups);
     final branches = <String>[
       '__all',
       ...{for (final g in groups) g.branch},
@@ -5701,14 +7139,25 @@ class _GroupsScreenState extends State<GroupsScreen> {
       '__all',
       ...{for (final g in groups) g.level},
     ];
+    final teachers = <String>[
+      '__all',
+      ...{for (final g in groups) g.teacher},
+    ];
     if (branchSel >= branches.length) branchSel = 0;
     if (levelSel >= levels.length) levelSel = 0;
+    if (teacherSel >= teachers.length) teacherSel = 0;
     final wantBranch = branches[branchSel];
     final wantLevel = levels[levelSel];
+    final wantTeacher = teachers[teacherSel];
     final q = query.trim().toLowerCase();
     final list = groups.where((g) {
       if (wantBranch != '__all' && g.branch != wantBranch) return false;
       if (wantLevel != '__all' && g.level != wantLevel) return false;
+      if (wantTeacher != '__all' && g.teacher != wantTeacher) return false;
+      if (statusSel == 1 && g.status != 'active') return false;
+      if (statusSel == 2 && g.status != 'paused') return false;
+      if (statusSel == 3 && g.status != 'closed') return false;
+      if (statusSel == 4 && g.count < 2) return false;
       if (q.isNotEmpty &&
           !g.name.toLowerCase().contains(q) &&
           !g.teacher.toLowerCase().contains(q)) {
@@ -5723,7 +7172,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final levelF = [
       for (final l in levels) l == '__all' ? tr(context, 'f_all_levels') : l,
     ];
-    final active = (branchSel != 0 ? 1 : 0) + (levelSel != 0 ? 1 : 0);
+    final teacherF = [
+      for (final t in teachers) t == '__all' ? 'Barcha o‘qituvchilar' : t,
+    ];
+    final active =
+        (branchSel != 0 ? 1 : 0) +
+        (levelSel != 0 ? 1 : 0) +
+        (teacherSel != 0 ? 1 : 0) +
+        (statusSel != 0 ? 1 : 0);
 
     return ListView(
       padding: EdgeInsets.zero,
@@ -5737,6 +7193,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _CeoContextFilter(showBranches: false),
+              const SizedBox(height: 10),
+              _GroupStatusSummary(
+                groups: groups,
+                onSelect: (index) => setState(() => statusSel = index),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
@@ -5750,6 +7213,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     active: showFilters,
                     count: active,
                     onTap: () => setState(() => showFilters = !showFilters),
+                  ),
+                  const SizedBox(width: 8),
+                  _RoundAction(
+                    icon: Icons.add_rounded,
+                    tooltip: 'Yangi guruh',
+                    onTap: () => Navigator.of(
+                      context,
+                    ).push(sfPageRoute(GroupCreateScreen(colors: c))),
                   ),
                 ],
               ),
@@ -5787,6 +7258,35 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   items: levelF,
                   selected: levelSel,
                   onSelect: (i) => setState(() => levelSel = i),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'O‘QITUVCHI'.toUpperCase(),
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                    color: c.muted,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _FilterChips(
+                  items: teacherF,
+                  selected: teacherSel,
+                  onSelect: (i) => setState(() => teacherSel = i),
+                ),
+                const SizedBox(height: 8),
+                _FilterChips(
+                  items: const [
+                    'Hammasi',
+                    'Faol',
+                    'Pauzada',
+                    'Yopilgan',
+                    '2+ o‘quvchi',
+                  ],
+                  selected: statusSel,
+                  onSelect: (i) => setState(() => statusSel = i),
                 ),
               ],
               const SizedBox(height: 12),
@@ -6102,6 +7602,2769 @@ class GroupDetailScreen extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Compact circular action used in list toolbars.
+class _RoundAction extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _RoundAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: c.primary,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Interactive group status counters. Tapping one applies the matching filter
+/// in the group list, so the summary is useful rather than decorative.
+class _GroupStatusSummary extends StatelessWidget {
+  final List<GroupInfo> groups;
+  final ValueChanged<int> onSelect;
+  const _GroupStatusSummary({required this.groups, required this.onSelect});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final active = groups.where((g) => g.status == 'active').length;
+    final paused = groups.where((g) => g.status == 'paused').length;
+    final closed = groups.where((g) => g.status == 'closed').length;
+    final entries = [
+      ('Faol', active, c.success, 1),
+      ('Pauzada', paused, c.warn, 2),
+      ('Yopilgan', closed, c.danger, 3),
+    ];
+    return Row(
+      children: [
+        for (int i = 0; i < entries.length; i++) ...[
+          Expanded(
+            child: InkWell(
+              onTap: () => onSelect(entries[i].$4),
+              borderRadius: BorderRadius.circular(11),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  border: Border.all(color: c.border),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      '${entries[i].$2}',
+                      style: TextStyle(
+                        fontFamily: SfType.mono,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: entries[i].$3,
+                      ),
+                    ),
+                    Text(
+                      entries[i].$1,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w600,
+                        color: c.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (i < entries.length - 1) const SizedBox(width: 7),
+        ],
+      ],
+    );
+  }
+}
+
+InputDecoration _managedInputDecoration(SfColors c, String label) =>
+    InputDecoration(
+      labelText: label,
+      labelStyle: TextStyle(
+        fontFamily: SfType.ui,
+        fontSize: 12,
+        color: c.muted,
+      ),
+      filled: true,
+      fillColor: c.surface,
+      contentPadding: const EdgeInsets.fromLTRB(13, 14, 13, 14),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: c.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: c.primary, width: 1.6),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: c.danger),
+      ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: c.danger, width: 1.6),
+      ),
+    );
+
+class _ManagedTextField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final TextInputType? keyboardType;
+  final bool requiredField;
+  const _ManagedTextField({
+    required this.controller,
+    required this.label,
+    this.keyboardType,
+    this.requiredField = false,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 11),
+      child: TextFormField(
+        controller: controller,
+        keyboardType: keyboardType,
+        maxLines: 1,
+        style: TextStyle(fontFamily: SfType.ui, fontSize: 13.5, color: c.ink),
+        validator: requiredField
+            ? (v) => v == null || v.trim().isEmpty ? 'Majburiy maydon' : null
+            : null,
+        decoration: _managedInputDecoration(c, label),
+      ),
+    );
+  }
+}
+
+/// Full-screen admission page. It retains the fields entered by the CEO in
+/// the in-memory AppStore until an API is connected.
+class AdmitStudentScreen extends StatefulWidget {
+  final SfColors colors;
+  const AdmitStudentScreen({super.key, required this.colors});
+  @override
+  State<AdmitStudentScreen> createState() => _AdmitStudentScreenState();
+}
+
+class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
+  final _form = GlobalKey<FormState>();
+  final _first = TextEditingController();
+  final _last = TextEditingController();
+  final _number = TextEditingController();
+  final _phone = TextEditingController();
+  final _backup = TextEditingController();
+  final _parentName = TextEditingController();
+  final _parentPhone = TextEditingController();
+  final _parentBackup = TextEditingController();
+  final _username = TextEditingController();
+  String _branch = 'Yunusobod';
+  String _group = '__none';
+  String _gender = 'Male';
+
+  @override
+  void dispose() {
+    for (final c in [
+      _first,
+      _last,
+      _number,
+      _phone,
+      _backup,
+      _parentName,
+      _parentPhone,
+      _parentBackup,
+      _username,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!(_form.currentState?.validate() ?? false)) return;
+    final store = AppScope.of(context);
+    final selectedGroup = _group == '__none' ? 'Qabul · yangi' : _group;
+    store.addStudent(
+      Student(
+        '${_last.text.trim()} ${_first.text.trim()}',
+        selectedGroup,
+        100,
+        'paid',
+        0,
+        studentNumber: _number.text.trim(),
+        phone: _phone.text.trim(),
+        backupPhone: _backup.text.trim().isEmpty ? null : _backup.text.trim(),
+        parentName: _parentName.text.trim(),
+        parentPhone: _parentPhone.text.trim(),
+        parentBackupPhone: _parentBackup.text.trim().isEmpty
+            ? null
+            : _parentBackup.text.trim(),
+        branch: _branch,
+        username: _username.text.trim(),
+        gender: _gender,
+      ),
+      branch: _branch,
+    );
+    Navigator.of(context).pop();
+    _snack(
+      context,
+      'O‘quvchi muvaffaqiyatli qabul qilindi',
+      bg: widget.colors.success,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    final groups = _groupsFrom(
+      store.students,
+      store.extraGroups,
+    ).where((g) => g.branch == _branch).map((g) => g.name).toList();
+    if (_group != '__none' && !groups.contains(_group)) _group = '__none';
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'O‘quvchi qabul qilish',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Form(
+          key: _form,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
+            children: [
+              _setSec(c, 'O‘QUVCHI MA’LUMOTLARI'),
+              _ManagedTextField(
+                controller: _first,
+                label: 'Ism',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _last,
+                label: 'Familiya',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _number,
+                label: 'Student number',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _phone,
+                label: 'Telefon raqami',
+                keyboardType: TextInputType.phone,
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _backup,
+                label: 'Zaxira telefon (ixtiyoriy)',
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 4),
+              _setSec(c, 'OTA-ONA'),
+              _ManagedTextField(
+                controller: _parentName,
+                label: 'Ota-ona ismi',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _parentPhone,
+                label: 'Ota-ona telefoni',
+                keyboardType: TextInputType.phone,
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _parentBackup,
+                label: 'Ikkinchi telefon (ixtiyoriy)',
+                keyboardType: TextInputType.phone,
+              ),
+              const SizedBox(height: 4),
+              _setSec(c, 'O‘QISH'),
+              _ManagedSelect<String>(
+                label: 'Filial',
+                value: _branch,
+                items: [for (final b in store.branches) b.name],
+                onChanged: (v) => setState(() {
+                  _branch = v;
+                  _group = '__none';
+                }),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect<String>(
+                label: 'Guruh (ixtiyoriy)',
+                value: _group,
+                items: ['__none', ...groups],
+                display: (v) => v == '__none' ? 'Guruh biriktirilmagan' : v,
+                onChanged: (v) => setState(() => _group = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedTextField(
+                controller: _username,
+                label: 'Username',
+                requiredField: true,
+              ),
+              _ManagedSelect<String>(
+                label: 'Gender',
+                value: _gender,
+                items: const ['Male', 'Female'],
+                onChanged: (v) => setState(() => _gender = v),
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.check_rounded,
+              label: 'O‘quvchini yaratish',
+              primary: true,
+              onTap: _submit,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ManagedSelect<T> extends StatelessWidget {
+  final String label;
+  final T value;
+  final List<T> items;
+  final ValueChanged<T> onChanged;
+  final String Function(T)? display;
+  const _ManagedSelect({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.display,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      isExpanded: true,
+      style: TextStyle(fontFamily: SfType.ui, fontSize: 13.5, color: c.ink),
+      decoration: _managedInputDecoration(c, label),
+      items: [
+        for (final item in items)
+          DropdownMenuItem(
+            value: item,
+            child: Text(display?.call(item) ?? '$item'),
+          ),
+      ],
+      onChanged: (v) {
+        if (v != null) onChanged(v);
+      },
+    );
+  }
+}
+
+/// Full mobile creation page for a teaching group. New groups appear in the
+/// group screen immediately, including their status and branch filters.
+class GroupCreateScreen extends StatefulWidget {
+  final SfColors colors;
+  const GroupCreateScreen({super.key, required this.colors});
+  @override
+  State<GroupCreateScreen> createState() => _GroupCreateScreenState();
+}
+
+class _GroupCreateScreenState extends State<GroupCreateScreen> {
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _schedule = TextEditingController(text: 'Du · Cho · Ju · 16:00');
+  String _branch = 'Yunusobod';
+  String _teacher = _kTeachers.first;
+  String _level = 'Intermediate';
+  String _status = 'active';
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _schedule.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!(_form.currentState?.validate() ?? false)) return;
+    AppScope.of(context).addGroup(
+      ManagedGroup(
+        name: _name.text.trim(),
+        branch: _branch,
+        teacher: _teacher,
+        schedule: _schedule.text.trim(),
+        level: _level,
+        status: _status,
+      ),
+    );
+    Navigator.of(context).pop();
+    _snack(context, 'Yangi guruh yaratildi', bg: widget.colors.success);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Yangi guruh',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Form(
+          key: _form,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
+            children: [
+              _ManagedTextField(
+                controller: _name,
+                label: 'Guruh nomi',
+                requiredField: true,
+              ),
+              _ManagedSelect(
+                label: 'Filial',
+                value: _branch,
+                items: [for (final b in store.branches) b.name],
+                onChanged: (v) => setState(() => _branch = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect(
+                label: 'O‘qituvchi',
+                value: _teacher,
+                items: _kTeachers,
+                onChanged: (v) => setState(() => _teacher = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect(
+                label: 'Daraja',
+                value: _level,
+                items: const ['Beginner', 'Intermediate', 'Advanced'],
+                onChanged: (v) => setState(() => _level = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedTextField(
+                controller: _schedule,
+                label: 'Jadval',
+                requiredField: true,
+              ),
+              _ManagedSelect(
+                label: 'Holat',
+                value: _status,
+                items: const ['active', 'paused', 'closed'],
+                display: (v) => switch (v) {
+                  'active' => 'Faol',
+                  'paused' => 'Pauzada',
+                  _ => 'Yopilgan',
+                },
+                onChanged: (v) => setState(() => _status = v),
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.add_rounded,
+              label: 'Guruh yaratish',
+              primary: true,
+              onTap: _submit,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Standalone wrappers used from the full-section menu. The bottom tabs keep
+/// their compact layout, while these routes have a proper mobile app bar.
+class StudentsWorkspaceScreen extends StatelessWidget {
+  final SfColors colors;
+  const StudentsWorkspaceScreen({super.key, required this.colors});
+  @override
+  Widget build(BuildContext context) => SfScaffold(
+    colors: colors,
+    title: 'O‘quvchilar',
+    body: const StudentsScreen(),
+  );
+}
+
+class GroupsWorkspaceScreen extends StatelessWidget {
+  final SfColors colors;
+  const GroupsWorkspaceScreen({super.key, required this.colors});
+  @override
+  Widget build(BuildContext context) =>
+      SfScaffold(colors: colors, title: 'Guruhlar', body: const GroupsScreen());
+}
+
+class HrWorkspaceScreen extends StatefulWidget {
+  final SfColors colors;
+  const HrWorkspaceScreen({super.key, required this.colors});
+  @override
+  State<HrWorkspaceScreen> createState() => _HrWorkspaceScreenState();
+}
+
+class _HrWorkspaceScreenState extends State<HrWorkspaceScreen> {
+  final Map<String, String> _stage = {
+    'Olimjon Rashidov': 'Applied',
+    'Dilnoza Aliyeva': 'Applied',
+    'Madina Tosheva': 'Interview',
+    'Jasur Nazarov': 'Interview',
+    'Nilufar Yusupova': 'Accepted',
+    'Bekzod Aliyev': 'Rejected',
+  };
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    final candidateNames = _stage.keys
+        .where((name) => name.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+    const stages = ['Applied', 'Interview', 'Accepted', 'Rejected'];
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'HR · Xodimlar',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Create staff',
+              icon: Icon(Icons.person_add_alt_1_rounded, color: c.primary),
+              onPressed: () => Navigator.of(
+                context,
+              ).push(sfPageRoute(StaffCreateScreen(colors: c))),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            _SearchField(
+              hint: 'Xodim yoki nomzod qidirish',
+              onChanged: (v) => setState(() => _query = v),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: SfStatTile(
+                    'Jami xodim',
+                    '${store.staff.length}',
+                    c.ink,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SfStatTile('Nomzodlar', '${_stage.length}', c.warn),
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: SfStatTile('Vakansiya', '7', c.danger)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _setSec(c, 'HIRING KANBAN · KARTANI USHLAB KO‘CHIRING'),
+            SizedBox(
+              height: 310,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: stages.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  final stage = stages[index];
+                  final entries = candidateNames
+                      .where((n) => _stage[n] == stage)
+                      .toList();
+                  return _HiringColumn(
+                    title: stage,
+                    people: entries,
+                    tone: index == 0
+                        ? c.primary
+                        : index == 1
+                        ? c.warn
+                        : index == 2
+                        ? c.success
+                        : c.danger,
+                    onDrop: (name) => setState(() => _stage[name] = stage),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 14),
+            _setSec(c, 'XODIMLAR'),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < store.staff.length; i++)
+                    _StaffRow(
+                      member: store.staff[i],
+                      last: i == store.staff.length - 1,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.person_add_alt_1_rounded,
+              label: 'Create staff',
+              primary: true,
+              onTap: () => Navigator.of(
+                context,
+              ).push(sfPageRoute(StaffCreateScreen(colors: c))),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HiringColumn extends StatelessWidget {
+  final String title;
+  final List<String> people;
+  final Color tone;
+  final ValueChanged<String> onDrop;
+  const _HiringColumn({
+    required this.title,
+    required this.people,
+    required this.tone,
+    required this.onDrop,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return DragTarget<String>(
+      onAcceptWithDetails: (details) => onDrop(details.data),
+      builder: (context, candidates, _) => Container(
+        width: 180,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: candidates.isNotEmpty
+              ? tone.withValues(alpha: 0.10)
+              : c.surface2,
+          border: Border.all(color: candidates.isNotEmpty ? tone : c.border),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: tone,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${people.length}',
+                  style: TextStyle(
+                    fontFamily: SfType.mono,
+                    fontSize: 11,
+                    color: c.muted,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 9),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final person in people)
+                    _CandidateCard(name: person, tone: tone),
+                  if (people.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 30),
+                      child: Center(
+                        child: Text(
+                          'Kartani bu yerga tashlang',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 10.5,
+                            color: c.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CandidateCard extends StatelessWidget {
+  final String name;
+  final Color tone;
+  const _CandidateCard({required this.name, required this.tone});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final card = Container(
+      margin: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          SfAvatar(name: name, size: 25, color: tone),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: c.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return LongPressDraggable<String>(
+      data: name,
+      // The drag feedback is inserted into Flutter's root Overlay. It is no
+      // longer below the page's SfTheme, so provide the same theme explicitly.
+      feedback: SfTheme(
+        colors: c,
+        child: Material(
+          color: Colors.transparent,
+          child: SizedBox(
+            width: 160,
+            child: Opacity(opacity: 0.88, child: card),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: card),
+      child: card,
+    );
+  }
+}
+
+class _StaffRow extends StatelessWidget {
+  final StaffMember member;
+  final bool last;
+  const _StaffRow({required this.member, required this.last});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return InkWell(
+      onTap: () => Navigator.of(
+        context,
+      ).push(sfPageRoute(StaffDetailScreen(member: member, colors: c))),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            SfAvatar(name: member.fullName, size: 34, color: c.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    member.fullName,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  Text(
+                    '${member.department} · ${member.branch}',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10.5,
+                      color: c.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, color: c.muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Create Staff / Create Teacher full-screen flow. It collects the requested
+/// account, employment, subject and salary data before inserting a staff card.
+class StaffCreateScreen extends StatefulWidget {
+  final SfColors colors;
+  const StaffCreateScreen({super.key, required this.colors});
+  @override
+  State<StaffCreateScreen> createState() => _StaffCreateScreenState();
+}
+
+class _StaffCreateScreenState extends State<StaffCreateScreen> {
+  final _form = GlobalKey<FormState>();
+  final _username = TextEditingController();
+  final _first = TextEditingController();
+  final _last = TextEditingController();
+  final _phone = TextEditingController();
+  final _email = TextEditingController();
+  final _birthday = TextEditingController();
+  final _hireDate = TextEditingController();
+  final _subject = TextEditingController();
+  final _qualification = TextEditingController();
+  final _rate = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  String _gender = 'Male';
+  String _branch = 'Yunusobod';
+  String _department = 'Matematika';
+  String _salary = 'Monthly';
+
+  @override
+  void dispose() {
+    for (final c in [
+      _username,
+      _first,
+      _last,
+      _phone,
+      _email,
+      _birthday,
+      _hireDate,
+      _subject,
+      _qualification,
+      _rate,
+      _password,
+      _confirm,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _date(TextEditingController target) async {
+    final value = await showDatePicker(
+      context: context,
+      firstDate: DateTime(1950),
+      lastDate: DateTime.now(),
+      initialDate: DateTime.now(),
+    );
+    if (value != null) {
+      setState(
+        () => target.text =
+            '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}',
+      );
+    }
+  }
+
+  void _submit() {
+    if (!(_form.currentState?.validate() ?? false)) return;
+    if (_password.text != _confirm.text) {
+      _snack(context, 'Parollar bir xil emas', bg: widget.colors.danger);
+      return;
+    }
+    AppScope.of(context).addStaff(
+      StaffMember(
+        firstName: _first.text.trim(),
+        lastName: _last.text.trim(),
+        username: _username.text.trim(),
+        phone: _phone.text.trim(),
+        email: _email.text.trim().isEmpty ? null : _email.text.trim(),
+        branch: _branch,
+        department: _department,
+        subject: _subject.text.trim(),
+        qualification: _qualification.text.trim(),
+        salaryType: _salary,
+        rate: _rate.text.trim(),
+        gender: _gender,
+        hireDate: _hireDate.text.trim(),
+      ),
+    );
+    Navigator.of(context).pop();
+    _snack(context, 'Xodim yaratildi', bg: widget.colors.success);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final branches = AppScope.of(context).branches.map((b) => b.name).toList();
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Create staff',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Form(
+          key: _form,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
+            children: [
+              _setSec(c, 'ACCOUNT'),
+              _ManagedTextField(
+                controller: _username,
+                label: 'Username',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _first,
+                label: 'First name',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _last,
+                label: 'Last name',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _phone,
+                label: 'Phone',
+                keyboardType: TextInputType.phone,
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _email,
+                label: 'Email (optional)',
+                keyboardType: TextInputType.emailAddress,
+              ),
+              _DateInput(
+                label: 'Birthday',
+                controller: _birthday,
+                onTap: () => _date(_birthday),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect(
+                label: 'Gender',
+                value: _gender,
+                items: const ['Male', 'Female'],
+                onChanged: (v) => setState(() => _gender = v),
+              ),
+              const SizedBox(height: 16),
+              _setSec(c, 'EMPLOYMENT'),
+              _ManagedSelect(
+                label: 'Branch',
+                value: _branch,
+                items: branches,
+                onChanged: (v) => setState(() => _branch = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect(
+                label: 'Department',
+                value: _department,
+                items: const [
+                  'Matematika',
+                  'English',
+                  'Science',
+                  'Reception',
+                  'Marketing',
+                ],
+                onChanged: (v) => setState(() => _department = v),
+              ),
+              const SizedBox(height: 11),
+              _DateInput(
+                label: 'Hire date',
+                controller: _hireDate,
+                onTap: () => _date(_hireDate),
+              ),
+              const SizedBox(height: 11),
+              _ManagedTextField(
+                controller: _subject,
+                label: 'Subject',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _qualification,
+                label: 'Qualifications',
+                requiredField: true,
+              ),
+              _ManagedSelect(
+                label: 'Salary type',
+                value: _salary,
+                items: const ['Monthly', 'Hourly'],
+                onChanged: (v) => setState(() => _salary = v),
+              ),
+              const SizedBox(height: 11),
+              _ManagedTextField(
+                controller: _rate,
+                label: 'Rate',
+                keyboardType: TextInputType.number,
+                requiredField: true,
+              ),
+              const SizedBox(height: 4),
+              _setSec(c, 'SECURITY'),
+              _ManagedTextField(
+                controller: _password,
+                label: 'New password',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: _confirm,
+                label: 'Confirm password',
+                requiredField: true,
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.check_rounded,
+              label: 'Create staff',
+              primary: true,
+              onTap: _submit,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DateInput extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+  final VoidCallback onTap;
+  const _DateInput({
+    required this.label,
+    required this.controller,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: IgnorePointer(
+        child: TextFormField(
+          controller: controller,
+          style: TextStyle(fontFamily: SfType.ui, color: c.ink),
+          decoration: _managedInputDecoration(c, label).copyWith(
+            suffixIcon: Icon(Icons.calendar_month_rounded, color: c.primary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class StaffDetailScreen extends StatelessWidget {
+  final StaffMember member;
+  final SfColors colors;
+  const StaffDetailScreen({
+    super.key,
+    required this.member,
+    required this.colors,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            member.fullName,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            Center(
+              child: SfAvatar(
+                name: member.fullName,
+                size: 78,
+                color: c.primary,
+              ),
+            ),
+            const SizedBox(height: 9),
+            Center(
+              child: Text(
+                member.fullName,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                  color: c.ink,
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            SfCard(
+              child: Column(
+                children: [
+                  _InfoRow('Username', member.username),
+                  _InfoRow('Phone', member.phone),
+                  _InfoRow('Email', member.email ?? '—'),
+                  _InfoRow('Gender', member.gender),
+                  _InfoRow('Branch', member.branch),
+                  _InfoRow('Department', member.department),
+                  _InfoRow('Subject', member.subject),
+                  _InfoRow('Qualifications', member.qualification),
+                  _InfoRow(
+                    'Salary',
+                    '${member.salaryType} · ${member.rate}',
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(child: SfStatTile('Guruhlar', '2', c.primary)),
+                const SizedBox(width: 8),
+                Expanded(child: SfStatTile('O‘quvchilar', '34', c.success)),
+                const SizedBox(width: 8),
+                Expanded(child: SfStatTile('Davomat', '93%', c.warn)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  const SfCardHeader('Guruhlar va ko‘rsatkichlar'),
+                  _InfoRow(
+                    '1-guruh',
+                    '${member.subject} · Dushanba / Chorshanba',
+                  ),
+                  _InfoRow(
+                    '2-guruh',
+                    '${member.subject} · Seshanba / Payshanba',
+                  ),
+                  _InfoRow('Reyting', '★ 4.9 · yuqori natija', last: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SfButton(
+              icon: Icons.password_rounded,
+              label: 'Parolni o‘zgartirish',
+              primary: false,
+              onTap: () => _snack(
+                context,
+                'Parolni o‘zgartirish sahifasi API bilan faollashadi',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TeachersWorkspaceScreen extends StatefulWidget {
+  final SfColors colors;
+  const TeachersWorkspaceScreen({super.key, required this.colors});
+  @override
+  State<TeachersWorkspaceScreen> createState() =>
+      _TeachersWorkspaceScreenState();
+}
+
+class _TeachersWorkspaceScreenState extends State<TeachersWorkspaceScreen> {
+  String query = '';
+  int filter = 0;
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final staff = AppScope.of(context).staff.where((member) {
+      final isTeacher = member.subject.toLowerCase() != 'operations';
+      if (filter == 1 && !isTeacher) return false;
+      if (filter == 2 && member.salaryType != 'Monthly') return false;
+      final q = query.toLowerCase();
+      return q.isEmpty ||
+          member.fullName.toLowerCase().contains(q) ||
+          member.department.toLowerCase().contains(q);
+    }).toList();
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'O‘qituvchilar',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          actions: [
+            IconButton(
+              icon: Icon(Icons.person_add_alt_1_rounded, color: c.primary),
+              onPressed: () => Navigator.of(
+                context,
+              ).push(sfPageRoute(StaffCreateScreen(colors: c))),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            _SearchField(
+              hint: 'O‘qituvchi qidirish',
+              onChanged: (v) => setState(() => query = v),
+            ),
+            const SizedBox(height: 9),
+            _FilterChips(
+              items: const ['Hammasi', 'O‘qituvchi', 'Oylik'],
+              selected: filter,
+              onSelect: (v) => setState(() => filter = v),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < staff.length; i++)
+                    _StaffRow(member: staff[i], last: i == staff.length - 1),
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.person_add_alt_1_rounded,
+              label: 'O‘qituvchi qo‘shish',
+              primary: true,
+              onTap: () => Navigator.of(
+                context,
+              ).push(sfPageRoute(StaffCreateScreen(colors: c))),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// CEO comparison screen. Two branch selectors drive every metric in the
+/// comparison table, so it can be extended to server values later.
+class BranchComparisonScreen extends StatefulWidget {
+  final SfColors colors;
+  const BranchComparisonScreen({super.key, required this.colors});
+  @override
+  State<BranchComparisonScreen> createState() => _BranchComparisonScreenState();
+}
+
+class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
+  String? a;
+  String? b;
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final branches = AppScope.of(context).branches;
+    if (branches.isEmpty) return const SizedBox.shrink();
+    a ??= branches.first.name;
+    b ??= branches.length > 1 ? branches[1].name : branches.first.name;
+    final first = branches.firstWhere((item) => item.name == a);
+    final second = branches.firstWhere((item) => item.name == b);
+    final rows = [
+      (
+        'O‘quvchilar',
+        '${first.students}',
+        '${second.students}',
+        Icons.groups_rounded,
+      ),
+      (
+        'Daromad',
+        fmtMoneyMln(first.revenue),
+        fmtMoneyMln(second.revenue),
+        Icons.payments_rounded,
+      ),
+      (
+        'Davomat',
+        '${first.attendance}%',
+        '${second.attendance}%',
+        Icons.fact_check_rounded,
+      ),
+      (
+        'Xodimlar',
+        '${(first.students / 31).round()}',
+        '${(second.students / 31).round()}',
+        Icons.badge_rounded,
+      ),
+      (
+        'Teacher rating',
+        first.attendance >= 92 ? '4.9' : '4.6',
+        second.attendance >= 92 ? '4.9' : '4.5',
+        Icons.star_rounded,
+      ),
+    ];
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Branch comparison',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _ManagedSelect(
+                    label: 'Branch A',
+                    value: a!,
+                    items: [for (final branch in branches) branch.name],
+                    onChanged: (v) => setState(() => a = v),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _ManagedSelect(
+                    label: 'Branch B',
+                    value: b!,
+                    items: [for (final branch in branches) branch.name],
+                    onChanged: (v) => setState(() => b = v),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(14, 13, 14, 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            first.name,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontWeight: FontWeight.w800,
+                              color: first.mark,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            second.name,
+                            textAlign: TextAlign.end,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontWeight: FontWeight.w800,
+                              color: second.mark,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  for (int i = 0; i < rows.length; i++)
+                    _ComparisonRow(
+                      label: rows[i].$1,
+                      left: rows[i].$2,
+                      right: rows[i].$3,
+                      icon: rows[i].$4,
+                      last: i == rows.length - 1,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _setSec(c, 'DAROMAD TENDENSIYASI'),
+            SfCard(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  children: [
+                    LegendRow(
+                      first.mark,
+                      first.name,
+                      fmtMoneyMln(first.revenue),
+                    ),
+                    LegendRow(
+                      second.mark,
+                      second.name,
+                      fmtMoneyMln(second.revenue),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 92,
+                      child: AreaChart(
+                        data: [
+                          first.revenue / 1e6,
+                          second.revenue / 1e6,
+                          (first.revenue + second.revenue) / 2e6,
+                          first.revenue / 1e6 * 1.04,
+                        ],
+                        color: c.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ComparisonRow extends StatelessWidget {
+  final String label, left, right;
+  final IconData icon;
+  final bool last;
+  const _ComparisonRow({
+    required this.label,
+    required this.left,
+    required this.right,
+    required this.icon,
+    required this.last,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              left,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontWeight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 15, color: c.muted),
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 11,
+                      color: c.muted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Text(
+              right,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontWeight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ActivityHistoryScreen extends StatefulWidget {
+  final SfColors colors;
+  const ActivityHistoryScreen({super.key, required this.colors});
+  @override
+  State<ActivityHistoryScreen> createState() => _ActivityHistoryScreenState();
+}
+
+class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
+  int filter = 0;
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    const kinds = ['Hammasi', 'student', 'group', 'staff', 'payment', 'audit'];
+    final items = filter == 0
+        ? store.activities
+        : store.activities.where((item) => item.kind == kinds[filter]).toList();
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'History',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            _FilterChips(
+              items: const [
+                'Hammasi',
+                'O‘quvchi',
+                'Guruh',
+                'Xodim',
+                'To‘lov',
+                'Audit',
+              ],
+              selected: filter,
+              onSelect: (v) => setState(() => filter = v),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    _ActivityRow(event: items[i], last: i == items.length - 1),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityRow extends StatelessWidget {
+  final ActivityEvent event;
+  final bool last;
+  const _ActivityRow({required this.event, required this.last});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return InkWell(
+      onTap: () => Navigator.of(
+        context,
+      ).push(sfPageRoute(ActivityDetailScreen(event: event, colors: c))),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: c.primarySoft,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(event.icon, size: 17, color: c.primary),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    event.title,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: c.ink,
+                    ),
+                  ),
+                  Text(
+                    event.detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10.5,
+                      color: c.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              event.time,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 9.5,
+                color: c.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ActivityDetailScreen extends StatelessWidget {
+  final ActivityEvent event;
+  final SfColors colors;
+  const ActivityDetailScreen({
+    super.key,
+    required this.event,
+    required this.colors,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Event details',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: SfCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 18),
+                Icon(event.icon, size: 34, color: c.primary),
+                const SizedBox(height: 10),
+                Text(
+                  event.title,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  event.detail,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 12.5,
+                    color: c.muted,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _InfoRow('Vaqt', event.time, last: true),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ParentsWorkspaceScreen extends StatefulWidget {
+  final SfColors colors;
+  const ParentsWorkspaceScreen({super.key, required this.colors});
+  @override
+  State<ParentsWorkspaceScreen> createState() => _ParentsWorkspaceScreenState();
+}
+
+class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
+  String query = '';
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final children = [...AppScope.of(context).students, ...kExitedStudents];
+    final byParent = <String, List<Student>>{};
+    for (final student in children) {
+      byParent
+          .putIfAbsent(studentProfile(student).fatherName, () => [])
+          .add(student);
+    }
+    final entries = byParent.entries.where((entry) {
+      final q = query.toLowerCase();
+      return q.isEmpty ||
+          entry.key.toLowerCase().contains(q) ||
+          entry.value.any((s) => s.name.toLowerCase().contains(q));
+    }).toList();
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Ota-onalar',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            _SearchField(
+              hint: 'Ota-ona yoki farzand qidirish',
+              onChanged: (v) => setState(() => query = v),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < entries.length; i++)
+                    _ParentRow(
+                      name: entries[i].key,
+                      children: entries[i].value,
+                      last: i == entries.length - 1,
+                      colors: c,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ParentRow extends StatelessWidget {
+  final String name;
+  final List<Student> children;
+  final bool last;
+  final SfColors colors;
+  const _ParentRow({
+    required this.name,
+    required this.children,
+    required this.last,
+    required this.colors,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        sfPageRoute(
+          ParentDetailScreen(name: name, children: children, colors: c),
+        ),
+      ),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            SfAvatar(name: name, size: 34, color: c.accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  Text(
+                    '${children.length} farzand · ${studentProfile(children.first).phone}',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10.5,
+                      color: c.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, color: c.muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ParentDetailScreen extends StatelessWidget {
+  final String name;
+  final List<Student> children;
+  final SfColors colors;
+  const ParentDetailScreen({
+    super.key,
+    required this.name,
+    required this.children,
+    required this.colors,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final profile = studentProfile(children.first);
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            name,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            SfCard(
+              child: Column(
+                children: [
+                  _InfoRow('Full name', name),
+                  _InfoRow('Phone', profile.fatherPhone),
+                  _InfoRow('Branch', profile.branch, last: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _setSec(c, 'FARZANDLARI · ${children.length}'),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < children.length; i++)
+                    _StudentRow(s: children[i], last: i == children.length - 1),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DepartmentRecord {
+  String name, manager, description;
+  final Set<String> staff;
+  DepartmentRecord(
+    this.name,
+    this.manager,
+    this.description, [
+    Set<String>? staff,
+  ]) : staff = staff ?? {};
+}
+
+class DepartmentsWorkspaceScreen extends StatefulWidget {
+  final SfColors colors;
+  const DepartmentsWorkspaceScreen({super.key, required this.colors});
+  @override
+  State<DepartmentsWorkspaceScreen> createState() =>
+      _DepartmentsWorkspaceScreenState();
+}
+
+class _DepartmentsWorkspaceScreenState
+    extends State<DepartmentsWorkspaceScreen> {
+  final List<DepartmentRecord> departments = [
+    DepartmentRecord('Matematika', 'Nigora Karimova', 'Algebra va geometriya'),
+    DepartmentRecord('English', 'Aziz Tursunov', 'IELTS va umumiy ingliz tili'),
+    DepartmentRecord(
+      'Reception',
+      'Gulnora Saidova',
+      'Qabul va ota-onalar aloqasi',
+    ),
+  ];
+  String query = '';
+
+  Future<void> _create() async {
+    final result = await Navigator.of(context).push<DepartmentRecord>(
+      sfPageRoute(DepartmentCreateScreen(colors: widget.colors)),
+    );
+    if (result != null && mounted) setState(() => departments.add(result));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final list = departments
+        .where(
+          (d) =>
+              d.name.toLowerCase().contains(query.toLowerCase()) ||
+              d.manager.toLowerCase().contains(query.toLowerCase()),
+        )
+        .toList();
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Departments',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          actions: [
+            IconButton(
+              icon: Icon(Icons.add_rounded, color: c.primary),
+              onPressed: _create,
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _SearchField(
+              hint: 'Department yoki manager qidirish',
+              onChanged: (v) => setState(() => query = v),
+            ),
+            const SizedBox(height: 12),
+            for (final department in list)
+              _DepartmentCard(
+                department: department,
+                onDelete: () => setState(() => departments.remove(department)),
+              ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.add_rounded,
+              label: 'New department',
+              primary: true,
+              onTap: _create,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DepartmentCard extends StatelessWidget {
+  final DepartmentRecord department;
+  final VoidCallback onDelete;
+  const _DepartmentCard({required this.department, required this.onDelete});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => Navigator.of(context).push(
+          sfPageRoute(
+            DepartmentDetailScreen(department: department, colors: c),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: c.primarySoft,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(Icons.folder_rounded, color: c.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      department.name,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: c.ink,
+                      ),
+                    ),
+                    Text(
+                      '${department.manager} · ${department.staff.length} xodim',
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 10.5,
+                        color: c.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  size: 19,
+                  color: c.danger,
+                ),
+                onPressed: onDelete,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DepartmentCreateScreen extends StatefulWidget {
+  final SfColors colors;
+  const DepartmentCreateScreen({super.key, required this.colors});
+  @override
+  State<DepartmentCreateScreen> createState() => _DepartmentCreateScreenState();
+}
+
+class _DepartmentCreateScreenState extends State<DepartmentCreateScreen> {
+  final form = GlobalKey<FormState>();
+  final name = TextEditingController();
+  final manager = TextEditingController();
+  final description = TextEditingController();
+  @override
+  void dispose() {
+    name.dispose();
+    manager.dispose();
+    description.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'New department',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Form(
+          key: form,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _ManagedTextField(
+                controller: name,
+                label: 'Department name',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: manager,
+                label: 'Manager',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: description,
+                label: 'Description',
+                requiredField: true,
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.check_rounded,
+              label: 'Create department',
+              primary: true,
+              onTap: () {
+                if (form.currentState!.validate()) {
+                  Navigator.of(context).pop(
+                    DepartmentRecord(
+                      name.text.trim(),
+                      manager.text.trim(),
+                      description.text.trim(),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DepartmentDetailScreen extends StatefulWidget {
+  final DepartmentRecord department;
+  final SfColors colors;
+  const DepartmentDetailScreen({
+    super.key,
+    required this.department,
+    required this.colors,
+  });
+  @override
+  State<DepartmentDetailScreen> createState() => _DepartmentDetailScreenState();
+}
+
+class _DepartmentDetailScreenState extends State<DepartmentDetailScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final staff = AppScope.of(context).staff;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            widget.department.name,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            SfCard(
+              child: Column(
+                children: [
+                  _InfoRow('Manager', widget.department.manager),
+                  _InfoRow(
+                    'Description',
+                    widget.department.description,
+                    last: true,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _setSec(c, 'TEACHERS / STAFF'),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < staff.length; i++)
+                    CheckboxListTile(
+                      value: widget.department.staff.contains(
+                        staff[i].fullName,
+                      ),
+                      onChanged: (v) => setState(() {
+                        if (v ?? false) {
+                          widget.department.staff.add(staff[i].fullName);
+                        } else {
+                          widget.department.staff.remove(staff[i].fullName);
+                        }
+                      }),
+                      title: Text(
+                        staff[i].fullName,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: c.ink,
+                        ),
+                      ),
+                      subtitle: Text(
+                        staff[i].department,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 10.5,
+                          color: c.muted,
+                        ),
+                      ),
+                      controlAffinity: ListTileControlAffinity.trailing,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class MeetingDraft {
+  final String title, date, time, location, participants, description;
+  const MeetingDraft(
+    this.title,
+    this.date,
+    this.time,
+    this.location,
+    this.participants,
+    this.description,
+  );
+}
+
+class MeetingsWorkspaceScreen extends StatefulWidget {
+  final SfColors colors;
+  const MeetingsWorkspaceScreen({super.key, required this.colors});
+  @override
+  State<MeetingsWorkspaceScreen> createState() =>
+      _MeetingsWorkspaceScreenState();
+}
+
+class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
+  final List<MeetingDraft> meetings = [
+    const MeetingDraft(
+      'Haftalik filial yig‘ilishi',
+      '19.07.2026',
+      '17:00',
+      'Konferens zal',
+      'Butun filial · 16',
+      'Haftalik ko‘rsatkichlar',
+    ),
+  ];
+  Future<void> _create() async {
+    final result = await Navigator.of(context).push<MeetingDraft>(
+      sfPageRoute(MeetingCreateScreen(colors: widget.colors)),
+    );
+    if (result != null && mounted) setState(() => meetings.insert(0, result));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Meetings',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          actions: [
+            IconButton(
+              icon: Icon(Icons.add_rounded, color: c.primary),
+              onPressed: _create,
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            for (final meeting in meetings) _MeetingCard(meeting: meeting),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.event_available_rounded,
+              label: 'Schedule meeting',
+              primary: true,
+              onTap: _create,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MeetingCard extends StatelessWidget {
+  final MeetingDraft meeting;
+  const _MeetingCard({required this.meeting});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: c.primarySoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.event_rounded, color: c.primary),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  meeting.title,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                Text(
+                  '${meeting.date} · ${meeting.time} · ${meeting.location}',
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10.5,
+                    color: c.muted,
+                  ),
+                ),
+                Text(
+                  meeting.participants,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10.5,
+                    color: c.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class MeetingCreateScreen extends StatefulWidget {
+  final SfColors colors;
+  const MeetingCreateScreen({super.key, required this.colors});
+  @override
+  State<MeetingCreateScreen> createState() => _MeetingCreateScreenState();
+}
+
+class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
+  final form = GlobalKey<FormState>();
+  final title = TextEditingController();
+  final date = TextEditingController();
+  final time = TextEditingController();
+  final location = TextEditingController();
+  final participants = TextEditingController();
+  final description = TextEditingController();
+  @override
+  void dispose() {
+    for (final c in [title, date, time, location, participants, description]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      firstDate: DateTime.now(),
+      lastDate: DateTime(2030),
+      initialDate: DateTime.now(),
+    );
+    if (d != null) {
+      setState(
+        () => date.text =
+            '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}',
+      );
+    }
+  }
+
+  Future<void> pickTime() async {
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (t != null) setState(() => time.text = t.format(context));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Schedule meeting',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: Form(
+          key: form,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _ManagedTextField(
+                controller: title,
+                label: 'Title',
+                requiredField: true,
+              ),
+              _DateInput(label: 'Date', controller: date, onTap: pickDate),
+              const SizedBox(height: 11),
+              _DateInput(label: 'Time', controller: time, onTap: pickTime),
+              const SizedBox(height: 11),
+              _ManagedTextField(
+                controller: location,
+                label: 'Location',
+                requiredField: true,
+              ),
+              _ManagedTextField(
+                controller: participants,
+                label: 'Participants',
+                requiredField: true,
+              ),
+              _ManagedTextField(controller: description, label: 'Description'),
+            ],
+          ),
+        ),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SfButton(
+              icon: Icons.notifications_active_rounded,
+              label: 'Schedule and notify',
+              primary: true,
+              onTap: () {
+                if (form.currentState!.validate()) {
+                  Navigator.of(context).pop(
+                    MeetingDraft(
+                      title.text.trim(),
+                      date.text.trim(),
+                      time.text.trim(),
+                      location.text.trim(),
+                      participants.text.trim(),
+                      description.text.trim(),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PaymentsWorkspaceScreen extends StatelessWidget {
+  final SfColors colors;
+  const PaymentsWorkspaceScreen({super.key, required this.colors});
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final ledger = AppScope.of(context).ledger;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Payments',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  for (int i = 0; i < ledger.length; i++)
+                    _PaymentLedgerRow(
+                      entry: ledger[i],
+                      last: i == ledger.length - 1,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentLedgerRow extends StatelessWidget {
+  final LedgerEntry entry;
+  final bool last;
+  const _PaymentLedgerRow({required this.entry, required this.last});
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: (entry.inflow ? c.success : c.danger).withValues(
+                alpha: 0.13,
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              entry.inflow
+                  ? Icons.south_west_rounded
+                  : Icons.north_east_rounded,
+              size: 17,
+              color: entry.inflow ? c.success : c.danger,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.title,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: c.ink,
+                  ),
+                ),
+                Text(
+                  '${entry.who} · ${entry.time}',
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10.5,
+                    color: c.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            '${entry.inflow ? '+' : '-'}${fmtMoneyShort(entry.amount)}',
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: entry.inflow ? c.success : c.danger,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -6547,7 +10810,8 @@ class ChatCabinetScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = _telegramColors;
+    // Respect the currently selected app theme in contact and group profiles.
+    final c = colors;
     final t = thread;
     final s = student;
     final isGroup = t?.isGroup ?? false;
@@ -6556,6 +10820,19 @@ class ChatCabinetScreen extends StatelessWidget {
     final online = t?.online ?? true;
     final status = online ? tr(context, 'online') : tr(context, 'chat_offline');
     final phone = s == null ? _phoneFor(name) : studentProfile(s).phone;
+    final profile = s == null ? null : studentProfile(s);
+    final username =
+        s?.username ?? '@${name.toLowerCase().replaceAll(' ', '.')}';
+    final email = '${name.toLowerCase().replaceAll(' ', '.')}@starforge.uz';
+    final branch = profile?.branch ?? detail.split('·').first.trim();
+    final department = isGroup
+        ? detail
+        : 'Ta’lim · ${profile?.level ?? detail}';
+    final gender = profile == null
+        ? 'Ko‘rsatilmagan'
+        : (profile.firstName.endsWith('a') || profile.lastName.endsWith('a')
+              ? 'Ayol'
+              : 'Erkak');
     final media = threadIdx == null
         ? const <ChatMsg>[]
         : AppScope.of(context).threads[threadIdx!].messages
@@ -6596,8 +10873,8 @@ class ChatCabinetScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(22),
                 gradient: LinearGradient(
                   colors: isGroup
-                      ? const [Color(0xFF223E55), Color(0xFF121B23)]
-                      : const [Color(0xFF4A3548), Color(0xFF16171B)],
+                      ? [c.primary.withValues(alpha: 0.75), c.surface3]
+                      : [c.accent.withValues(alpha: 0.65), c.surface3],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -6692,20 +10969,6 @@ class ChatCabinetScreen extends StatelessWidget {
                   color: c.primary,
                   onTap: () => _snack(context, '🔔 Bildirishnomalar (demo)'),
                 ),
-                const SizedBox(width: 8),
-                _ChatProfileAction(
-                  icon: Icons.call_rounded,
-                  label: 'Call',
-                  color: c.primary,
-                  onTap: () => _snack(context, '📞 $phone'),
-                ),
-                const SizedBox(width: 8),
-                _ChatProfileAction(
-                  icon: Icons.videocam_rounded,
-                  label: 'Video',
-                  color: c.primary,
-                  onTap: () => _snack(context, '🎥 Video qo‘ng‘iroq (demo)'),
-                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -6716,29 +10979,56 @@ class ChatCabinetScreen extends StatelessWidget {
                   _TelegramInfoLine(
                     value: isGroup
                         ? 'Dars jadvali, fayllar va muhim e’lonlar shu yerda.'
-                        : phone,
-                    label: isGroup ? 'About' : 'Phone',
+                        : name,
+                    label: isGroup ? 'Dars ma’lumoti' : 'Full name',
                     leading: isGroup
                         ? Icons.info_outline_rounded
-                        : Icons.phone_outlined,
-                    onTap: isGroup ? null : () => _snack(context, '📞 $phone'),
+                        : Icons.person_outline_rounded,
                   ),
-                  const Divider(height: 1, color: Color(0xFF2C2E34)),
+                  Divider(height: 1, color: c.border),
                   _TelegramInfoLine(
-                    value: isGroup ? detail : 'Where is the cat?!!!',
-                    label: isGroup ? 'Group' : 'Bio',
+                    value: isGroup ? detail : username,
+                    label: isGroup ? 'Guruh' : 'Username',
                     leading: isGroup
                         ? Icons.groups_rounded
-                        : Icons.format_quote_rounded,
+                        : Icons.badge_outlined,
                   ),
-                  const Divider(height: 1, color: Color(0xFF2C2E34)),
+                  Divider(height: 1, color: c.border),
                   _TelegramInfoLine(
                     value: isGroup
                         ? '${detail.split('·').last.trim()} participants'
-                        : '@${_usernameFor(name)}',
-                    label: isGroup ? 'Members' : 'Username',
-                    leading: Icons.alternate_email_rounded,
+                        : phone,
+                    label: isGroup ? 'A’zolar' : 'Phone number',
+                    leading: isGroup
+                        ? Icons.groups_rounded
+                        : Icons.phone_outlined,
                   ),
+                  if (!isGroup) ...[
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: email,
+                      label: 'Email',
+                      leading: Icons.email_outlined,
+                    ),
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: gender,
+                      label: 'Gender',
+                      leading: Icons.wc_rounded,
+                    ),
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: branch,
+                      label: 'Branch',
+                      leading: Icons.account_tree_outlined,
+                    ),
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: department,
+                      label: 'Department',
+                      leading: Icons.corporate_fare_outlined,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -6804,11 +11094,6 @@ class ChatCabinetScreen extends StatelessWidget {
       ),
     );
   }
-
-  String _usernameFor(String name) => name
-      .toLowerCase()
-      .replaceAll(RegExp(r"[^a-z0-9]+"), '_')
-      .replaceAll(RegExp(r'^_+|_+$'), '');
 }
 
 /// Compact action card used in the Telegram-style profile header.
@@ -6967,6 +11252,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _recorder = AudioRecorder();
   bool _recording = false;
+  bool _voiceLocked = false;
   DateTime? _recordStartedAt;
 
   @override
@@ -7001,11 +11287,11 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (_) => SfTheme(
-        colors: _telegramColors,
+        colors: widget.colors,
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
-          decoration: const BoxDecoration(
-            color: Color(0xFF1B1C20),
+          decoration: BoxDecoration(
+            color: widget.colors.surface,
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: SafeArea(
@@ -7017,7 +11303,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   width: 38,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: _telegramColors.muted2,
+                    color: widget.colors.muted2,
                     borderRadius: BorderRadius.circular(99),
                   ),
                 ),
@@ -7096,6 +11382,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _recording = false;
+        _voiceLocked = false;
         _recordStartedAt = null;
       });
       if (path != null) {
@@ -7127,11 +11414,28 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       setState(() {
         _recording = true;
+        _voiceLocked = false;
         _recordStartedAt = DateTime.now();
       });
     } catch (_) {
       if (mounted) _snack(context, 'Ovozli xabarni yozib bo‘lmadi');
     }
+  }
+
+  Future<void> _cancelVoice() async {
+    if (!_recording) return;
+    final path = await _recorder.stop();
+    if (path != null) {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+    if (!mounted) return;
+    setState(() {
+      _recording = false;
+      _voiceLocked = false;
+      _recordStartedAt = null;
+    });
+    _snack(context, 'Ovozli xabar bekor qilindi');
   }
 
   Future<Directory> _mediaDirectory() async {
@@ -7171,23 +11475,143 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _messageActions(ChatMsg message, int index) {
+    final c = widget.colors;
+    final visual = _chatVisualStyle(SettingsScope.of(context).chatDesign, c);
+    final store = AppScope.of(context);
+    final pinned =
+        store.pinnedMessages[widget.threadIdx]?.contains(index) ?? false;
+    Widget action(
+      IconData icon,
+      String label,
+      VoidCallback onTap, {
+      bool danger = false,
+    }) => InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: visual.border)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 19, color: danger ? visual.danger : visual.icon),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: danger ? visual.danger : visual.inputText,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheet) => SfTheme(
+        colors: c,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(18, 9, 18, 14),
+            decoration: BoxDecoration(
+              color: visual.composer,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(22),
+              ),
+              border: Border(top: BorderSide(color: visual.border)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: visual.muted.withValues(alpha: .42),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                ),
+                const SizedBox(height: 13),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Xabar amallari',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: visual.inputText,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 7),
+                action(Icons.reply_rounded, 'Reply', () {
+                  Navigator.of(sheet).pop();
+                  setState(() {
+                    _ctrl.text = '↩ ${message.text} ';
+                  });
+                }),
+                action(Icons.forward_rounded, 'Forward', () {
+                  Navigator.of(sheet).pop();
+                  _snack(context, 'Forward uchun suhbatni tanlang');
+                }),
+                action(Icons.copy_rounded, 'Copy', () async {
+                  await Clipboard.setData(ClipboardData(text: message.text));
+                  if (!mounted) return;
+                  if (sheet.mounted) Navigator.of(sheet).pop();
+                  _snack(context, 'Xabar nusxalandi');
+                }),
+                action(
+                  pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                  pinned ? 'Unpin message' : 'Pin message',
+                  () {
+                    store.toggleMessagePin(widget.threadIdx, index);
+                    Navigator.of(sheet).pop();
+                  },
+                ),
+                action(Icons.delete_outline_rounded, 'Delete', () {
+                  store.deleteMessage(widget.threadIdx, index);
+                  Navigator.of(sheet).pop();
+                }, danger: true),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
+    final settings = SettingsScope.of(context);
+    final wallpaper = settings.chatWallpaper;
+    final visual = _chatVisualStyle(settings.chatDesign, c);
     final store = AppScope.of(context);
     final thread = store.threads[widget.threadIdx];
     final th = thread.meta;
     return SfTheme(
       colors: c,
       child: Scaffold(
-        backgroundColor: c.bg,
+        backgroundColor: visual.canvas,
         appBar: AppBar(
-          backgroundColor: c.surface,
+          backgroundColor: visual.appBar,
+          flexibleSpace: visual.appBarGradient == null
+              ? null
+              : DecoratedBox(
+                  decoration: BoxDecoration(gradient: visual.appBarGradient),
+                ),
           surfaceTintColor: Colors.transparent,
           elevation: 0,
           scrolledUnderElevation: 0,
-          iconTheme: IconThemeData(color: c.ink),
-          shape: Border(bottom: BorderSide(color: c.border)),
+          iconTheme: IconThemeData(color: visual.appBarText),
+          shape: Border(bottom: BorderSide(color: visual.border)),
           titleSpacing: 0,
           title: Semantics(
             button: true,
@@ -7229,7 +11653,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontFamily: SfType.ui,
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
-                              color: c.ink,
+                              color: visual.appBarText,
                             ),
                           ),
                           Text(
@@ -7240,7 +11664,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               fontFamily: SfType.ui,
                               fontSize: 10.5,
                               fontWeight: FontWeight.w600,
-                              color: th.online ? c.success : c.muted,
+                              color: th.online
+                                  ? visual.presence
+                                  : visual.appBarText.withValues(alpha: 0.64),
                             ),
                           ),
                         ],
@@ -7255,15 +11681,86 @@ class _ChatScreenState extends State<ChatScreen> {
         body: Column(
           children: [
             Expanded(
-              child: ListView(
-                controller: _scroll,
-                padding: const EdgeInsets.all(16),
+              child: Stack(
                 children: [
-                  for (final m in thread.messages) ...[
-                    _bubble(context, m),
-                    const SizedBox(height: 8),
-                  ],
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: _ChatWallpaper(
+                        style: wallpaper,
+                        colors: c,
+                        baseColor: visual.canvas,
+                        accentColor: visual.accent,
+                        customPath: settings.chatWallpaperPath,
+                      ),
+                    ),
+                  ),
+                  ListView(
+                    controller: _scroll,
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      for (int i = 0; i < thread.messages.length; i++) ...[
+                        _bubble(context, thread.messages[i], i),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
+                  ),
                 ],
+              ),
+            ),
+            ClipRect(
+              child: AnimatedAlign(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                heightFactor: _recording ? 1 : 0,
+                alignment: Alignment.topCenter,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  color: visual.composer,
+                  child: Row(
+                    children: [
+                      TweenAnimationBuilder<double>(
+                        duration: const Duration(milliseconds: 700),
+                        tween: Tween(begin: 0.7, end: 1.0),
+                        curve: Curves.easeInOut,
+                        builder: (_, value, _) => Transform.scale(
+                          scale: value,
+                          child: Icon(
+                            Icons.mic_rounded,
+                            color: visual.danger,
+                            size: 18,
+                          ),
+                        ),
+                        onEnd: () {
+                          if (mounted && _recording) setState(() {});
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _voiceLocked
+                              ? 'Yozilmoqda · yuborish uchun tugmani bosing'
+                              : 'Yozilmoqda · chapga suring — bekor qilish',
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: visual.danger,
+                          ),
+                        ),
+                      ),
+                      if (_voiceLocked)
+                        Icon(
+                          Icons.lock_rounded,
+                          size: 16,
+                          color: visual.danger,
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
             Container(
@@ -7274,8 +11771,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 10 + MediaQuery.of(context).padding.bottom,
               ),
               decoration: BoxDecoration(
-                color: c.surface,
-                border: Border(top: BorderSide(color: c.border)),
+                color: visual.composer,
+                border: Border(top: BorderSide(color: visual.border)),
               ),
               child: Row(
                 children: [
@@ -7285,7 +11782,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: Icon(
                       Icons.add_circle_outline_rounded,
                       size: 25,
-                      color: c.muted,
+                      color: visual.icon,
                     ),
                   ),
                   Expanded(
@@ -7295,7 +11792,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: c.surface2,
+                        color: visual.input,
+                        border: Border.all(color: visual.border),
                         borderRadius: BorderRadius.circular(22),
                       ),
                       child: TextField(
@@ -7306,7 +11804,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         style: TextStyle(
                           fontFamily: SfType.ui,
                           fontSize: 13,
-                          color: c.ink,
+                          color: visual.inputText,
                         ),
                         decoration: InputDecoration(
                           isCollapsed: true,
@@ -7318,7 +11816,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           hintStyle: TextStyle(
                             fontFamily: SfType.ui,
                             fontSize: 13,
-                            color: c.muted,
+                            color: visual.muted,
                           ),
                         ),
                       ),
@@ -7330,11 +11828,34 @@ class _ChatScreenState extends State<ChatScreen> {
                       onTap: _ctrl.text.trim().isNotEmpty
                           ? () => _send(store)
                           : () => _toggleVoice(store),
+                      onLongPressStart: _ctrl.text.trim().isNotEmpty
+                          ? null
+                          : (_) {
+                              if (!_recording) _toggleVoice(store);
+                            },
+                      onLongPressMoveUpdate: _ctrl.text.trim().isNotEmpty
+                          ? null
+                          : (details) {
+                              if (!_recording) return;
+                              if (details.offsetFromOrigin.dx < -64) {
+                                _cancelVoice();
+                              } else if (details.offsetFromOrigin.dy < -48 &&
+                                  !_voiceLocked) {
+                                setState(() => _voiceLocked = true);
+                              }
+                            },
+                      onLongPressEnd: _ctrl.text.trim().isNotEmpty
+                          ? null
+                          : (_) {
+                              if (_recording && !_voiceLocked) {
+                                _toggleVoice(store);
+                              }
+                            },
                       child: Container(
                         width: 40,
                         height: 40,
                         decoration: BoxDecoration(
-                          color: _recording ? c.danger : c.primary,
+                          color: _recording ? visual.danger : visual.action,
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Icon(
@@ -7358,30 +11879,621 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _bubble(BuildContext context, ChatMsg message) {
-    final c = _telegramColors;
+  Widget _bubble(BuildContext context, ChatMsg message, int index) {
+    final c = widget.colors;
     final mine = message.mine;
-    return Align(
-      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.72,
+    final visual = _chatVisualStyle(SettingsScope.of(context).chatDesign, c);
+    final borderRadius = visual.bubbleRadius(mine);
+    final bubble = Container(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.72,
+      ),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: mine && visual.outgoingGradient != null
+            ? null
+            : (mine ? visual.outgoing : visual.incoming),
+        gradient: mine ? visual.outgoingGradient : null,
+        border: Border.all(
+          color: mine ? visual.outgoingBorder : visual.incomingBorder,
         ),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: mine ? c.primary : c.surface2,
-          border: mine ? null : Border.all(color: c.border),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(13),
-            topRight: const Radius.circular(13),
-            bottomLeft: Radius.circular(mine ? 13 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 13),
+        borderRadius: borderRadius,
+        boxShadow: visual.glass
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.09),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _ChatMessageBody(
+            message: message,
+            mine: mine,
+            textColor: mine ? visual.outgoingText : visual.incomingText,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 11, 7),
+            child: Text(
+              _messageTime(index),
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: mine ? visual.outgoingTime : visual.incomingTime,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return GestureDetector(
+      onLongPress: () => _messageActions(message, index),
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey(
+          'message-$index-${message.mine}-${message.path ?? message.text}',
+        ),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        tween: Tween(begin: 0.0, end: 1.0),
+        builder: (context, value, child) => Opacity(
+          opacity: value,
+          child: Transform.translate(
+            offset: Offset((mine ? 18 : -18) * (1 - value), 8 * (1 - value)),
+            child: Transform.scale(
+              scale: 0.96 + 0.04 * value,
+              alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+              child: child,
+            ),
           ),
         ),
-        child: _ChatMessageBody(message: message, mine: mine),
+        child: Align(
+          alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+          child: visual.glass
+              ? ClipRRect(
+                  borderRadius: borderRadius,
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                    child: bubble,
+                  ),
+                )
+              : bubble,
+        ),
       ),
     );
   }
+
+  String _messageTime(int index) {
+    const values = ['10:24', '10:26', '10:27', '10:29', '10:31', '10:34'];
+    return values[index % values.length];
+  }
+}
+
+/// One source of truth for the visible chat chrome. Keeping it separate from
+/// the app palette makes every choice in Chat Design change the full
+/// conversation: header, bubbles, input, icons, timestamps and menus.
+class _ChatVisualStyle {
+  final SfChatDesign design;
+  final Color canvas;
+  final Color appBar;
+  final Color appBarText;
+  final Color presence;
+  final Color incoming;
+  final Color outgoing;
+  final Color incomingText;
+  final Color outgoingText;
+  final Color composer;
+  final Color input;
+  final Color inputText;
+  final Color icon;
+  final Color muted;
+  final Color action;
+  final Color accent;
+  final Color danger;
+  final Color border;
+  final Color incomingBorder;
+  final Color outgoingBorder;
+  final Color incomingTime;
+  final Color outgoingTime;
+  final Gradient? appBarGradient;
+  final Gradient? outgoingGradient;
+  final bool glass;
+
+  const _ChatVisualStyle({
+    required this.design,
+    required this.canvas,
+    required this.appBar,
+    required this.appBarText,
+    required this.presence,
+    required this.incoming,
+    required this.outgoing,
+    required this.incomingText,
+    required this.outgoingText,
+    required this.composer,
+    required this.input,
+    required this.inputText,
+    required this.icon,
+    required this.muted,
+    required this.action,
+    required this.accent,
+    required this.danger,
+    required this.border,
+    required this.incomingBorder,
+    required this.outgoingBorder,
+    required this.incomingTime,
+    required this.outgoingTime,
+    this.appBarGradient,
+    this.outgoingGradient,
+    this.glass = false,
+  });
+
+  BorderRadius bubbleRadius(bool mine) => switch (design) {
+    SfChatDesign.telegram => BorderRadius.only(
+      topLeft: const Radius.circular(16),
+      topRight: const Radius.circular(16),
+      bottomLeft: Radius.circular(mine ? 16 : 3),
+      bottomRight: Radius.circular(mine ? 3 : 16),
+    ),
+    SfChatDesign.whatsapp => BorderRadius.only(
+      topLeft: const Radius.circular(10),
+      topRight: const Radius.circular(10),
+      bottomLeft: Radius.circular(mine ? 10 : 2),
+      bottomRight: Radius.circular(mine ? 2 : 10),
+    ),
+    SfChatDesign.modernDark => BorderRadius.circular(18),
+    SfChatDesign.glass => BorderRadius.circular(21),
+    SfChatDesign.gradient => BorderRadius.circular(22),
+    SfChatDesign.minimal => BorderRadius.circular(8),
+    SfChatDesign.neon => BorderRadius.circular(14),
+    SfChatDesign.nature => BorderRadius.circular(19),
+  };
+}
+
+_ChatVisualStyle _chatVisualStyle(SfChatDesign design, SfColors fallback) {
+  const darkText = Color(0xFF1D2B35);
+  return switch (design) {
+    SfChatDesign.telegram => const _ChatVisualStyle(
+      design: SfChatDesign.telegram,
+      canvas: Color(0xFFEAF4FC),
+      appBar: Color(0xFFFDFEFF),
+      appBarText: darkText,
+      presence: Color(0xFF4C9ED9),
+      incoming: Colors.white,
+      outgoing: Color(0xFFD8F0FF),
+      incomingText: darkText,
+      outgoingText: darkText,
+      composer: Color(0xFFFFFFFF),
+      input: Color(0xFFF1F7FB),
+      inputText: darkText,
+      icon: Color(0xFF4C9ED9),
+      muted: Color(0xFF7290A3),
+      action: Color(0xFF4C9ED9),
+      accent: Color(0xFF4C9ED9),
+      danger: Color(0xFFE5656C),
+      border: Color(0xFFD5E5F0),
+      incomingBorder: Color(0xFFDFEAF0),
+      outgoingBorder: Color(0xFFCAE4F5),
+      incomingTime: Color(0xFF8AA2B2),
+      outgoingTime: Color(0xFF6092AC),
+    ),
+    SfChatDesign.whatsapp => const _ChatVisualStyle(
+      design: SfChatDesign.whatsapp,
+      canvas: Color(0xFFE7F1E9),
+      appBar: Color(0xFF0B6E4F),
+      appBarText: Colors.white,
+      presence: Color(0xFFA9E7BF),
+      incoming: Colors.white,
+      outgoing: Color(0xFFD9FDD3),
+      incomingText: Color(0xFF1C2A22),
+      outgoingText: Color(0xFF173525),
+      composer: Color(0xFFF7F9F8),
+      input: Colors.white,
+      inputText: Color(0xFF173525),
+      icon: Color(0xFF168A63),
+      muted: Color(0xFF6C8376),
+      action: Color(0xFF1DA86F),
+      accent: Color(0xFF1DA86F),
+      danger: Color(0xFFC85151),
+      border: Color(0xFFCDE1D4),
+      incomingBorder: Color(0xFFE0E9E2),
+      outgoingBorder: Color(0xFFC8EFC5),
+      incomingTime: Color(0xFF809487),
+      outgoingTime: Color(0xFF5A9870),
+    ),
+    SfChatDesign.modernDark => const _ChatVisualStyle(
+      design: SfChatDesign.modernDark,
+      canvas: Color(0xFF0B1020),
+      appBar: Color(0xFF11192A),
+      appBarText: Color(0xFFF0F5FF),
+      presence: Color(0xFF85D7C2),
+      incoming: Color(0xFF18233A),
+      outgoing: Color(0xFF304E70),
+      incomingText: Color(0xFFE6EEF9),
+      outgoingText: Colors.white,
+      composer: Color(0xFF101827),
+      input: Color(0xFF1A263A),
+      inputText: Color(0xFFF0F5FF),
+      icon: Color(0xFF9AB9E7),
+      muted: Color(0xFF93A4BD),
+      action: Color(0xFF6E9FE8),
+      accent: Color(0xFF6E9FE8),
+      danger: Color(0xFFFF7D8C),
+      border: Color(0xFF26344C),
+      incomingBorder: Color(0xFF2B3B55),
+      outgoingBorder: Color(0xFF4F6E94),
+      incomingTime: Color(0xFF9FB0C8),
+      outgoingTime: Color(0xFFC5D9FA),
+    ),
+    SfChatDesign.glass => const _ChatVisualStyle(
+      design: SfChatDesign.glass,
+      canvas: Color(0xFFE9E5F8),
+      appBar: Color(0xD9F7F4FF),
+      appBarText: Color(0xFF302C52),
+      presence: Color(0xFF786FC5),
+      incoming: Color(0xB3FFFFFF),
+      outgoing: Color(0xA8D8D0FA),
+      incomingText: Color(0xFF302C52),
+      outgoingText: Color(0xFF302C52),
+      composer: Color(0xC9FFFFFF),
+      input: Color(0xA8FFFFFF),
+      inputText: Color(0xFF302C52),
+      icon: Color(0xFF786FC5),
+      muted: Color(0xFF766F91),
+      action: Color(0xFF8D78D1),
+      accent: Color(0xFF8D78D1),
+      danger: Color(0xFFD56C82),
+      border: Color(0x80FFFFFF),
+      incomingBorder: Color(0xA3FFFFFF),
+      outgoingBorder: Color(0x80FFFFFF),
+      incomingTime: Color(0xFF786F92),
+      outgoingTime: Color(0xFF665A88),
+      glass: true,
+    ),
+    SfChatDesign.gradient => const _ChatVisualStyle(
+      design: SfChatDesign.gradient,
+      canvas: Color(0xFFF7E8FA),
+      appBar: Color(0x00000000),
+      appBarText: Colors.white,
+      presence: Color(0xFFFFD4F7),
+      incoming: Color(0xFFFDF9FF),
+      outgoing: Color(0xFFD475E7),
+      incomingText: Color(0xFF43244E),
+      outgoingText: Colors.white,
+      composer: Color(0xFFFEF8FF),
+      input: Color(0xFFF3E8F8),
+      inputText: Color(0xFF43244E),
+      icon: Color(0xFFA656C1),
+      muted: Color(0xFF8F7199),
+      action: Color(0xFFC05CD0),
+      accent: Color(0xFFC05CD0),
+      danger: Color(0xFFD65B82),
+      border: Color(0xFFE5CFEA),
+      incomingBorder: Color(0xFFECDBF1),
+      outgoingBorder: Color(0x00FFFFFF),
+      incomingTime: Color(0xFF9B7AA6),
+      outgoingTime: Color(0xFFF8D9FF),
+      appBarGradient: LinearGradient(
+        colors: [Color(0xFF6A5BDE), Color(0xFFC35AD0), Color(0xFFED7C9D)],
+      ),
+      outgoingGradient: LinearGradient(
+        colors: [Color(0xFF8560DD), Color(0xFFD66DCC)],
+      ),
+    ),
+    SfChatDesign.minimal => const _ChatVisualStyle(
+      design: SfChatDesign.minimal,
+      canvas: Color(0xFFFFFFFF),
+      appBar: Color(0xFFFFFFFF),
+      appBarText: Color(0xFF171717),
+      presence: Color(0xFF4B8062),
+      incoming: Color(0xFFFFFFFF),
+      outgoing: Color(0xFFF5F5F5),
+      incomingText: Color(0xFF202020),
+      outgoingText: Color(0xFF202020),
+      composer: Color(0xFFFFFFFF),
+      input: Color(0xFFF4F4F4),
+      inputText: Color(0xFF202020),
+      icon: Color(0xFF3E3E3E),
+      muted: Color(0xFF8B8B8B),
+      action: Color(0xFF1F1F1F),
+      accent: Color(0xFF1F1F1F),
+      danger: Color(0xFFC35151),
+      border: Color(0xFFE4E4E4),
+      incomingBorder: Color(0xFFE8E8E8),
+      outgoingBorder: Color(0xFFE8E8E8),
+      incomingTime: Color(0xFF989898),
+      outgoingTime: Color(0xFF858585),
+    ),
+    SfChatDesign.neon => const _ChatVisualStyle(
+      design: SfChatDesign.neon,
+      canvas: Color(0xFF090C14),
+      appBar: Color(0xFF101628),
+      appBarText: Color(0xFFF6F4FF),
+      presence: Color(0xFF75FFC6),
+      incoming: Color(0xFF141D30),
+      outgoing: Color(0xFF2B1F53),
+      incomingText: Color(0xFFE9F5FF),
+      outgoingText: Color(0xFFF5EEFF),
+      composer: Color(0xFF101628),
+      input: Color(0xFF18243A),
+      inputText: Color(0xFFF6F4FF),
+      icon: Color(0xFF70F6FF),
+      muted: Color(0xFF9AA7C4),
+      action: Color(0xFF9A5CFF),
+      accent: Color(0xFF70F6FF),
+      danger: Color(0xFFFF659B),
+      border: Color(0xFF263654),
+      incomingBorder: Color(0xFF29405D),
+      outgoingBorder: Color(0xFF825BFF),
+      incomingTime: Color(0xFF9EB7D6),
+      outgoingTime: Color(0xFFC3B1FF),
+      outgoingGradient: LinearGradient(
+        colors: [Color(0xFF263C85), Color(0xFF742AB5)],
+      ),
+    ),
+    SfChatDesign.nature => const _ChatVisualStyle(
+      design: SfChatDesign.nature,
+      canvas: Color(0xFFE8F3E8),
+      appBar: Color(0xFFF7FBF4),
+      appBarText: Color(0xFF26452B),
+      presence: Color(0xFF4F9461),
+      incoming: Color(0xFFFFFFFF),
+      outgoing: Color(0xFFD0EBC9),
+      incomingText: Color(0xFF27452D),
+      outgoingText: Color(0xFF24452C),
+      composer: Color(0xFFFBFDF8),
+      input: Color(0xFFEAF4E7),
+      inputText: Color(0xFF27452D),
+      icon: Color(0xFF5B8F5B),
+      muted: Color(0xFF748A73),
+      action: Color(0xFF618F5D),
+      accent: Color(0xFF618F5D),
+      danger: Color(0xFFC76464),
+      border: Color(0xFFD4E4D1),
+      incomingBorder: Color(0xFFE0EBDE),
+      outgoingBorder: Color(0xFFC2DDBB),
+      incomingTime: Color(0xFF829781),
+      outgoingTime: Color(0xFF668D65),
+    ),
+  };
+}
+
+/// A lightweight painted chat background. It is intentionally code-native so
+/// every palette and dark/light theme remains readable without image assets.
+class _ChatWallpaper extends StatelessWidget {
+  final SfChatWallpaper style;
+  final SfColors colors;
+  final Color baseColor;
+  final Color accentColor;
+  final String? customPath;
+  const _ChatWallpaper({
+    required this.style,
+    required this.colors,
+    required this.baseColor,
+    required this.accentColor,
+    this.customPath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final background = switch (style) {
+      SfChatWallpaper.telegramClouds => const LinearGradient(
+        colors: [Color(0xFFEAF6FE), Color(0xFFD7ECFA)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.whatsappPattern => const LinearGradient(
+        colors: [Color(0xFFEAF5EE), Color(0xFFD7E9DA)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ),
+      SfChatWallpaper.mountains => const LinearGradient(
+        colors: [Color(0xFFD9E9E9), Color(0xFFEDF4EF)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ),
+      SfChatWallpaper.aurora => const LinearGradient(
+        colors: [Color(0xFF15233E), Color(0xFF29445E), Color(0xFF27334F)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.space => const LinearGradient(
+        colors: [Color(0xFF080C1C), Color(0xFF151337), Color(0xFF11162C)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.ocean => const LinearGradient(
+        colors: [Color(0xFFDDF5F2), Color(0xFFAEDFD9), Color(0xFFB4D9E9)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ),
+      SfChatWallpaper.sakura => const LinearGradient(
+        colors: [Color(0xFFFFF2F5), Color(0xFFF8DCE7), Color(0xFFF4E6EE)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.abstract => const LinearGradient(
+        colors: [Color(0xFFE9E6FA), Color(0xFFF8ECF6), Color(0xFFE5F1FB)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.gradient => const LinearGradient(
+        colors: [Color(0xFF8574DF), Color(0xFFE885B5), Color(0xFFF9C976)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      SfChatWallpaper.blur => LinearGradient(
+        colors: [baseColor, Colors.white.withValues(alpha: 0.72)],
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ),
+      _ => null,
+    };
+    return Container(
+      decoration: BoxDecoration(
+        color: baseColor,
+        gradient: background,
+        image: style == SfChatWallpaper.custom && customPath != null
+            ? DecorationImage(
+                image: FileImage(File(customPath!)),
+                fit: BoxFit.cover,
+              )
+            : null,
+      ),
+      child: CustomPaint(
+        painter: _ChatWallpaperPainter(
+          style,
+          colors.muted2.withValues(alpha: 0.16),
+          accentColor,
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatWallpaperPainter extends CustomPainter {
+  final SfChatWallpaper style;
+  final Color color;
+  final Color accent;
+  _ChatWallpaperPainter(this.style, this.color, this.accent);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    if (style == SfChatWallpaper.telegramClouds) {
+      for (double y = 24; y < size.height + 38; y += 110) {
+        for (double x = -24; x < size.width + 80; x += 145) {
+          final cloud = Paint()..color = Colors.white.withValues(alpha: 0.45);
+          canvas.drawCircle(Offset(x + 24, y + 16), 21, cloud);
+          canvas.drawCircle(Offset(x + 49, y + 9), 28, cloud);
+          canvas.drawCircle(Offset(x + 76, y + 19), 18, cloud);
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(x + 15, y + 20, 74, 25),
+              const Radius.circular(15),
+            ),
+            cloud,
+          );
+        }
+      }
+    } else if (style == SfChatWallpaper.whatsappPattern) {
+      paint.color = const Color(0xFF6FAF86).withValues(alpha: 0.20);
+      for (double y = 16; y < size.height; y += 52) {
+        for (double x = 14; x < size.width; x += 58) {
+          canvas.drawCircle(Offset(x, y), 5, paint);
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromLTWH(x + 14, y + 10, 14, 9),
+              const Radius.circular(3),
+            ),
+            paint,
+          );
+          canvas.drawLine(Offset(x + 34, y + 2), Offset(x + 43, y + 11), paint);
+        }
+      }
+    } else if (style == SfChatWallpaper.mountains) {
+      final far = Path()
+        ..moveTo(0, size.height * .58)
+        ..lineTo(size.width * .22, size.height * .32)
+        ..lineTo(size.width * .45, size.height * .57)
+        ..lineTo(size.width * .72, size.height * .25)
+        ..lineTo(size.width, size.height * .55)
+        ..lineTo(size.width, size.height)
+        ..lineTo(0, size.height)
+        ..close();
+      canvas.drawPath(far, Paint()..color = const Color(0xFF9FBFC0));
+      final near = Path()
+        ..moveTo(0, size.height * .73)
+        ..lineTo(size.width * .28, size.height * .48)
+        ..lineTo(size.width * .52, size.height * .72)
+        ..lineTo(size.width * .82, size.height * .42)
+        ..lineTo(size.width, size.height * .68)
+        ..lineTo(size.width, size.height)
+        ..lineTo(0, size.height)
+        ..close();
+      canvas.drawPath(near, Paint()..color = const Color(0xFF5E8B78));
+    } else if (style == SfChatWallpaper.aurora) {
+      for (int i = 0; i < 4; i++) {
+        final y = size.height * (.16 + i * .18);
+        final glow = Paint()
+          ..shader = LinearGradient(
+            colors: [
+              Colors.transparent,
+              const Color(0xFF70F0C5).withValues(alpha: .30),
+              const Color(0xFF9D81F6).withValues(alpha: .25),
+              Colors.transparent,
+            ],
+          ).createShader(Rect.fromLTWH(0, y - 42, size.width, 84));
+        canvas.drawOval(Rect.fromLTWH(-35, y - 35, size.width + 70, 70), glow);
+      }
+    } else if (style == SfChatWallpaper.space) {
+      paint.color = Colors.white.withValues(alpha: .55);
+      for (double y = 18; y < size.height; y += 42) {
+        for (double x = 12 + (y % 3) * 9; x < size.width; x += 54) {
+          canvas.drawCircle(Offset(x, y), (x + y) % 4 == 0 ? 1.4 : .7, paint);
+        }
+      }
+      canvas.drawCircle(
+        Offset(size.width * .78, size.height * .18),
+        72,
+        Paint()..color = const Color(0xFF7B5AC9).withValues(alpha: .20),
+      );
+    } else if (style == SfChatWallpaper.ocean) {
+      paint.style = PaintingStyle.stroke;
+      paint.color = const Color(0xFF3B9FA1).withValues(alpha: .28);
+      paint.strokeWidth = 2;
+      for (double y = -10; y < size.height + 24; y += 38) {
+        final path = Path()..moveTo(0, y);
+        for (double x = 0; x < size.width + 50; x += 50) {
+          path.quadraticBezierTo(x + 12, y - 12, x + 25, y);
+          path.quadraticBezierTo(x + 37, y + 12, x + 50, y);
+        }
+        canvas.drawPath(path, paint);
+      }
+    } else if (style == SfChatWallpaper.sakura) {
+      paint.color = const Color(0xFFE98DAC).withValues(alpha: .42);
+      for (double y = 18; y < size.height; y += 58) {
+        for (double x = 12; x < size.width; x += 54) {
+          canvas.save();
+          canvas.translate(x, y);
+          canvas.rotate((x + y) % 8 / 8);
+          canvas.drawOval(const Rect.fromLTWH(-4, -2, 8, 4), paint);
+          canvas.restore();
+        }
+      }
+    } else if (style == SfChatWallpaper.abstract) {
+      for (int i = 0; i < 7; i++) {
+        final x = (i * 71.0) % (size.width + 50) - 24;
+        final y = (i * 113.0) % (size.height + 50) - 24;
+        canvas.drawCircle(
+          Offset(x, y),
+          42 + (i % 3) * 16,
+          Paint()..color = accent.withValues(alpha: .10 + i % 2 * .04),
+        );
+      }
+    } else if (style == SfChatWallpaper.blur) {
+      final blur = Paint()
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 30);
+      for (int i = 0; i < 5; i++) {
+        blur.color = (i.isEven ? accent : const Color(0xFFF0A7C7)).withValues(
+          alpha: .28,
+        );
+        canvas.drawCircle(
+          Offset(size.width * (i + 1) / 6, size.height * ((i % 3) + 1) / 4),
+          72,
+          blur,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ChatWallpaperPainter old) =>
+      old.style != style || old.color != color || old.accent != accent;
 }
 
 enum _AttachmentChoice { galleryImage, cameraImage, galleryVideo, cameraVideo }
@@ -7439,7 +12551,12 @@ class _AttachmentOption extends StatelessWidget {
 class _ChatMessageBody extends StatelessWidget {
   final ChatMsg message;
   final bool mine;
-  const _ChatMessageBody({required this.message, required this.mine});
+  final Color textColor;
+  const _ChatMessageBody({
+    required this.message,
+    required this.mine,
+    required this.textColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -7448,7 +12565,7 @@ class _ChatMessageBody extends StatelessWidget {
       fontFamily: SfType.ui,
       fontSize: 13,
       height: 1.32,
-      color: mine ? Colors.white : c.ink,
+      color: textColor,
     );
     switch (message.kind) {
       case ChatMessageKind.text:
@@ -8675,6 +13792,10 @@ class ReportScreen extends StatelessWidget {
     final store = AppScope.of(context);
     final audit = role == SfRole.audit;
     final ceo = role == SfRole.ceo;
+    final reportRevenue = store.scopedRevenue(store.stats.revenue);
+    final reportStudents = store.scopedStudents(
+      int.tryParse(store.stats.students.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
+    );
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -8699,6 +13820,8 @@ class ReportScreen extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
+            _CeoContextFilter(showBranches: false),
+            const SizedBox(height: 12),
             // Header band
             Container(
               width: double.infinity,
@@ -8796,13 +13919,13 @@ class ReportScreen extends StatelessWidget {
                     _kv(
                       context,
                       tr(context, 'kpi_revenue'),
-                      fmtMoneyMln(store.stats.revenue),
+                      fmtMoneyMln(reportRevenue),
                       vColor: c.success,
                     ),
                     _kv(
                       context,
                       tr(context, 'kpi_students'),
-                      store.stats.students,
+                      '$reportStudents',
                     ),
                     _kv(
                       context,
@@ -8891,11 +14014,7 @@ class ReportScreen extends StatelessWidget {
             border: Border(top: BorderSide(color: c.border)),
           ),
           child: GestureDetector(
-            onTap: () => _snack(
-              context,
-              tr(context, 'report_exported'),
-              bg: const Color(0xFF4F7B3B),
-            ),
+            onTap: () => _showReportFormatPicker(context, role),
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 14),
               decoration: BoxDecoration(
@@ -8930,6 +14049,179 @@ class ReportScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Opens a dedicated mobile page before a file is exported. This avoids an
+/// accidental download and makes all four formats visible to the user.
+void _showReportFormatPicker(
+  BuildContext context,
+  SfRole role, {
+  SfColors? colors,
+}) {
+  // BranchWorkspace is a pushed route and its State context sits above the
+  // local SfTheme wrapper. Passing the known route colours avoids looking up a
+  // theme from that outer context (the source of "SfTheme not found").
+  final c = colors ?? SfTheme.of(context);
+  Navigator.of(
+    context,
+  ).push(sfPageRoute(ReportFormatScreen(colors: c, role: role)));
+}
+
+class ReportFormatScreen extends StatelessWidget {
+  final SfColors colors;
+  final SfRole role;
+  const ReportFormatScreen({
+    super.key,
+    required this.colors,
+    required this.role,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    const formats = [
+      ('word', 'Word document', 'DOCX', Icons.description_rounded),
+      ('excel', 'Excel spreadsheet', 'XLSX', Icons.table_chart_rounded),
+      ('html', 'HTML page', 'HTML', Icons.code_rounded),
+      ('csv', 'CSV data', 'CSV', Icons.grid_on_rounded),
+    ];
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Hisobot formati',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            Text(
+              'Yuklab olishdan oldin formatni tanlang.',
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12.5,
+                color: c.muted,
+              ),
+            ),
+            const SizedBox(height: 14),
+            for (final format in formats)
+              Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  border: Border.all(color: c.border),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () async =>
+                      _exportReport(context, role, format.$1, format.$2),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: c.primarySoft,
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: Icon(format.$4, color: c.primary),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            format.$2,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: c.ink,
+                            ),
+                          ),
+                        ),
+                        Pill(format.$3, tone: PillTone.neutral),
+                        const SizedBox(width: 5),
+                        Icon(
+                          Icons.download_rounded,
+                          size: 19,
+                          color: c.primary,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _exportReport(
+  BuildContext context,
+  SfRole role,
+  String format,
+  String label,
+) async {
+  final store = AppScope.of(context);
+  final now = DateTime.now();
+  final scope = store.allBranchesSelected
+      ? 'Barcha filiallar'
+      : store.selectedBranch;
+  final revenue = store.scopedRevenue(store.stats.revenue);
+  final students = store.scopedStudents(
+    int.tryParse(store.stats.students.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
+  );
+  final rows = <(String, String)>[
+    ('Scope', scope),
+    (
+      'Period',
+      '${store.selectedRange.start.toIso8601String().substring(0, 10)} — ${store.selectedRange.end.toIso8601String().substring(0, 10)}',
+    ),
+    ('Revenue', '$revenue'),
+    ('Students', '$students'),
+    ('Attendance', '${store.scopedAttendance(91)}%'),
+    ('Generated', now.toIso8601String()),
+  ];
+  try {
+    final dir = await getApplicationDocumentsDirectory();
+    final ext = switch (format) {
+      'word' => 'docx',
+      'excel' => 'xlsx',
+      _ => format,
+    };
+    final file = File(
+      '${dir.path}/starforge_report_${now.millisecondsSinceEpoch}.$ext',
+    );
+    final csv = [
+      'Metric,Value',
+      ...rows.map((r) => '${r.$1},"${r.$2.replaceAll('"', '""')}"'),
+    ].join('\n');
+    final html =
+        '<!doctype html><html><head><meta charset="utf-8"><title>StarForge report</title></head><body><h1>StarForge EDU</h1><table border="1">${rows.map((r) => '<tr><th>${r.$1}</th><td>${r.$2}</td></tr>').join()}</table></body></html>';
+    await file.writeAsString(format == 'csv' ? csv : html);
+    if (context.mounted) {
+      _snack(
+        context,
+        '$label: ${file.path.split('/').last} tayyor',
+        bg: const Color(0xFF4F7B3B),
+      );
+    }
+  } catch (_) {
+    if (context.mounted) _snack(context, 'Hisobotni saqlab bo‘lmadi');
   }
 }
 
@@ -9294,25 +14586,15 @@ class _AvatarSection extends StatelessWidget {
 /// gear — palette · theme · layout · density · pattern · font, then the full
 /// "Barcha bo'limlar" navigation at the bottom, exactly like the web design.
 void showDesignPanel(BuildContext context, SfRole role) {
-  // Right-side slide-in drawer (like the web `.sfcp`): partial width, full
-  // height, slides from the right — not a full-screen page.
-  showGeneralDialog(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-    barrierColor: Colors.black.withValues(alpha: 0.42),
-    transitionDuration: const Duration(milliseconds: 320),
-    pageBuilder: (ctx, a1, a2) => DesignPanel(role: role),
-    transitionBuilder: (ctx, anim, _, child) => SlideTransition(
-      position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
-          .animate(
-            CurvedAnimation(
-              parent: anim,
-              curve: Curves.easeOutCubic,
-              reverseCurve: Curves.easeInCubic,
-            ),
-          ),
-      child: child,
+  // Mobile settings must be a normal route: a bottom sheet/drawer makes the
+  // numerous design and wallpaper choices hard to use on a phone.
+  final c = SettingsScope.of(context).colors;
+  Navigator.of(context).push(
+    sfPageRoute(
+      SfTheme(
+        colors: c,
+        child: SettingsScreen(colors: c),
+      ),
     ),
   );
 }
@@ -9373,7 +14655,9 @@ List<Widget> _designControls(
       physics: const NeverScrollableScrollPhysics(),
       mainAxisSpacing: 8,
       crossAxisSpacing: 8,
-      childAspectRatio: 2.4,
+      // A fixed, generous height prevents the label + description from
+      // overflowing on smaller phone widths or with a larger system font.
+      mainAxisExtent: 96,
       children: [
         for (int i = 0; i < kLayouts.length; i++)
           _LayCard(
@@ -9417,6 +14701,66 @@ List<Widget> _designControls(
             ),
             settings.pattern == kPatterns[i],
             () => settings.setPattern(kPatterns[i]),
+          ),
+      ],
+    ),
+    const SizedBox(height: 22),
+    _setSec(c, 'Chat dizayni'),
+    GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 9,
+      crossAxisSpacing: 9,
+      mainAxisExtent: 166,
+      children: [
+        for (int i = 0; i < kChatDesigns.length; i++)
+          _ChatDesignCard(
+            design: kChatDesigns[i],
+            label: const [
+              'Telegram',
+              'WhatsApp',
+              'Modern Dark',
+              'Glass',
+              'Gradient',
+              'Minimal',
+              'Neon',
+              'Nature',
+            ][i],
+            selected: settings.chatDesign == kChatDesigns[i],
+            onTap: () => settings.setChatDesign(kChatDesigns[i]),
+          ),
+      ],
+    ),
+    const SizedBox(height: 14),
+    _setSec(c, 'Chat oboyalari · 10'),
+    GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 9,
+      crossAxisSpacing: 9,
+      mainAxisExtent: 92,
+      children: [
+        for (int i = 0; i < kChatWallpapers.length; i++)
+          _ChatWallpaperCard(
+            wallpaper: kChatWallpapers[i],
+            label: _chatWallpaperName(kChatWallpapers[i]),
+            colors: c,
+            selected: settings.chatWallpaper == kChatWallpapers[i],
+            customPath: settings.chatWallpaperPath,
+            onTap: () async {
+              final wallpaper = kChatWallpapers[i];
+              if (wallpaper != SfChatWallpaper.custom) {
+                settings.setChatWallpaper(wallpaper);
+                return;
+              }
+              final image = await ImagePicker().pickImage(
+                source: ImageSource.gallery,
+                imageQuality: 85,
+              );
+              if (image != null) settings.setChatWallpaperPath(image.path);
+            },
           ),
       ],
     ),
@@ -9718,6 +15062,415 @@ class _LayMini extends StatelessWidget {
   }
 }
 
+/// Tappable visual preview of a chat theme. A compact header, two bubbles and
+/// a composer make the colour and shape readable before the user applies it.
+class _ChatDesignCard extends StatelessWidget {
+  final SfChatDesign design;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _ChatDesignCard({
+    required this.design,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(13),
+        child: Container(
+          padding: const EdgeInsets.all(7),
+          decoration: BoxDecoration(
+            color: selected ? c.primary.withValues(alpha: 0.08) : c.surface,
+            border: Border.all(
+              color: selected ? c.primary : c.border,
+              width: selected ? 1.8 : 1,
+            ),
+            borderRadius: BorderRadius.circular(13),
+          ),
+          child: Column(
+            children: [
+              Expanded(child: _ChatDesignMini(design: design)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                        color: c.ink,
+                      ),
+                    ),
+                  ),
+                  if (selected)
+                    Icon(
+                      Icons.check_circle_rounded,
+                      size: 15,
+                      color: c.primary,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _chatWallpaperName(SfChatWallpaper wallpaper) => switch (wallpaper) {
+  SfChatWallpaper.telegramClouds => 'Telegram Clouds',
+  SfChatWallpaper.whatsappPattern => 'WhatsApp Pattern',
+  SfChatWallpaper.mountains => 'Mountains',
+  SfChatWallpaper.aurora => 'Aurora',
+  SfChatWallpaper.space => 'Space',
+  SfChatWallpaper.ocean => 'Ocean',
+  SfChatWallpaper.sakura => 'Sakura',
+  SfChatWallpaper.abstract => 'Abstract',
+  SfChatWallpaper.gradient => 'Gradient',
+  SfChatWallpaper.blur => 'Blur',
+  SfChatWallpaper.custom => 'Gallery image',
+};
+
+/// Tappable sample of a real chat wallpaper. The preview carries two bubbles
+/// so the user can judge contrast before applying it to every conversation.
+class _ChatWallpaperCard extends StatelessWidget {
+  final SfChatWallpaper wallpaper;
+  final String label;
+  final SfColors colors;
+  final bool selected;
+  final String? customPath;
+  final VoidCallback onTap;
+  const _ChatWallpaperCard({
+    required this.wallpaper,
+    required this.label,
+    required this.colors,
+    required this.selected,
+    required this.customPath,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final isCustom = wallpaper == SfChatWallpaper.custom;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: selected ? c.primary.withValues(alpha: .07) : c.surface,
+            border: Border.all(
+              color: selected ? c.primary : c.border,
+              width: selected ? 1.8 : 1,
+            ),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _ChatWallpaper(
+                        style: wallpaper,
+                        colors: colors,
+                        baseColor: const Color(0xFFEAF4FC),
+                        accentColor: colors.primary,
+                        customPath: customPath,
+                      ),
+                      Align(
+                        alignment: Alignment.topLeft,
+                        child: Container(
+                          margin: const EdgeInsets.all(6),
+                          width: 50,
+                          height: 13,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: .82),
+                            borderRadius: BorderRadius.circular(7),
+                          ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.bottomRight,
+                        child: Container(
+                          margin: const EdgeInsets.all(6),
+                          width: 56,
+                          height: 14,
+                          decoration: BoxDecoration(
+                            color: colors.primary.withValues(alpha: .72),
+                            borderRadius: BorderRadius.circular(7),
+                          ),
+                        ),
+                      ),
+                      if (isCustom && customPath == null)
+                        Center(
+                          child: Container(
+                            width: 31,
+                            height: 31,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: .28),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.add_photo_alternate_outlined,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: c.ink,
+                      ),
+                    ),
+                  ),
+                  if (selected)
+                    Icon(
+                      Icons.check_circle_rounded,
+                      size: 14,
+                      color: c.primary,
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatDesignMini extends StatelessWidget {
+  final SfChatDesign design;
+  const _ChatDesignMini({required this.design});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = _chatVisualStyle(design, SfColors.light);
+    final tiny = TextStyle(
+      fontFamily: SfType.ui,
+      fontSize: 5.8,
+      fontWeight: FontWeight.w700,
+      color: p.appBarText,
+      height: 1,
+    );
+    Widget bubble(String text, bool mine) => Container(
+      constraints: const BoxConstraints(maxWidth: 86),
+      margin: const EdgeInsets.only(bottom: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+      decoration: BoxDecoration(
+        color: mine && p.outgoingGradient != null
+            ? null
+            : (mine ? p.outgoing : p.incoming),
+        gradient: mine ? p.outgoingGradient : null,
+        border: Border.all(
+          color: mine ? p.outgoingBorder : p.incomingBorder,
+          width: .5,
+        ),
+        borderRadius: p.bubbleRadius(mine).resolve(TextDirection.ltr),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tiny.copyWith(
+                color: mine ? p.outgoingText : p.incomingText,
+              ),
+            ),
+          ),
+          const SizedBox(width: 3),
+          Text(
+            '10:24',
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 4.6,
+              color: mine ? p.outgoingTime : p.incomingTime,
+            ),
+          ),
+        ],
+      ),
+    );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: p.canvas,
+          gradient: design == SfChatDesign.gradient
+              ? const LinearGradient(
+                  colors: [Color(0xFFF4E8FC), Color(0xFFFFE8F1)],
+                )
+              : null,
+        ),
+        child: Column(
+          children: [
+            Container(
+              height: 21,
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              decoration: BoxDecoration(
+                color: p.appBar,
+                gradient: p.appBarGradient,
+                border: Border(bottom: BorderSide(color: p.border, width: .5)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [p.accent, p.action.withValues(alpha: .65)],
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.person_rounded,
+                      size: 8,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Madina', maxLines: 1, style: tiny),
+                        Text(
+                          'online',
+                          maxLines: 1,
+                          style: tiny.copyWith(
+                            fontSize: 4.6,
+                            color: p.presence,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.more_vert_rounded, size: 10, color: p.appBarText),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Stack(
+                children: [
+                  if (design == SfChatDesign.whatsapp)
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _ChatWallpaperPainter(
+                          SfChatWallpaper.whatsappPattern,
+                          p.muted.withValues(alpha: .22),
+                          p.accent,
+                        ),
+                      ),
+                    ),
+                  if (design == SfChatDesign.neon)
+                    Positioned(
+                      top: -24,
+                      right: -15,
+                      child: Container(
+                        width: 82,
+                        height: 82,
+                        decoration: BoxDecoration(
+                          color: p.accent.withValues(alpha: .14),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 5, 6, 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        bubble('Salom! Bugun dars bormi?', false),
+                        const Spacer(),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: bubble('Ha, 18:00 da.', true),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              height: 19,
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              decoration: BoxDecoration(
+                color: p.composer,
+                border: Border(top: BorderSide(color: p.border, width: .5)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.add_circle_outline_rounded,
+                    size: 9,
+                    color: p.icon,
+                  ),
+                  const SizedBox(width: 3),
+                  Expanded(
+                    child: Container(
+                      height: 11,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      alignment: Alignment.centerLeft,
+                      decoration: BoxDecoration(
+                        color: p.input,
+                        border: Border.all(color: p.border, width: .5),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Text(
+                        'Message',
+                        style: tiny.copyWith(fontSize: 4.8, color: p.muted),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(Icons.mic_rounded, size: 9, color: p.action),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Settings (pushed route) ─────────────────────────────────────────────
 /// App preferences: light/dark theme + UZ/RU/EN language. Both apply instantly
 /// across the whole app via [SettingsScope].
@@ -9982,6 +15735,12 @@ void _snack(BuildContext context, String msg, {Color? bg}) {
       SnackBar(
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          MediaQuery.of(context).size.height - 92,
+        ),
         backgroundColor: bg ?? const Color(0xFF3A332A),
         content: Text(
           msg,

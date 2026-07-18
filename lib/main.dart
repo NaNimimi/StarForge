@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
@@ -20,8 +19,8 @@ class CeoManagerApp extends StatefulWidget {
 
 class _CeoManagerAppState extends State<CeoManagerApp> {
   SfRole? role;
-  // Seeded fresh on each login so every user gets their own dataset and a
-  // clean slate. The initial value is a placeholder the login screen never reads.
+  // Seeded again whenever the user opens a different workspace. The first
+  // value only provides AppScope while the workspace picker is on screen.
   AppStore store = AppStore.seed(SfRole.ceo);
 
   // Global theme/language — survives sign-out and rebuilds the whole app on
@@ -36,10 +35,10 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
     super.dispose();
   }
 
-  void _login(SfRole r) => setState(() {
-        role = r;
-        store = AppStore.seed(r);
-      });
+  void _openWorkspace(SfRole r) => setState(() {
+    role = r;
+    store = AppStore.seed(r);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +62,9 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
           builder: (context, child) {
             final mq = MediaQuery.of(context);
             return MediaQuery(
-              data: mq.copyWith(textScaler: TextScaler.linear(settings.textScale)),
+              data: mq.copyWith(
+                textScaler: TextScaler.linear(settings.textScale),
+              ),
               child: settings.pattern == SfPattern.none
                   ? child!
                   : Stack(
@@ -72,14 +73,18 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
                         Positioned.fill(
                           child: IgnorePointer(
                             child: CustomPaint(
-                                painter: _PatternPainter(settings.pattern, c.muted2.withValues(alpha: 0.22))),
+                              painter: _PatternPainter(
+                                settings.pattern,
+                                c.muted2.withValues(alpha: 0.22),
+                              ),
+                            ),
                           ),
                         ),
                       ],
                     ),
             );
           },
-          // Animated swap between the login shell and the active console.
+          // Animated swap between the workspace picker and the active console.
           home: AnimatedSwitcher(
             duration: const Duration(milliseconds: 520),
             switchInCurve: Curves.easeOutCubic,
@@ -93,8 +98,8 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
             },
             child: role == null
                 ? LoginScreen(
-                    key: const ValueKey('login'),
-                    onLogin: _login,
+                    key: const ValueKey('workspace-picker'),
+                    onLogin: _openWorkspace,
                   )
                 : Console(
                     key: ValueKey('console-${role!.name}'),
@@ -137,8 +142,16 @@ class _PatternPainter extends CustomPainter {
         break;
       case SfPattern.tile:
         for (double d = -size.height; d < size.width; d += 14) {
-          canvas.drawLine(Offset(d, 0), Offset(d + size.height, size.height), p);
-          canvas.drawLine(Offset(d, size.height), Offset(d + size.height, 0), p);
+          canvas.drawLine(
+            Offset(d, 0),
+            Offset(d + size.height, size.height),
+            p,
+          );
+          canvas.drawLine(
+            Offset(d, size.height),
+            Offset(d + size.height, 0),
+            p,
+          );
         }
         break;
       case SfPattern.topo:
@@ -152,93 +165,19 @@ class _PatternPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PatternPainter old) => old.pattern != pattern || old.color != color;
+  bool shouldRepaint(_PatternPainter old) =>
+      old.pattern != pattern || old.color != color;
 }
 
-/// Animated sign-in shell. Three demo accounts (one per console); tap a card to
-/// autofill, then "Kirish". No backend — credentials are validated locally.
-class LoginScreen extends StatefulWidget {
+/// Password-free workspace picker. The former local demo login has been
+/// deliberately removed: this is a device-local product preview, so a user can
+/// move freely between CEO, manager and audit workspaces.
+///
+/// The class name remains [LoginScreen] for backward-compatible embedding and
+/// tests, but there are no credential fields or validation in this screen.
+class LoginScreen extends StatelessWidget {
   final ValueChanged<SfRole> onLogin;
   const LoginScreen({super.key, required this.onLogin});
-
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin {
-  final _loginCtrl = TextEditingController();
-  final _passCtrl = TextEditingController();
-  late final AnimationController _intro;
-  bool _obscure = true;
-  bool _busy = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.dark);
-    _intro = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..forward();
-  }
-
-  @override
-  void dispose() {
-    _loginCtrl.dispose();
-    _passCtrl.dispose();
-    _intro.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_busy) return;
-    FocusScope.of(context).unfocus();
-    final login = _loginCtrl.text.trim().toLowerCase();
-    final pass = _passCtrl.text;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    // Fake the round-trip so the spinner reads as a real sign-in.
-    await Future<void>.delayed(const Duration(milliseconds: 750));
-    if (!mounted) return;
-    DemoUser? match;
-    for (final u in kDemoUsers) {
-      if (u.login == login && u.password == pass) {
-        match = u;
-        break;
-      }
-    }
-    if (match == null) {
-      setState(() {
-        _busy = false;
-        _error = login.isEmpty ? 'err_empty' : 'err_wrong';
-      });
-      return;
-    }
-    widget.onLogin(match.role);
-  }
-
-  /// Fade + slide a child in along the intro timeline `[start, start+0.5]`.
-  Widget _stagger(double start, Widget child) {
-    final anim = CurvedAnimation(
-      parent: _intro,
-      curve: Interval(start, (start + 0.5).clamp(0.0, 1.0), curve: Curves.easeOutCubic),
-    );
-    return AnimatedBuilder(
-      animation: anim,
-      builder: (_, c) => Opacity(
-        opacity: anim.value,
-        child: Transform.translate(
-          offset: Offset(0, 24 * (1 - anim.value)),
-          child: Transform.scale(scale: 0.97 + 0.03 * anim.value, child: c),
-        ),
-      ),
-      child: child,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = SettingsScope.of(context).colors;
@@ -255,19 +194,59 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 440),
                   child: ListView(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 28,
+                    ),
                     children: [
-                  _stagger(0.04, _brand(c)),
-                  const SizedBox(height: 30),
-                  _stagger(0.08, _heading(c)),
-                  const SizedBox(height: 18),
-                  _stagger(0.16, _field(c, tr(context, 'login_hint'), _loginCtrl, Icons.person_outline_rounded)),
-                  const SizedBox(height: 12),
-                  _stagger(0.22, _passwordField(c)),
-                  _errorBar(c),
-                  const SizedBox(height: 16),
-                      _stagger(0.28, _signInButton(c)),
+                      _brand(context, c),
+                      const SizedBox(height: 38),
+                      Text(
+                        'Ish maydonini tanlang',
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.7,
+                          color: c.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        'Kirish ma’lumotlari talab qilinmaydi. Kerakli konsolni bosing.',
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 13,
+                          color: c.muted,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      _WorkspaceCard(
+                        role: SfRole.ceo,
+                        icon: Icons.account_balance_rounded,
+                        title: 'CEO Manager',
+                        subtitle: 'Filiallar, odamlar va umumiy ko‘rsatkichlar',
+                        color: c.primary,
+                        onTap: () => onLogin(SfRole.ceo),
+                      ),
+                      const SizedBox(height: 11),
+                      _WorkspaceCard(
+                        role: SfRole.manager,
+                        icon: Icons.business_center_rounded,
+                        title: 'Manager',
+                        subtitle: 'Filial operatsiyalari va tasdiqlashlar',
+                        color: c.success,
+                        onTap: () => onLogin(SfRole.manager),
+                      ),
+                      const SizedBox(height: 11),
+                      _WorkspaceCard(
+                        role: SfRole.audit,
+                        icon: Icons.shield_rounded,
+                        title: 'Audit',
+                        subtitle: 'Nazorat, signallar va tekshiruvlar',
+                        color: c.accent,
+                        onTap: () => onLogin(SfRole.audit),
+                      ),
                     ],
                   ),
                 ),
@@ -279,178 +258,137 @@ class _LoginScreenState extends State<LoginScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _brand(SfColors c) => Row(
-        children: [
-          // Gentle breathing pulse on the logo.
-          TweenAnimationBuilder<double>(
-            tween: Tween(begin: 0.0, end: 1.0),
-            duration: const Duration(milliseconds: 900),
-            curve: Curves.elasticOut,
-            builder: (_, v, child) => Transform.scale(scale: 0.6 + 0.4 * v, child: child),
-            child: Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: c.primary,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                      color: c.primary.withValues(alpha: 0.32),
-                      blurRadius: 18,
-                      offset: const Offset(0, 8)),
-                ],
+  Widget _brand(BuildContext context, SfColors c) => Row(
+    children: [
+      // Gentle breathing pulse on the logo.
+      TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.elasticOut,
+        builder: (_, v, child) =>
+            Transform.scale(scale: 0.6 + 0.4 * v, child: child),
+        child: Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: c.primary,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: c.primary.withValues(alpha: 0.32),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
-              child: const Center(child: SfStar(size: 26, color: Colors.white)),
-            ),
-          ),
-          const SizedBox(width: 13),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('StarForge EDU',
-                  style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.4,
-                      color: c.ink)),
-              Text(tr(context, 'brand_sub'),
-                  style: TextStyle(fontFamily: SfType.ui, fontSize: 12, color: c.muted)),
             ],
           ),
-        ],
-      );
-
-  Widget _heading(SfColors c) => Column(
+          child: const Center(child: SfStar(size: 26, color: Colors.white)),
+        ),
+      ),
+      const SizedBox(width: 13),
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(tr(context, 'login_title'),
-              style: TextStyle(
-                  fontFamily: SfType.display,
-                  fontSize: 30,
-                  height: 1.05,
-                  color: c.ink)),
-          const SizedBox(height: 4),
-          Text(tr(context, 'login_sub'),
-              style: TextStyle(fontFamily: SfType.ui, fontSize: 13, color: c.muted)),
-        ],
-      );
-
-  Widget _field(SfColors c, String hint, TextEditingController ctrl, IconData icon,
-      {bool obscure = false, Widget? suffix}) {
-    return TextField(
-      controller: ctrl,
-      obscureText: obscure,
-      onChanged: (_) {
-        if (_error != null) setState(() => _error = null);
-      },
-      onSubmitted: (_) => _submit(),
-      style: TextStyle(fontFamily: SfType.ui, fontSize: 15, color: c.ink, fontWeight: FontWeight.w600),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(fontFamily: SfType.ui, color: c.muted2, fontWeight: FontWeight.w500),
-        prefixIcon: Icon(icon, size: 20, color: c.muted),
-        suffixIcon: suffix,
-        filled: true,
-        fillColor: c.surface,
-        contentPadding: const EdgeInsets.symmetric(vertical: 16),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: c.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: c.primary, width: 1.6),
-        ),
-      ),
-    );
-  }
-
-  Widget _passwordField(SfColors c) => _field(
-        c,
-        tr(context, 'pass_hint'),
-        _passCtrl,
-        Icons.lock_outline_rounded,
-        obscure: _obscure,
-        suffix: IconButton(
-          icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-              size: 20, color: c.muted),
-          onPressed: () => setState(() => _obscure = !_obscure),
-        ),
-      );
-
-  Widget _errorBar(SfColors c) => AnimatedSize(
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOut,
-        child: _error == null
-            ? const SizedBox(width: double.infinity)
-            : Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.error_outline_rounded, size: 16, color: const Color(0xFFB33A2A)),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(tr(context, _error!),
-                          style: TextStyle(
-                              fontFamily: SfType.ui,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFFB33A2A))),
-                    ),
-                  ],
-                ),
-              ),
-      );
-
-  Widget _signInButton(SfColors c) {
-    return SfTap(
-      child: AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      height: 54,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [
-          BoxShadow(
-              color: c.primary.withValues(alpha: _busy ? 0.18 : 0.34),
-              blurRadius: 18,
-              offset: const Offset(0, 8)),
+          Text(
+            'StarForge EDU',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+              color: c.ink,
+            ),
+          ),
+          Text(
+            tr(context, 'brand_sub'),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 12,
+              color: c.muted,
+            ),
+          ),
         ],
       ),
+    ],
+  );
+}
+
+class _WorkspaceCard extends StatelessWidget {
+  final SfRole role;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+  const _WorkspaceCard({
+    required this.role,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Semantics(
+      button: true,
+      label: '$title ish maydoni',
       child: Material(
-        color: c.primary,
-        borderRadius: BorderRadius.circular(15),
+        color: c.surface,
+        borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          borderRadius: BorderRadius.circular(15),
-          onTap: _busy ? null : _submit,
-          child: Center(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              child: _busy
-                  ? const SizedBox(
-                      key: ValueKey('spin'),
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                    )
-                  : Row(
-                      key: const ValueKey('label'),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(tr(context, 'sign_in'),
-                            style: TextStyle(
-                                fontFamily: SfType.ui,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white)),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.arrow_forward_rounded, size: 19, color: Colors.white),
-                      ],
-                    ),
+          key: ValueKey('workspace-${role.name}'),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.all(15),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: c.border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: Icon(icon, color: color, size: 23),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: c.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 11,
+                          color: c.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.arrow_forward_rounded, color: color, size: 20),
+              ],
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -466,9 +404,10 @@ class _LoginBackdrop extends StatefulWidget {
 
 class _LoginBackdropState extends State<_LoginBackdrop>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _a =
-      AnimationController(vsync: this, duration: const Duration(seconds: 10))
-        ..repeat(reverse: true);
+  late final AnimationController _a = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 10),
+  )..repeat(reverse: true);
 
   @override
   void dispose() {
@@ -477,13 +416,13 @@ class _LoginBackdropState extends State<_LoginBackdrop>
   }
 
   Widget _blob(double size, List<Color> colors) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(colors: colors),
-        ),
-      );
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      gradient: RadialGradient(colors: colors),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {

@@ -99,7 +99,8 @@ class RoleConfig {
     required this.tabs,
   });
 
-  Color accent(SfColors c) => role == SfRole.audit ? const Color(0xFF7A4A82) : c.primary;
+  Color accent(SfColors c) =>
+      role == SfRole.audit ? const Color(0xFF7A4A82) : c.primary;
   SfColors get colors => dark ? SfColors.dark : SfColors.light;
 }
 
@@ -174,7 +175,34 @@ class Student {
   final int attendance;
   final String pay; // paid | debt | partial
   final num debt;
-  const Student(this.name, this.group, this.attendance, this.pay, this.debt);
+  // Optional direct-entry details. Seed data leaves these null and keeps the
+  // original deterministic demo profile; students admitted from the mobile
+  // form retain the actual values entered by the user.
+  final String? studentNumber;
+  final String? phone;
+  final String? backupPhone;
+  final String? parentName;
+  final String? parentPhone;
+  final String? parentBackupPhone;
+  final String? branch;
+  final String? username;
+  final String? gender;
+  const Student(
+    this.name,
+    this.group,
+    this.attendance,
+    this.pay,
+    this.debt, {
+    this.studentNumber,
+    this.phone,
+    this.backupPhone,
+    this.parentName,
+    this.parentPhone,
+    this.parentBackupPhone,
+    this.branch,
+    this.username,
+    this.gender,
+  });
 }
 
 /// A full, deterministic demo profile derived from a student's name. The demo
@@ -201,13 +229,50 @@ class StudentProfile {
   });
 }
 
-const _kMaleNames = ['Rustam', 'Bobur', 'Jasur', 'Sardor', 'Otabek', 'Akmal',
-    'Sherzod', 'Bekzod', 'Aziz', 'Davron', 'Farrux', "Ulug'bek"];
-const _kFemaleNames = ['Dilbar', 'Nilufar', 'Madina', 'Zilola', 'Sevinch',
-    'Gulnora', 'Malika', 'Shahnoza', 'Kamola', 'Feruza', 'Nigora', 'Saodat'];
-const _kLevels = ['Beginner', 'Elementary', 'Pre-Intermediate', 'Intermediate',
-    'Upper-Intermediate', 'Advanced'];
-const _kDistricts = ['Yunusobod', 'Chilonzor', 'Mirobod', 'Sebzor', 'Yashnobod', 'Olmazor'];
+const _kMaleNames = [
+  'Rustam',
+  'Bobur',
+  'Jasur',
+  'Sardor',
+  'Otabek',
+  'Akmal',
+  'Sherzod',
+  'Bekzod',
+  'Aziz',
+  'Davron',
+  'Farrux',
+  "Ulug'bek",
+];
+const _kFemaleNames = [
+  'Dilbar',
+  'Nilufar',
+  'Madina',
+  'Zilola',
+  'Sevinch',
+  'Gulnora',
+  'Malika',
+  'Shahnoza',
+  'Kamola',
+  'Feruza',
+  'Nigora',
+  'Saodat',
+];
+const _kLevels = [
+  'Beginner',
+  'Elementary',
+  'Pre-Intermediate',
+  'Intermediate',
+  'Upper-Intermediate',
+  'Advanced',
+];
+const _kDistricts = [
+  'Yunusobod',
+  'Chilonzor',
+  'Mirobod',
+  'Sebzor',
+  'Yashnobod',
+  'Olmazor',
+];
 const _kOpCodes = ['90', '91', '93', '94', '97', '98', '99', '88', '33'];
 
 int _seedOf(String s) {
@@ -247,15 +312,20 @@ StudentProfile studentProfile(Student s) {
     firstName: first.isEmpty ? s.name : first,
     lastName: last,
     level: _kLevels[h % _kLevels.length],
-    phone: _phoneFrom(h),
-    fatherName: '${stem}ov ${_kMaleNames[h % _kMaleNames.length]}',
-    fatherPhone: _phoneFrom(h ~/ 2 + 41),
+    phone: s.phone ?? _phoneFrom(h),
+    fatherName:
+        s.parentName ?? '${stem}ov ${_kMaleNames[h % _kMaleNames.length]}',
+    fatherPhone: s.parentPhone ?? _phoneFrom(h ~/ 2 + 41),
     motherName: '${stem}ova ${_kFemaleNames[(h ~/ 3) % _kFemaleNames.length]}',
     motherPhone: _phoneFrom(h ~/ 4 + 77),
     age: 13 + h % 6,
-    studentId: 'SF-${10000 + h % 89999}',
+    studentId: s.studentNumber ?? 'SF-${10000 + h % 89999}',
     enrolled: '$enrDay.$enrMonth.$enrYear',
-    branch: s.group.contains('·') ? s.group.split('·').first.trim() : _kDistricts[h % _kDistricts.length],
+    branch:
+        s.branch ??
+        (s.group.contains('·')
+            ? s.group.split('·').first.trim()
+            : _kDistricts[h % _kDistricts.length]),
   );
 }
 
@@ -274,6 +344,28 @@ const List<Student> kStudents = [
   Student('Ibragimov Sardor', 'Algebra Mid', 91, 'paid', 0),
 ];
 
+/// Former students remain available to the CEO as a separate lifecycle list;
+/// they are intentionally not mixed into active attendance/debt totals.
+const List<Student> kExitedStudents = [
+  Student('Sobirov Mohir', 'Yunusobod · Ingliz B2', 71, 'left', 0),
+  Student('Karimova Malika', 'Chilonzor · Algebra Mid', 82, 'left', 300000),
+  Student('To‘xtayev Umid', 'Mirobod · Fizika DTM', 76, 'left', 0),
+];
+
+String studentExitReason(Student s) => switch (s.name) {
+  'Sobirov Mohir' => 'Dars vaqti oilaviy jadvaliga mos kelmadi.',
+  'Karimova Malika' => 'Ko‘chib o‘tdi; yakuniy to‘lov qoldig‘i bor.',
+  'To‘xtayev Umid' => 'Fan yo‘nalishini o‘zgartirdi.',
+  _ => 'Ta’limni davom ettirmaslik qarori.',
+};
+
+String studentExitDate(Student s) => switch (s.name) {
+  'Sobirov Mohir' => '18.06.2026',
+  'Karimova Malika' => '02.07.2026',
+  'To‘xtayev Umid' => '11.07.2026',
+  _ => '—',
+};
+
 class Branch {
   final String name;
   final num revenue;
@@ -281,7 +373,14 @@ class Branch {
   final int attendance;
   final double trend;
   final Color mark;
-  const Branch(this.name, this.revenue, this.students, this.attendance, this.trend, this.mark);
+  const Branch(
+    this.name,
+    this.revenue,
+    this.students,
+    this.attendance,
+    this.trend,
+    this.mark,
+  );
 }
 
 const List<Branch> kBranches = [
@@ -301,15 +400,36 @@ class Approval {
 
   /// When approved, a money request moves cash IN (true) or OUT (false) of the till.
   final bool inflow;
-  const Approval(this.id, this.title, this.who, this.sub, this.amount, this.rail,
-      {this.inflow = false});
+  const Approval(
+    this.id,
+    this.title,
+    this.who,
+    this.sub,
+    this.amount,
+    this.rail, {
+    this.inflow = false,
+  });
 }
 
 const List<Approval> kApprovals = [
-  Approval('A-1', "To'lov qaytarish", 'Akbarov Akmal', 'Ortiqcha · iyun', 600000, Color(0xFF4F7B3B)),
+  Approval(
+    'A-1',
+    "To'lov qaytarish",
+    'Akbarov Akmal',
+    'Ortiqcha · iyun',
+    600000,
+    Color(0xFF4F7B3B),
+  ),
   Approval('A-2', "Ta'til", 'Yusupova N.', '24–26 May', 0, Color(0xFFB85535)),
   Approval('A-3', 'Yangi guruh', 'Ingliz B2', "18 o'rin", 0, Color(0xFFD89A2E)),
-  Approval('A-4', 'Chiqarish', 'Eshmatov O.', '3+ oy qarz', 1200000, Color(0xFFB33A2A)),
+  Approval(
+    'A-4',
+    'Chiqarish',
+    'Eshmatov O.',
+    '3+ oy qarz',
+    1200000,
+    Color(0xFFB33A2A),
+  ),
 ];
 
 // ── Ledger: the anti-fraud money-movement spine ─────────────────────────
@@ -338,20 +458,55 @@ class LedgerEntry {
 
 const List<LedgerEntry> kLedgerSeed = [
   LedgerEntry(
-      id: 'L-2048', title: "Oylik to'lov", who: 'Azizova Madina', amount: 600000,
-      inflow: true, kind: "To'lov", channel: 'Payme', time: '09:14'),
+    id: 'L-2048',
+    title: "Oylik to'lov",
+    who: 'Azizova Madina',
+    amount: 600000,
+    inflow: true,
+    kind: "To'lov",
+    channel: 'Payme',
+    time: '09:14',
+  ),
   LedgerEntry(
-      id: 'L-2047', title: "Oylik to'lov", who: 'Halimova Zilola', amount: 600000,
-      inflow: true, kind: "To'lov", channel: 'Click', time: '09:02'),
+    id: 'L-2047',
+    title: "Oylik to'lov",
+    who: 'Halimova Zilola',
+    amount: 600000,
+    inflow: true,
+    kind: "To'lov",
+    channel: 'Click',
+    time: '09:02',
+  ),
   LedgerEntry(
-      id: 'L-2046', title: 'Kitob sotuvi · Grammar 4', who: "G'aniyev Jasur", amount: 85000,
-      inflow: true, kind: 'Kitob', channel: 'Naqd', time: 'Kecha 17:40'),
+    id: 'L-2046',
+    title: 'Kitob sotuvi · Grammar 4',
+    who: "G'aniyev Jasur",
+    amount: 85000,
+    inflow: true,
+    kind: 'Kitob',
+    channel: 'Naqd',
+    time: 'Kecha 17:40',
+  ),
   LedgerEntry(
-      id: 'L-2045', title: "O'qituvchi oyligi", who: 'Nigora Karimova', amount: 4200000,
-      inflow: false, kind: 'Oylik', channel: 'Tizim', time: 'Kecha 15:20'),
+    id: 'L-2045',
+    title: "O'qituvchi oyligi",
+    who: 'Nigora Karimova',
+    amount: 4200000,
+    inflow: false,
+    kind: 'Oylik',
+    channel: 'Tizim',
+    time: 'Kecha 15:20',
+  ),
   LedgerEntry(
-      id: 'L-2044', title: 'Naqd · qabul', who: 'Ibragimov Sardor', amount: 600000,
-      inflow: true, kind: 'Naqd', channel: 'Naqd', time: 'Kecha 11:05'),
+    id: 'L-2044',
+    title: 'Naqd · qabul',
+    who: 'Ibragimov Sardor',
+    amount: 600000,
+    inflow: true,
+    kind: 'Naqd',
+    channel: 'Naqd',
+    time: 'Kecha 11:05',
+  ),
 ];
 
 class Anomaly {
@@ -395,34 +550,130 @@ class Thread {
   final int unread;
   final bool online;
   final bool isGroup;
-  const Thread(this.name, this.group, this.last, this.time,
-      {this.unread = 0, this.online = false, this.isGroup = false});
+  const Thread(
+    this.name,
+    this.group,
+    this.last,
+    this.time, {
+    this.unread = 0,
+    this.online = false,
+    this.isGroup = false,
+  });
 }
 
 // Manager (Dilnoza · Yunusobod) talks to her teachers and parents.
 const List<Thread> kThreads = [
-  Thread('Nigora Karimova', "O'qituvchi · Matematika", "Ertangi yig'ilishga tayyorman", '14:42', online: true),
-  Thread("Matematika bo'limi", 'Guruh · 12 a\'zo', 'Siz: Yangi mavzular...', '13:20', isGroup: true),
-  Thread('Akbarova Dilnoza', 'Ota-ona · 9-B', 'Rahmat ustoz!', '12:18', unread: 2),
-  Thread('Aziz Tursunov', "O'qituvchi · Ingliz", 'Yangi guruh ochsak?', '11:05', unread: 1, online: true),
-  Thread("Qabul bo'limi", 'Guruh · 8 a\'zo', 'Bugun 6 ta yangi lid', 'Du', unread: 3, isGroup: true),
+  Thread(
+    'Nigora Karimova',
+    "O'qituvchi · Matematika",
+    "Ertangi yig'ilishga tayyorman",
+    '14:42',
+    online: true,
+  ),
+  Thread(
+    "Matematika bo'limi",
+    'Guruh · 12 a\'zo',
+    'Siz: Yangi mavzular...',
+    '13:20',
+    isGroup: true,
+  ),
+  Thread(
+    'Akbarova Dilnoza',
+    'Ota-ona · 9-B',
+    'Rahmat ustoz!',
+    '12:18',
+    unread: 2,
+  ),
+  Thread(
+    'Aziz Tursunov',
+    "O'qituvchi · Ingliz",
+    'Yangi guruh ochsak?',
+    '11:05',
+    unread: 1,
+    online: true,
+  ),
+  Thread(
+    "Qabul bo'limi",
+    'Guruh · 8 a\'zo',
+    'Bugun 6 ta yangi lid',
+    'Du',
+    unread: 3,
+    isGroup: true,
+  ),
 ];
 
 // CEO (Sardor) talks to branch managers, finance and the board.
 const List<Thread> kThreadsCeo = [
-  Thread("Dilnoza Yo'ldosheva", 'Menejer · Yunusobod', 'Oylik hisobot tayyor', '14:42', online: true),
-  Thread('Filial menejerlari', "Guruh · 4 a'zo", 'Siz: Reyting yangilandi', '13:20', isGroup: true, unread: 1),
-  Thread('Jamshid Qodirov', 'Bosh auditor · Nazorat', "Sebzor bo'yicha signal bor", '12:18', unread: 2),
-  Thread('Aziz Karimov', 'Moliya direktori', 'Byudjet tasdiqlansinmi?', '11:05', online: true),
-  Thread('Kengash', "Guruh · 6 a'zo", 'Keyingi chorak rejasi', 'Du', unread: 3, isGroup: true),
+  Thread(
+    "Dilnoza Yo'ldosheva",
+    'Menejer · Yunusobod',
+    'Oylik hisobot tayyor',
+    '14:42',
+    online: true,
+  ),
+  Thread(
+    'Filial menejerlari',
+    "Guruh · 4 a'zo",
+    'Siz: Reyting yangilandi',
+    '13:20',
+    isGroup: true,
+    unread: 1,
+  ),
+  Thread(
+    'Jamshid Qodirov',
+    'Bosh auditor · Nazorat',
+    "Sebzor bo'yicha signal bor",
+    '12:18',
+    unread: 2,
+  ),
+  Thread(
+    'Aziz Karimov',
+    'Moliya direktori',
+    'Byudjet tasdiqlansinmi?',
+    '11:05',
+    online: true,
+  ),
+  Thread(
+    'Kengash',
+    "Guruh · 6 a'zo",
+    'Keyingi chorak rejasi',
+    'Du',
+    unread: 3,
+    isGroup: true,
+  ),
 ];
 
 // Audit (Jamshid) talks to the CEO, security, legal and branch managers under review.
 const List<Thread> kThreadsAudit = [
-  Thread('Sardor Rashidov', 'CEO · Boshqaruv', 'Hisobotni kutaman', '15:10', unread: 1),
-  Thread("Xavfsizlik bo'limi", "Guruh · 5 a'zo", 'Kamera loglari yuborildi', '13:48', isGroup: true, online: true),
-  Thread('Sebzor menejeri', 'Filial · Sebzor', 'Kvitansiyalar tayyor', '12:30', unread: 2),
-  Thread("Yuridik bo'lim", "Guruh · 3 a'zo", "Hujjatlar ko'rib chiqildi", '10:15', isGroup: true),
+  Thread(
+    'Sardor Rashidov',
+    'CEO · Boshqaruv',
+    'Hisobotni kutaman',
+    '15:10',
+    unread: 1,
+  ),
+  Thread(
+    "Xavfsizlik bo'limi",
+    "Guruh · 5 a'zo",
+    'Kamera loglari yuborildi',
+    '13:48',
+    isGroup: true,
+    online: true,
+  ),
+  Thread(
+    'Sebzor menejeri',
+    'Filial · Sebzor',
+    'Kvitansiyalar tayyor',
+    '12:30',
+    unread: 2,
+  ),
+  Thread(
+    "Yuridik bo'lim",
+    "Guruh · 3 a'zo",
+    "Hujjatlar ko'rib chiqildi",
+    '10:15',
+    isGroup: true,
+  ),
   Thread('Mirobod menejeri', 'Filial · Mirobod', 'Karta tushuntirishi', 'Du'),
 ];
 
@@ -462,20 +713,55 @@ const List<Branch> kBranchesManager = [
 /// CEO ledger — branch-level daily flows, larger scale.
 const List<LedgerEntry> kLedgerCeo = [
   LedgerEntry(
-      id: 'L-9001', title: 'Yunusobod · kunlik tushum', who: 'Filial', amount: 11400000,
-      inflow: true, kind: "To'lov", channel: 'Payme', time: '09:40'),
+    id: 'L-9001',
+    title: 'Yunusobod · kunlik tushum',
+    who: 'Filial',
+    amount: 11400000,
+    inflow: true,
+    kind: "To'lov",
+    channel: 'Payme',
+    time: '09:40',
+  ),
   LedgerEntry(
-      id: 'L-9000', title: 'Chilonzor · kunlik tushum', who: 'Filial', amount: 9800000,
-      inflow: true, kind: "To'lov", channel: 'Click', time: '09:20'),
+    id: 'L-9000',
+    title: 'Chilonzor · kunlik tushum',
+    who: 'Filial',
+    amount: 9800000,
+    inflow: true,
+    kind: "To'lov",
+    channel: 'Click',
+    time: '09:20',
+  ),
   LedgerEntry(
-      id: 'L-8999', title: 'Marketing · Instagram', who: 'SMM', amount: 6500000,
-      inflow: false, kind: 'Xarajat', channel: 'Tizim', time: 'Kecha 18:10'),
+    id: 'L-8999',
+    title: 'Marketing · Instagram',
+    who: 'SMM',
+    amount: 6500000,
+    inflow: false,
+    kind: 'Xarajat',
+    channel: 'Tizim',
+    time: 'Kecha 18:10',
+  ),
   LedgerEntry(
-      id: 'L-8998', title: 'Mirobod · ijara', who: 'Bino', amount: 18000000,
-      inflow: false, kind: 'Ijara', channel: 'Tizim', time: 'Kecha 15:00'),
+    id: 'L-8998',
+    title: 'Mirobod · ijara',
+    who: 'Bino',
+    amount: 18000000,
+    inflow: false,
+    kind: 'Ijara',
+    channel: 'Tizim',
+    time: 'Kecha 15:00',
+  ),
   LedgerEntry(
-      id: 'L-8997', title: 'Sebzor · kunlik tushum', who: 'Filial', amount: 5200000,
-      inflow: true, kind: "To'lov", channel: 'Naqd', time: 'Kecha 11:30'),
+    id: 'L-8997',
+    title: 'Sebzor · kunlik tushum',
+    who: 'Filial',
+    amount: 5200000,
+    inflow: true,
+    kind: "To'lov",
+    channel: 'Naqd',
+    time: 'Kecha 11:30',
+  ),
 ];
 
 /// Headline numbers for the dashboard, per console.
@@ -484,31 +770,41 @@ class DashStats {
   final String students;
   final num debt;
   final String aiQuote;
-  const DashStats(
-      {required this.revenue, required this.students, required this.debt, required this.aiQuote});
+  const DashStats({
+    required this.revenue,
+    required this.students,
+    required this.debt,
+    required this.aiQuote,
+  });
 }
 
 const Map<SfRole, DashStats> kDashStats = {
   SfRole.ceo: DashStats(
-      revenue: 1284000000,
-      students: '1 842',
-      debt: 84000000,
-      aiQuote: 'Sebzorda churn 6.2% — 2x yuqori. Tekshiring.'),
+    revenue: 1284000000,
+    students: '1 842',
+    debt: 84000000,
+    aiQuote: 'Sebzorda churn 6.2% — 2x yuqori. Tekshiring.',
+  ),
   SfRole.manager: DashStats(
-      revenue: 342000000,
-      students: '512',
-      debt: 22400000,
-      aiQuote: '38 oila qarzdor. 12 tasi 30 kundan oshgan.'),
+    revenue: 342000000,
+    students: '512',
+    debt: 22400000,
+    aiQuote: '38 oila qarzdor. 12 tasi 30 kundan oshgan.',
+  ),
   SfRole.audit: DashStats(revenue: 0, students: '0', debt: 0, aiQuote: ''),
 };
 
 // ── Per-role selectors ──────────────────────────────────────────────────
-List<Student> studentsFor(SfRole r) => r == SfRole.manager ? kStudentsManager : kStudentsCeo;
-List<Branch> branchesFor(SfRole r) => r == SfRole.manager ? kBranchesManager : kBranches;
-List<Approval> approvalsFor(SfRole r) => r == SfRole.manager ? kApprovals : const <Approval>[];
-List<LedgerEntry> ledgerFor(SfRole r) => r == SfRole.ceo ? kLedgerCeo : kLedgerSeed;
+List<Student> studentsFor(SfRole r) =>
+    r == SfRole.manager ? kStudentsManager : kStudentsCeo;
+List<Branch> branchesFor(SfRole r) =>
+    r == SfRole.manager ? kBranchesManager : kBranches;
+List<Approval> approvalsFor(SfRole r) =>
+    r == SfRole.manager ? kApprovals : const <Approval>[];
+List<LedgerEntry> ledgerFor(SfRole r) =>
+    r == SfRole.ceo ? kLedgerCeo : kLedgerSeed;
 List<Thread> threadsFor(SfRole r) => switch (r) {
-      SfRole.ceo => kThreadsCeo,
-      SfRole.manager => kThreads,
-      SfRole.audit => kThreadsAudit,
-    };
+  SfRole.ceo => kThreadsCeo,
+  SfRole.manager => kThreads,
+  SfRole.audit => kThreadsAudit,
+};

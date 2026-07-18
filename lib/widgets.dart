@@ -33,21 +33,23 @@ class _SfTapState extends State<SfTap> {
 
 /// Smooth fade + lift page transition for pushed routes.
 Route<T> sfPageRoute<T>(Widget page) => PageRouteBuilder<T>(
-      transitionDuration: const Duration(milliseconds: 380),
-      reverseTransitionDuration: const Duration(milliseconds: 260),
-      pageBuilder: (_, _, _) => page,
-      transitionsBuilder: (_, anim, _, child) {
-        final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-        return FadeTransition(
-          opacity: curved,
-          child: SlideTransition(
-            position: Tween<Offset>(begin: const Offset(0, 0.045), end: Offset.zero)
-                .animate(curved),
-            child: child,
-          ),
-        );
-      },
+  transitionDuration: const Duration(milliseconds: 380),
+  reverseTransitionDuration: const Duration(milliseconds: 260),
+  pageBuilder: (_, _, _) => page,
+  transitionsBuilder: (_, anim, _, child) {
+    final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.045),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      ),
     );
+  },
+);
 
 /// Each of the three console users gets a unique branded avatar (gradient +
 /// white initials) so they're recognisable at a glance everywhere they appear.
@@ -100,12 +102,19 @@ class SfAvatar extends StatelessWidget {
   /// When set, overrides the name-derived avatar — used for the logged-in user
   /// after they pick a custom photo or badge in the avatar picker.
   final AvatarChoice? choice;
-  const SfAvatar({super.key, required this.name, this.size = 34, this.color, this.choice});
+  const SfAvatar({
+    super.key,
+    required this.name,
+    this.size = 34,
+    this.color,
+    this.choice,
+  });
 
   String get _initials {
     final parts = name.trim().split(RegExp(r'\s+'));
     if (parts.length == 1) return parts.first.characters.first.toUpperCase();
-    return (parts[0].characters.first + parts[1].characters.first).toUpperCase();
+    return (parts[0].characters.first + parts[1].characters.first)
+        .toUpperCase();
   }
 
   /// Render a [photo] / gradient+emoji avatar at [size].
@@ -117,16 +126,36 @@ class SfAvatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        gradient: LinearGradient(colors: grad, begin: Alignment.topLeft, end: Alignment.bottomRight),
+        gradient: LinearGradient(
+          colors: grad,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(size * 0.3),
         boxShadow: [
-          BoxShadow(color: grad.last.withValues(alpha: 0.32), blurRadius: size * 0.2, offset: Offset(0, size * 0.07)),
+          BoxShadow(
+            color: grad.last.withValues(alpha: 0.32),
+            blurRadius: size * 0.2,
+            offset: Offset(0, size * 0.07),
+          ),
         ],
       ),
       child: ch.photo != null
-          ? Image.asset(ch.photo!, width: size, height: size, fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Text(_initials,
-                  style: TextStyle(fontFamily: SfType.ui, fontSize: size * 0.4, fontWeight: FontWeight.w800, color: Colors.white)))
+          ? Image.asset(
+              ch.photo!,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Text(
+                _initials,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: size * 0.4,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            )
           : Text(ch.emoji ?? _initials, style: TextStyle(fontSize: size * 0.5)),
     );
   }
@@ -144,13 +173,17 @@ class SfAvatar extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           gradient: LinearGradient(
-              colors: grad, begin: Alignment.topLeft, end: Alignment.bottomRight),
+            colors: grad,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(size * 0.3),
           boxShadow: [
             BoxShadow(
-                color: grad.last.withValues(alpha: 0.32),
-                blurRadius: size * 0.2,
-                offset: Offset(0, size * 0.07)),
+              color: grad.last.withValues(alpha: 0.32),
+              blurRadius: size * 0.2,
+              offset: Offset(0, size * 0.07),
+            ),
           ],
         ),
         alignment: Alignment.center,
@@ -198,7 +231,13 @@ class SfAvatar extends StatelessWidget {
       );
     }
     // Everyone else: soft tinted initials, colour derived from the name.
-    final palette = [c.primary, c.accent, c.success, const Color(0xFF7A4A82), const Color(0xFF2A3D8F)];
+    final palette = [
+      c.primary,
+      c.accent,
+      c.success,
+      const Color(0xFF7A4A82),
+      const Color(0xFF2A3D8F),
+    ];
     final hash = name.codeUnits.fold<int>(0, (a, b) => a + b);
     final bg = color ?? palette[hash % palette.length];
     return Container(
@@ -232,48 +271,98 @@ class SfKpi extends StatelessWidget {
   final List<double>? spark;
   final String? sub;
   final IconData? icon;
-  const SfKpi({super.key, required this.label, required this.value, this.color, this.trend, this.spark, this.sub, this.icon});
+  const SfKpi({
+    super.key,
+    required this.label,
+    required this.value,
+    this.color,
+    this.trend,
+    this.spark,
+    this.sub,
+    this.icon,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.border), borderRadius: BorderRadius.circular(13)),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(13),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(children: [
-            Expanded(
-              child: Text(label.toUpperCase(),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontFamily: SfType.ui, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.3, color: c.muted)),
-            ),
-            if (icon != null) Icon(icon, size: 15, color: color ?? c.muted2),
-          ]),
-          const SizedBox(height: 6),
-          Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(value,
-                    style: TextStyle(fontFamily: SfType.mono, fontSize: 21, fontWeight: FontWeight.w700, height: 1, color: color ?? c.ink)),
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3,
+                    color: c.muted,
+                  ),
+                ),
               ),
-            ),
-            if (trend != null) ...[
-              const SizedBox(width: 6),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text('${trend!.up ? '↑' : '↓'}${trend!.v}',
-                    style: TextStyle(fontFamily: SfType.ui, fontSize: 10, fontWeight: FontWeight.w700, color: trend!.up ? c.success : c.danger)),
-              ),
+              if (icon != null) Icon(icon, size: 15, color: color ?? c.muted2),
             ],
-          ]),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      fontFamily: SfType.mono,
+                      fontSize: 21,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
+                      color: color ?? c.ink,
+                    ),
+                  ),
+                ),
+              ),
+              if (trend != null) ...[
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    '${trend!.up ? '↑' : '↓'}${trend!.v}',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: trend!.up ? c.success : c.danger,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
           if (sub != null) ...[
             const SizedBox(height: 4),
-            Text(sub!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontFamily: SfType.ui, fontSize: 9.5, color: c.muted)),
+            Text(
+              sub!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 9.5,
+                color: c.muted,
+              ),
+            ),
           ] else if (spark != null) ...[
             const SizedBox(height: 6),
             Sparkline(data: spark!, color: color ?? c.primary, height: 22),
@@ -286,14 +375,14 @@ class SfKpi extends StatelessWidget {
 
 /// 2-column KPI grid for the ported pages.
 Widget sfKpiGrid(List<Widget> tiles, {double ratio = 1.6}) => GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 9,
-      crossAxisSpacing: 9,
-      childAspectRatio: ratio,
-      children: tiles,
-    );
+  crossAxisCount: 2,
+  shrinkWrap: true,
+  physics: const NeverScrollableScrollPhysics(),
+  mainAxisSpacing: 9,
+  crossAxisSpacing: 9,
+  childAspectRatio: ratio,
+  children: tiles,
+);
 
 enum PillTone { success, danger, warn, primary, accent, neutral }
 
@@ -301,7 +390,12 @@ class Pill extends StatelessWidget {
   final String text;
   final PillTone tone;
   final bool dot;
-  const Pill(this.text, {super.key, this.tone = PillTone.neutral, this.dot = false});
+  const Pill(
+    this.text, {
+    super.key,
+    this.tone = PillTone.neutral,
+    this.dot = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -333,20 +427,43 @@ class Pill extends StatelessWidget {
         bg = c.surface2;
         break;
     }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (dot) ...[
-            Container(width: 6, height: 6, decoration: BoxDecoration(color: fg, shape: BoxShape.circle)),
-            const SizedBox(width: 5),
+    // Statuses are localised and can be much longer than their Uzbek source.
+    // Keep a pill compact on a phone rather than letting it squeeze a sibling
+    // label into a vertical word or trigger a RenderFlex overflow.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 132),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (dot) ...[
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 5),
+            ],
+            Flexible(
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  color: fg,
+                ),
+              ),
+            ),
           ],
-          Text(text,
-              style: TextStyle(
-                  fontFamily: SfType.ui, fontSize: 10.5, fontWeight: FontWeight.w700, color: fg)),
-        ],
+        ),
       ),
     );
   }
@@ -371,13 +488,16 @@ class SfAiBadge extends StatelessWidget {
         children: [
           SfStar(size: 11, color: c.ai),
           const SizedBox(width: 5),
-          Text(text,
-              style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.04,
-                  color: c.ai)),
+          Text(
+            text,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.04,
+              color: c.ai,
+            ),
+          ),
         ],
       ),
     );
@@ -401,8 +521,16 @@ class _StarPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
     const pts = [
-      [50, 0], [61, 35], [98, 35], [68, 57], [79, 91],
-      [50, 70], [21, 91], [32, 57], [2, 35], [39, 35],
+      [50, 0],
+      [61, 35],
+      [98, 35],
+      [68, 57],
+      [79, 91],
+      [50, 70],
+      [21, 91],
+      [32, 57],
+      [2, 35],
+      [39, 35],
     ];
     final path = Path();
     for (int i = 0; i < pts.length; i++) {
@@ -427,10 +555,17 @@ class Sparkline extends StatelessWidget {
   final List<double> data;
   final Color color;
   final double height;
-  const Sparkline({super.key, required this.data, required this.color, this.height = 24});
+  const Sparkline({
+    super.key,
+    required this.data,
+    required this.color,
+    this.height = 24,
+  });
   @override
-  Widget build(BuildContext context) =>
-      CustomPaint(size: Size(double.infinity, height), painter: _SparkPainter(data, color));
+  Widget build(BuildContext context) => CustomPaint(
+    size: Size(double.infinity, height),
+    painter: _SparkPainter(data, color),
+  );
 }
 
 class _SparkPainter extends CustomPainter {
@@ -443,9 +578,9 @@ class _SparkPainter extends CustomPainter {
     final lo = data.reduce(math.min), hi = data.reduce(math.max);
     final range = (hi - lo) == 0 ? 1 : (hi - lo);
     Offset pt(int i) => Offset(
-          i / (data.length - 1) * size.width,
-          size.height - (data[i] - lo) / range * size.height,
-        );
+      i / (data.length - 1) * size.width,
+      size.height - (data[i] - lo) / range * size.height,
+    );
     final line = Path()..moveTo(pt(0).dx, pt(0).dy);
     for (int i = 1; i < data.length; i++) {
       line.lineTo(pt(i).dx, pt(i).dy);
@@ -462,7 +597,8 @@ class _SparkPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_SparkPainter old) => old.data != data || old.color != color;
+  bool shouldRepaint(_SparkPainter old) =>
+      old.data != data || old.color != color;
 }
 
 class AreaChart extends StatelessWidget {
@@ -473,7 +609,13 @@ class AreaChart extends StatelessWidget {
   /// Optional x-axis labels (e.g. months); when set, a dot is drawn at every
   /// point and the labels are rendered along the bottom (web "Daromad" chart).
   final List<String>? labels;
-  const AreaChart({super.key, required this.data, required this.color, this.height = 130, this.labels});
+  const AreaChart({
+    super.key,
+    required this.data,
+    required this.color,
+    this.height = 130,
+    this.labels,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -491,7 +633,14 @@ class _AreaPainter extends CustomPainter {
   final List<String>? labels;
   final Color labelColor;
   final Color dotFill;
-  _AreaPainter(this.data, this.color, this.grid, this.labels, this.labelColor, this.dotFill);
+  _AreaPainter(
+    this.data,
+    this.color,
+    this.grid,
+    this.labels,
+    this.labelColor,
+    this.dotFill,
+  );
   @override
   void paint(Canvas canvas, Size size) {
     if (data.length < 2) return;
@@ -501,9 +650,9 @@ class _AreaPainter extends CustomPainter {
     final lo = data.reduce(math.min) * 0.96, hi = data.reduce(math.max);
     final range = (hi - lo) == 0 ? 1 : (hi - lo);
     Offset pt(int i) => Offset(
-          padX + i / (data.length - 1) * (size.width - padX * 2),
-          chartH - (data[i] - lo) / range * (chartH - 6) - 3,
-        );
+      padX + i / (data.length - 1) * (size.width - padX * 2),
+      chartH - (data[i] - lo) / range * (chartH - 6) - 3,
+    );
 
     // baseline grid
     final gridPaint = Paint()
@@ -555,12 +704,20 @@ class _AreaPainter extends CustomPainter {
       for (int i = 0; i < labels!.length && i < data.length; i++) {
         final tp = TextPainter(
           text: TextSpan(
-              text: labels![i],
-              style: TextStyle(
-                  fontFamily: SfType.mono, fontSize: 9, color: labelColor, fontWeight: FontWeight.w600)),
+            text: labels![i],
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 9,
+              color: labelColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
           textDirection: TextDirection.ltr,
         )..layout();
-        tp.paint(canvas, Offset(pt(i).dx - tp.width / 2, size.height - tp.height));
+        tp.paint(
+          canvas,
+          Offset(pt(i).dx - tp.width / 2, size.height - tp.height),
+        );
       }
     } else {
       // end dot only
@@ -569,7 +726,8 @@ class _AreaPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_AreaPainter old) => old.data != data || old.color != color || old.labels != labels;
+  bool shouldRepaint(_AreaPainter old) =>
+      old.data != data || old.color != color || old.labels != labels;
 }
 
 class DonutSegment {
@@ -618,10 +776,22 @@ class _DonutPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final total = segments.fold<double>(0, (a, s) => a + s.value);
-    final rect = Rect.fromLTWH(thickness / 2, thickness / 2,
-        size.width - thickness, size.height - thickness);
-    canvas.drawArc(rect, 0, math.pi * 2,
-        false, Paint()..color = track..strokeWidth = thickness..style = PaintingStyle.stroke);
+    final rect = Rect.fromLTWH(
+      thickness / 2,
+      thickness / 2,
+      size.width - thickness,
+      size.height - thickness,
+    );
+    canvas.drawArc(
+      rect,
+      0,
+      math.pi * 2,
+      false,
+      Paint()
+        ..color = track
+        ..strokeWidth = thickness
+        ..style = PaintingStyle.stroke,
+    );
     double start = -math.pi / 2;
     for (final s in segments) {
       final sweep = (s.value / total) * math.pi * 2;
@@ -656,7 +826,14 @@ class HBarRow {
   /// When set, the row becomes tappable (shows a chevron) — used to drill into
   /// a branch's detail from a ranking/compliance chart.
   final VoidCallback? onTap;
-  const HBarRow(this.label, this.value, this.display, this.color, {this.mark = false, this.onTap});
+  const HBarRow(
+    this.label,
+    this.value,
+    this.display,
+    this.color, {
+    this.mark = false,
+    this.onTap,
+  });
 }
 
 class HBars extends StatelessWidget {
@@ -682,9 +859,15 @@ class HBars extends StatelessWidget {
                   if (ranked) ...[
                     SizedBox(
                       width: 14,
-                      child: Text('${i + 1}',
-                          style: TextStyle(
-                              fontFamily: SfType.mono, fontSize: 11, fontWeight: FontWeight.w700, color: c.muted2)),
+                      child: Text(
+                        '${i + 1}',
+                        style: TextStyle(
+                          fontFamily: SfType.mono,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: c.muted2,
+                        ),
+                      ),
                     ),
                     const SizedBox(width: 6),
                   ],
@@ -692,21 +875,29 @@ class HBars extends StatelessWidget {
                     Container(
                       width: 22,
                       height: 22,
-                      decoration: BoxDecoration(color: rows[i].color, borderRadius: BorderRadius.circular(7)),
-                      child: const Center(child: SfStar(size: 11, color: Color(0xFFFFFCF5))),
+                      decoration: BoxDecoration(
+                        color: rows[i].color,
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: const Center(
+                        child: SfStar(size: 11, color: Color(0xFFFFFCF5)),
+                      ),
                     ),
                     const SizedBox(width: 8),
                   ],
                   SizedBox(
                     width: ranked ? 70 : 64,
-                    child: Text(rows[i].label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontFamily: SfType.ui,
-                            fontSize: 11.5,
-                            fontWeight: ranked ? FontWeight.w600 : FontWeight.w400,
-                            color: ranked ? c.ink : c.ink2)),
+                    child: Text(
+                      rows[i].label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 11.5,
+                        fontWeight: ranked ? FontWeight.w600 : FontWeight.w400,
+                        color: ranked ? c.ink : c.ink2,
+                      ),
+                    ),
                   ),
                   Expanded(
                     child: ClipRRect(
@@ -722,18 +913,25 @@ class HBars extends StatelessWidget {
                   const SizedBox(width: 10),
                   SizedBox(
                     width: 62,
-                    child: Text(rows[i].display,
-                        textAlign: TextAlign.right,
-                        style: TextStyle(
-                            fontFamily: SfType.mono,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            color: c.ink)),
+                    child: Text(
+                      rows[i].display,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontFamily: SfType.mono,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: c.ink,
+                      ),
+                    ),
                   ),
                   if (rows[i].onTap != null)
                     Padding(
                       padding: const EdgeInsets.only(left: 4),
-                      child: Icon(Icons.arrow_forward_ios_rounded, size: 11, color: c.muted2),
+                      child: Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 11,
+                        color: c.muted2,
+                      ),
                     ),
                 ],
               ),
@@ -788,18 +986,27 @@ class SfCardHeader extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(title,
-              style: TextStyle(
-                  fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w700, color: c.ink)),
+          Text(
+            title,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: c.ink,
+            ),
+          ),
           if (link != null)
             GestureDetector(
               onTap: onTap,
-              child: Text(link!,
-                  style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: c.primary)),
+              child: Text(
+                link!,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: c.primary,
+                ),
+              ),
             ),
         ],
       ),
@@ -812,7 +1019,12 @@ class SfHead extends StatelessWidget {
   final String eyebrow;
   final String title;
   final String? sub;
-  const SfHead({super.key, required this.eyebrow, required this.title, this.sub});
+  const SfHead({
+    super.key,
+    required this.eyebrow,
+    required this.title,
+    this.sub,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -821,24 +1033,37 @@ class SfHead extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(eyebrow.toUpperCase(),
-              style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.9,
-                  color: c.muted)),
+          Text(
+            eyebrow.toUpperCase(),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.9,
+              color: c.muted,
+            ),
+          ),
           const SizedBox(height: 3),
-          Text(title,
-              style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 26,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.7,
-                  color: c.ink)),
+          Text(
+            title,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.7,
+              color: c.ink,
+            ),
+          ),
           if (sub != null) ...[
             const SizedBox(height: 2),
-            Text(sub!, style: TextStyle(fontFamily: SfType.ui, fontSize: 12, color: c.muted)),
+            Text(
+              sub!,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12,
+                color: c.muted,
+              ),
+            ),
           ],
         ],
       ),
@@ -882,26 +1107,30 @@ class _SfChipsState extends State<SfChips> {
                 color: ai
                     ? c.aiBg.first
                     : on
-                        ? c.ink
-                        : Colors.transparent,
+                    ? c.ink
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
-                    color: ai
-                        ? c.aiBorder
-                        : on
-                            ? Colors.transparent
-                            : c.border),
+                  color: ai
+                      ? c.aiBorder
+                      : on
+                      ? Colors.transparent
+                      : c.border,
+                ),
               ),
-              child: Text(widget.chips[i],
-                  style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: ai
-                          ? c.ai
-                          : on
-                              ? c.bg
-                              : c.muted)),
+              child: Text(
+                widget.chips[i],
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: ai
+                      ? c.ai
+                      : on
+                      ? c.bg
+                      : c.muted,
+                ),
+              ),
             ),
           );
         },
@@ -916,7 +1145,13 @@ class SfAiCard extends StatelessWidget {
   final String quote;
   final Widget? trailing;
   final VoidCallback? onTap;
-  const SfAiCard({super.key, required this.badge, required this.quote, this.trailing, this.onTap});
+  const SfAiCard({
+    super.key,
+    required this.badge,
+    required this.quote,
+    this.trailing,
+    this.onTap,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -942,13 +1177,16 @@ class SfAiCard extends StatelessWidget {
               children: [SfAiBadge(badge), ?trailing],
             ),
             const SizedBox(height: 8),
-            Text('“$quote”',
-                style: TextStyle(
-                    fontFamily: SfType.display,
-                    fontStyle: FontStyle.italic,
-                    fontSize: 15,
-                    height: 1.35,
-                    color: c.ink)),
+            Text(
+              '“$quote”',
+              style: TextStyle(
+                fontFamily: SfType.display,
+                fontStyle: FontStyle.italic,
+                fontSize: 15,
+                height: 1.35,
+                color: c.ink,
+              ),
+            ),
           ],
         ),
       ),
@@ -969,11 +1207,34 @@ class LegendRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 3.5),
       child: Row(
         children: [
-          Container(width: 9, height: 9, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3))),
+          Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
           const SizedBox(width: 7),
-          Expanded(child: Text(label, style: TextStyle(fontFamily: SfType.ui, fontSize: 11.5, color: c.ink2))),
-          Text(value,
-              style: TextStyle(fontFamily: SfType.mono, fontSize: 11.5, fontWeight: FontWeight.w700, color: c.ink)),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 11.5,
+                color: c.ink2,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: c.ink,
+            ),
+          ),
         ],
       ),
     );
@@ -1010,8 +1271,15 @@ class SfScaffold extends StatelessWidget {
           scrolledUnderElevation: 0,
           iconTheme: IconThemeData(color: c.ink),
           shape: Border(bottom: BorderSide(color: c.border)),
-          title: Text(title,
-              style: TextStyle(fontFamily: SfType.ui, fontSize: 16, fontWeight: FontWeight.w800, color: c.ink)),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
           actions: actions,
         ),
         body: body,
@@ -1032,15 +1300,33 @@ class SfStatTile extends StatelessWidget {
     final c = SfTheme.of(context);
     return Container(
       padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(color: c.surface2, borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+        color: c.surface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label.toUpperCase(),
-              style: TextStyle(
-                  fontFamily: SfType.ui, fontSize: 9.5, fontWeight: FontWeight.w700, letterSpacing: 0.4, color: c.muted)),
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+              color: c.muted,
+            ),
+          ),
           const SizedBox(height: 3),
-          Text(value, style: TextStyle(fontFamily: SfType.mono, fontSize: 17, fontWeight: FontWeight.w700, color: color)),
+          Text(
+            value,
+            style: TextStyle(
+              fontFamily: SfType.mono,
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
         ],
       ),
     );
@@ -1052,7 +1338,12 @@ class SfSelectChips extends StatelessWidget {
   final List<String> items;
   final int selected;
   final ValueChanged<int> onSelect;
-  const SfSelectChips({super.key, required this.items, required this.selected, required this.onSelect});
+  const SfSelectChips({
+    super.key,
+    required this.items,
+    required this.selected,
+    required this.onSelect,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -1074,9 +1365,15 @@ class SfSelectChips extends StatelessWidget {
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(color: on ? Colors.transparent : c.border),
               ),
-              child: Text(items[i],
-                  style: TextStyle(
-                      fontFamily: SfType.ui, fontSize: 12, fontWeight: FontWeight.w600, color: on ? c.bg : c.muted)),
+              child: Text(
+                items[i],
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: on ? c.bg : c.muted,
+                ),
+              ),
             ),
           );
         },
@@ -1091,7 +1388,13 @@ class SfButton extends StatelessWidget {
   final String label;
   final bool primary;
   final VoidCallback onTap;
-  const SfButton({super.key, this.icon, required this.label, required this.primary, required this.onTap});
+  const SfButton({
+    super.key,
+    this.icon,
+    required this.label,
+    required this.primary,
+    required this.onTap,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -1120,14 +1423,17 @@ class SfButton extends StatelessWidget {
                 const SizedBox(width: 7),
               ],
               Flexible(
-                child: Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontFamily: SfType.ui,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: primary ? Colors.white : c.ink2)),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: primary ? Colors.white : c.ink2,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1141,12 +1447,29 @@ class SfButton extends StatelessWidget {
 void sfSnack(BuildContext context, String msg, {Color? bg}) {
   ScaffoldMessenger.of(context)
     ..clearSnackBars()
-    ..showSnackBar(SnackBar(
-      duration: const Duration(seconds: 2),
-      behavior: SnackBarBehavior.floating,
-      backgroundColor: bg ?? const Color(0xFF3A332A),
-      content: Text(msg, style: TextStyle(fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w600)),
-    ));
+    ..showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        // Notifications are intentionally shown at the top of the mobile view,
+        // where they do not hide the composer or bottom navigation.
+        margin: EdgeInsets.fromLTRB(
+          12,
+          0,
+          12,
+          MediaQuery.of(context).size.height - 92,
+        ),
+        backgroundColor: bg ?? const Color(0xFF3A332A),
+        content: Text(
+          msg,
+          style: TextStyle(
+            fontFamily: SfType.ui,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
 }
 
 PillTone toneFromString(String s) {

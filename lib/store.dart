@@ -1,4 +1,6 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart'
+    show ChangeNotifier, DateTimeRange, IconData, Icons;
+import 'package:flutter/widgets.dart' show BuildContext, InheritedNotifier;
 import 'data.dart';
 import 'widgets.dart';
 
@@ -37,6 +39,77 @@ class ChatThread {
   ChatThread(this.meta, this.messages);
 }
 
+/// A group created locally before a backend is connected. Seed groups are
+/// still derived from student data, while this model keeps newly created empty
+/// groups visible in the mobile UI as well.
+class ManagedGroup {
+  final String name;
+  final String branch;
+  final String teacher;
+  final String schedule;
+  final String level;
+  final String status; // active | paused | closed
+  const ManagedGroup({
+    required this.name,
+    required this.branch,
+    required this.teacher,
+    required this.schedule,
+    required this.level,
+    this.status = 'active',
+  });
+}
+
+/// Minimal staff record used by the offline mobile preview. The API adapter
+/// can map its own DTO to this shape later without changing the form UI.
+class StaffMember {
+  final String firstName;
+  final String lastName;
+  final String username;
+  final String phone;
+  final String? email;
+  final String branch;
+  final String department;
+  final String subject;
+  final String qualification;
+  final String salaryType;
+  final String rate;
+  final String gender;
+  final String hireDate;
+  const StaffMember({
+    required this.firstName,
+    required this.lastName,
+    required this.username,
+    required this.phone,
+    required this.email,
+    required this.branch,
+    required this.department,
+    required this.subject,
+    required this.qualification,
+    required this.salaryType,
+    required this.rate,
+    required this.gender,
+    required this.hireDate,
+  });
+
+  String get fullName => '$firstName $lastName'.trim();
+}
+
+/// Human-readable audit trail for the History page and dashboard preview.
+class ActivityEvent {
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String time;
+  final String kind;
+  const ActivityEvent({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.time,
+    required this.kind,
+  });
+}
+
 /// One saved AI conversation — its title (from the first question) and turns.
 class AiConversation {
   String title;
@@ -58,6 +131,163 @@ class AppStore extends ChangeNotifier {
   final List<Anomaly> anomalies;
   final List<AuditCase> cases;
   final List<ChatThread> threads;
+
+  /// Runtime-created objects. They deliberately live in the store so a form
+  /// can update every related screen in this offline preview immediately.
+  final List<ManagedGroup> extraGroups = [];
+  final List<StaffMember> staff = [
+    const StaffMember(
+      firstName: 'Nigora',
+      lastName: 'Karimova',
+      username: 'n.karimova',
+      phone: '+998 90 123-45-67',
+      email: 'nigora@starforge.uz',
+      branch: 'Yunusobod',
+      department: 'Matematika',
+      subject: 'Algebra',
+      qualification: 'Senior teacher',
+      salaryType: 'Monthly',
+      rate: '8 400 000',
+      gender: 'Female',
+      hireDate: '12.08.2021',
+    ),
+    const StaffMember(
+      firstName: 'Aziz',
+      lastName: 'Tursunov',
+      username: 'a.tursunov',
+      phone: '+998 91 223-10-20',
+      email: null,
+      branch: 'Chilonzor',
+      department: 'English',
+      subject: 'IELTS',
+      qualification: 'Teacher',
+      salaryType: 'Monthly',
+      rate: '7 800 000',
+      gender: 'Male',
+      hireDate: '03.02.2022',
+    ),
+    const StaffMember(
+      firstName: 'Gulnora',
+      lastName: 'Saidova',
+      username: 'g.saidova',
+      phone: '+998 93 555-22-11',
+      email: null,
+      branch: 'Mirobod',
+      department: 'Reception',
+      subject: 'Operations',
+      qualification: 'Manager',
+      salaryType: 'Monthly',
+      rate: '5 600 000',
+      gender: 'Female',
+      hireDate: '18.05.2023',
+    ),
+  ];
+  final List<ActivityEvent> activities = [
+    const ActivityEvent(
+      icon: Icons.payments_rounded,
+      title: "Yangi to'lov qabul qilindi",
+      detail: 'Yunusobod · 1 200 000 so‘m',
+      time: '2 daqiqa',
+      kind: 'payment',
+    ),
+    const ActivityEvent(
+      icon: Icons.person_add_alt_1_rounded,
+      title: "O'quvchi qo'shildi",
+      detail: 'Chilonzor · 12-sinf',
+      time: '14 daqiqa',
+      kind: 'student',
+    ),
+    const ActivityEvent(
+      icon: Icons.workspaces_rounded,
+      title: 'Guruh yangilandi',
+      detail: 'Algebra Mid · jadval o‘zgardi',
+      time: '1 soat',
+      kind: 'group',
+    ),
+    const ActivityEvent(
+      icon: Icons.flag_rounded,
+      title: 'Audit flag ochildi',
+      detail: 'Mirobod · davomat tekshiruvi',
+      time: '2 soat',
+      kind: 'audit',
+    ),
+  ];
+
+  // ── Shared CEO report context ────────────────────────────────────────
+  // The selected branch and period are deliberately store-level state rather
+  // than local widget state. This makes dashboard, report and detail pages
+  // describe the same slice of the business after the user changes a filter.
+  String selectedBranch = '__all';
+  DateTimeRange selectedRange = DateTimeRange(
+    start: DateTime(
+      DateTime.now().year,
+      DateTime.now().month - 1,
+      DateTime.now().day,
+    ),
+    end: DateTime.now(),
+  );
+
+  bool get allBranchesSelected => selectedBranch == '__all';
+  Branch? get selectedBranchData {
+    for (final branch in branches) {
+      if (branch.name == selectedBranch) return branch;
+    }
+    return null;
+  }
+
+  int get rangeDays => selectedRange.duration.inDays.abs() + 1;
+
+  bool get hasCustomReportFilters {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month - 1, now.day);
+    final selectedStart = selectedRange.start;
+    final selectedEnd = selectedRange.end;
+    return !allBranchesSelected ||
+        selectedStart.year != start.year ||
+        selectedStart.month != start.month ||
+        selectedStart.day != start.day ||
+        selectedEnd.year != now.year ||
+        selectedEnd.month != now.month ||
+        selectedEnd.day != now.day;
+  }
+
+  /// A deterministic demo multiplier. It makes the values visibly respond to
+  /// a calendar selection until the data source is connected, without claiming
+  /// to be a real historical calculation.
+  double get rangeFactor => (rangeDays / 31).clamp(0.12, 12.0);
+
+  num scopedRevenue(num allRevenue) =>
+      ((selectedBranchData?.revenue ?? allRevenue) * rangeFactor).round();
+
+  int scopedStudents(int allStudents) =>
+      selectedBranchData?.students ?? allStudents;
+
+  int scopedAttendance(int allAttendance) =>
+      selectedBranchData?.attendance ?? allAttendance;
+
+  void setBranchScope(String value) {
+    if (selectedBranch == value) return;
+    selectedBranch = value;
+    notifyListeners();
+  }
+
+  void setDateRange(DateTimeRange range) {
+    selectedRange = DateTimeRange(
+      start: DateTime(range.start.year, range.start.month, range.start.day),
+      end: DateTime(range.end.year, range.end.month, range.end.day, 23, 59, 59),
+    );
+    notifyListeners();
+  }
+
+  void resetReportFilters() {
+    selectedBranch = '__all';
+    final now = DateTime.now();
+    selectedRange = DateTimeRange(
+      start: DateTime(now.year, now.month - 1, now.day),
+      end: now,
+    );
+    notifyListeners();
+  }
 
   // ── AI assistant: multiple conversations with a history sidebar ─────────
   final List<AiConversation> conversations = [
@@ -130,9 +360,66 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void addStudent(Student student, {required String branch}) {
+    students.insert(0, student);
+    _log(
+      icon: Icons.person_add_alt_1_rounded,
+      title: "O'quvchi qo'shildi",
+      detail: '${student.name} · $branch · ${student.group}',
+      kind: 'student',
+    );
+  }
+
+  void addGroup(ManagedGroup group) {
+    extraGroups.insert(0, group);
+    _log(
+      icon: Icons.workspaces_rounded,
+      title: 'Yangi guruh yaratildi',
+      detail: '${group.name} · ${group.branch}',
+      kind: 'group',
+    );
+  }
+
+  void addStaff(StaffMember member) {
+    staff.insert(0, member);
+    _log(
+      icon: Icons.badge_rounded,
+      title: 'Xodim qo‘shildi',
+      detail: '${member.fullName} · ${member.department}',
+      kind: 'staff',
+    );
+  }
+
+  void logActivity({
+    required IconData icon,
+    required String title,
+    required String detail,
+    required String kind,
+  }) => _log(icon: icon, title: title, detail: detail, kind: kind);
+
+  void _log({
+    required IconData icon,
+    required String title,
+    required String detail,
+    required String kind,
+  }) {
+    activities.insert(
+      0,
+      ActivityEvent(
+        icon: icon,
+        title: title,
+        detail: detail,
+        time: 'Hozir',
+        kind: kind,
+      ),
+    );
+    notifyListeners();
+  }
+
   // ── Messages: pin & archive (Telegram-style) ───────────────────────────
   final Set<int> pinned = {};
   final Set<int> archived = {};
+  final Map<int, Set<int>> pinnedMessages = {};
   void togglePin(int idx) {
     pinned.contains(idx) ? pinned.remove(idx) : pinned.add(idx);
     notifyListeners();
@@ -141,6 +428,25 @@ class AppStore extends ChangeNotifier {
   void toggleArchive(int idx) {
     archived.contains(idx) ? archived.remove(idx) : archived.add(idx);
     pinned.remove(idx);
+    notifyListeners();
+  }
+
+  void deleteMessage(int threadIdx, int messageIdx) {
+    final messages = threads[threadIdx].messages;
+    if (messageIdx < 0 || messageIdx >= messages.length) return;
+    messages.removeAt(messageIdx);
+    final pins = pinnedMessages[threadIdx];
+    if (pins != null) {
+      pins.remove(messageIdx);
+      if (pins.isEmpty) pinnedMessages.remove(threadIdx);
+    }
+    notifyListeners();
+  }
+
+  void toggleMessagePin(int threadIdx, int messageIdx) {
+    final pins = pinnedMessages.putIfAbsent(threadIdx, () => <int>{});
+    pins.contains(messageIdx) ? pins.remove(messageIdx) : pins.add(messageIdx);
+    if (pins.isEmpty) pinnedMessages.remove(threadIdx);
     notifyListeners();
   }
 
