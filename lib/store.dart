@@ -92,6 +92,54 @@ class StaffMember {
   });
 
   String get fullName => '$firstName $lastName'.trim();
+
+  /// Staff records are immutable so a transfer creates a complete new record
+  /// instead of accidentally dropping HR data that is not shown in the UI.
+  StaffMember copyWith({String? department}) => StaffMember(
+    firstName: firstName,
+    lastName: lastName,
+    username: username,
+    phone: phone,
+    email: email,
+    branch: branch,
+    department: department ?? this.department,
+    subject: subject,
+    qualification: qualification,
+    salaryType: salaryType,
+    rate: rate,
+    gender: gender,
+    hireDate: hireDate,
+  );
+}
+
+/// A department is store-owned rather than page-owned. This is important: a
+/// transfer, termination, or manager appointment must remain visible after a
+/// user leaves and reopens the Department screen.
+class DepartmentRecord {
+  String name;
+  String manager;
+  String description;
+  final List<DepartmentChange> history;
+
+  DepartmentRecord({
+    required this.name,
+    required this.manager,
+    required this.description,
+    List<DepartmentChange>? history,
+  }) : history = history ?? <DepartmentChange>[];
+}
+
+class DepartmentChange {
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String time;
+  const DepartmentChange({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.time = 'Hozir',
+  });
 }
 
 /// Human-readable audit trail for the History page and dashboard preview.
@@ -135,6 +183,47 @@ class AppStore extends ChangeNotifier {
   /// Runtime-created objects. They deliberately live in the store so a form
   /// can update every related screen in this offline preview immediately.
   final List<ManagedGroup> extraGroups = [];
+  final List<DepartmentRecord> departments = [
+    DepartmentRecord(
+      name: 'Matematika',
+      manager: 'Nigora Karimova',
+      description: 'Algebra va geometriya',
+      history: [
+        const DepartmentChange(
+          icon: Icons.account_circle_rounded,
+          title: 'Rahbar tayinlandi',
+          detail: 'Nigora Karimova',
+          time: '12.08.2021',
+        ),
+      ],
+    ),
+    DepartmentRecord(
+      name: 'English',
+      manager: 'Aziz Tursunov',
+      description: 'IELTS va umumiy ingliz tili',
+      history: [
+        const DepartmentChange(
+          icon: Icons.account_circle_rounded,
+          title: 'Rahbar tayinlandi',
+          detail: 'Aziz Tursunov',
+          time: '03.02.2022',
+        ),
+      ],
+    ),
+    DepartmentRecord(
+      name: 'Reception',
+      manager: 'Gulnora Saidova',
+      description: 'Qabul va ota-onalar aloqasi',
+      history: [
+        const DepartmentChange(
+          icon: Icons.account_circle_rounded,
+          title: 'Rahbar tayinlandi',
+          detail: 'Gulnora Saidova',
+          time: '18.05.2023',
+        ),
+      ],
+    ),
+  ];
   final List<StaffMember> staff = [
     const StaffMember(
       firstName: 'Nigora',
@@ -382,12 +471,130 @@ class AppStore extends ChangeNotifier {
 
   void addStaff(StaffMember member) {
     staff.insert(0, member);
+    final department = _departmentNamed(member.department);
+    department?.history.insert(
+      0,
+      DepartmentChange(
+        icon: Icons.person_add_alt_1_rounded,
+        title: 'Xodim qo‘shildi',
+        detail: member.fullName,
+      ),
+    );
     _log(
       icon: Icons.badge_rounded,
       title: 'Xodim qo‘shildi',
       detail: '${member.fullName} · ${member.department}',
       kind: 'staff',
     );
+  }
+
+  List<StaffMember> staffForDepartment(DepartmentRecord department) => staff
+      .where((member) => member.department == department.name)
+      .toList(growable: false);
+
+  void addDepartment(DepartmentRecord department) {
+    departments.add(department);
+    _log(
+      icon: Icons.create_new_folder_rounded,
+      title: 'Yangi bo‘lim yaratildi',
+      detail: '${department.name} · ${department.manager}',
+      kind: 'staff',
+    );
+  }
+
+  /// Move an employee without losing their profile. The audit entry is added
+  /// to both the source and target departments as well as global History.
+  void transferStaff(StaffMember member, DepartmentRecord target) {
+    final index = staff.indexWhere((item) => item.username == member.username);
+    if (index < 0 || member.department == target.name) return;
+    final source = _departmentNamed(member.department);
+    staff[index] = member.copyWith(department: target.name);
+    source?.history.insert(
+      0,
+      DepartmentChange(
+        icon: Icons.arrow_outward_rounded,
+        title: 'Xodim ko‘chirildi',
+        detail: '${member.fullName} → ${target.name}',
+      ),
+    );
+    target.history.insert(
+      0,
+      DepartmentChange(
+        icon: Icons.arrow_downward_rounded,
+        title: 'Xodim qabul qilindi',
+        detail: '${member.fullName} · ${member.department}',
+      ),
+    );
+    if (source?.manager == member.fullName) source!.manager = 'Tayinlanmagan';
+    _log(
+      icon: Icons.swap_horiz_rounded,
+      title: 'Xodim bo‘limga ko‘chirildi',
+      detail: '${member.fullName} · ${member.department} → ${target.name}',
+      kind: 'staff',
+    );
+  }
+
+  void appointDepartmentManager(
+    DepartmentRecord department,
+    StaffMember member,
+  ) {
+    if (member.department != department.name) {
+      transferStaff(member, department);
+    }
+    final assigned = staff.firstWhere(
+      (item) => item.username == member.username,
+      orElse: () => member,
+    );
+    department.manager = assigned.fullName;
+    department.history.insert(
+      0,
+      DepartmentChange(
+        icon: Icons.workspace_premium_rounded,
+        title: 'Yangi rahbar tayinlandi',
+        detail: assigned.fullName,
+      ),
+    );
+    _log(
+      icon: Icons.workspace_premium_rounded,
+      title: 'Bo‘lim rahbari yangilandi',
+      detail: '${department.name} · ${assigned.fullName}',
+      kind: 'staff',
+    );
+  }
+
+  /// Ends an employee's local employment record. The action uses the store,
+  /// not a widget-local list, so it now updates every HR/Department screen.
+  void dismissStaff(StaffMember member) {
+    final index = staff.indexWhere((item) => item.username == member.username);
+    if (index < 0) return;
+    staff.removeAt(index);
+    final department = _departmentNamed(member.department);
+    if (department != null) {
+      if (department.manager == member.fullName) {
+        department.manager = 'Tayinlanmagan';
+      }
+      department.history.insert(
+        0,
+        DepartmentChange(
+          icon: Icons.person_remove_rounded,
+          title: 'Xodim ishdan bo‘shatildi',
+          detail: member.fullName,
+        ),
+      );
+    }
+    _log(
+      icon: Icons.person_remove_rounded,
+      title: 'Xodim ishdan bo‘shatildi',
+      detail: '${member.fullName} · ${member.department}',
+      kind: 'staff',
+    );
+  }
+
+  DepartmentRecord? _departmentNamed(String name) {
+    for (final department in departments) {
+      if (department.name == name) return department;
+    }
+    return null;
   }
 
   void logActivity({

@@ -4,6 +4,7 @@ import 'theme.dart';
 import 'data.dart';
 import 'settings.dart';
 import 'i18n.dart';
+import 'reference_ui.dart';
 import 'screens.dart';
 
 /// The role console: a bottom-tab shell that swaps the active screen.
@@ -145,7 +146,6 @@ class _TabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = cfg.accent(colors);
     final atTop = layout == 'topbar' || layout == 'zen';
     final iconsOnly = layout == 'rail' || layout == 'zen';
     final floating = layout == 'dock';
@@ -154,38 +154,37 @@ class _TabBar extends StatelessWidget {
     Widget tab(TabSpec t) {
       final on = current == t.id;
       return Expanded(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => onTap(t.id),
+        child: RefPressable(
+          onPressed: () => onTap(t.id),
+          selected: on,
+          borderRadius: RefRadius.md,
+          semanticLabel: tabLabel(context, t.id, t.label),
           child: Padding(
-            padding: EdgeInsets.symmetric(vertical: iconsOnly ? 7 : 4),
+            padding: EdgeInsets.symmetric(vertical: iconsOnly ? 7 : 4, horizontal: 2),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOut,
-                  padding: EdgeInsets.symmetric(horizontal: iconsOnly ? 8 : 10, vertical: iconsOnly ? 7 : 5),
+                  duration: RefMotion.resolve(context, RefMotion.standard),
+                  curve: Curves.easeOutCubic,
+                  padding: EdgeInsets.symmetric(horizontal: iconsOnly ? 9 : 11, vertical: iconsOnly ? 8 : 6),
                   decoration: BoxDecoration(
-                    color: on ? accent : Colors.transparent,
-                    borderRadius: BorderRadius.circular(iconsOnly ? 13 : 11),
+                    color: on ? colors.ink : Colors.transparent,
+                    borderRadius: RefRadius.md,
+                    boxShadow: on ? RefShadows.soft : null,
                   ),
                   child: AnimatedScale(
-                    duration: const Duration(milliseconds: 260),
+                    duration: RefMotion.resolve(context, RefMotion.standard),
                     curve: Curves.easeOutBack,
-                    scale: on ? 1.0 : 0.92,
-                    child: Icon(t.icon, size: iconsOnly ? 22 : 21, color: on ? Colors.white : colors.muted),
+                    scale: on ? 1 : .92,
+                    child: Icon(t.icon, size: iconsOnly ? 21 : 20, color: on ? colors.bg : colors.muted),
                   ),
                 ),
                 if (!iconsOnly) ...[
                   const SizedBox(height: 3),
                   AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 260),
-                    style: TextStyle(
-                        fontFamily: SfType.ui,
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w600,
-                        color: on ? accent : colors.muted),
+                    duration: RefMotion.resolve(context, RefMotion.standard),
+                    style: RefType.ui(size: 9.5, weight: on ? FontWeight.w700 : FontWeight.w600, color: on ? colors.ink : colors.muted),
                     child: Text(tabLabel(context, t.id, t.label)),
                   ),
                 ],
@@ -199,25 +198,21 @@ class _TabBar extends StatelessWidget {
     final row = Row(children: [for (final t in cfg.tabs) tab(t)]);
 
     if (floating) {
-      // Detached, rounded "dock" floating above the bottom inset.
       return Padding(
         padding: EdgeInsets.fromLTRB(20, 8, 20, 10 + bottomInset * 0.5),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: DecoratedBox(
           decoration: BoxDecoration(
             color: colors.surface,
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: RefRadius.lg,
             border: Border.all(color: colors.border),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 24, offset: const Offset(0, 8)),
-            ],
+            boxShadow: RefShadows.card,
           ),
-          child: row,
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: row),
         ),
       );
     }
 
-    return Container(
+    return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(
@@ -225,8 +220,10 @@ class _TabBar extends StatelessWidget {
           bottom: atTop ? BorderSide(color: colors.border) : BorderSide.none,
         ),
       ),
-      padding: EdgeInsets.fromLTRB(4, atTop ? 4 : 8, 4, atTop ? 4 : 8 + bottomInset * 0.4),
-      child: row,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(4, atTop ? 4 : 8, 4, atTop ? 4 : 8 + bottomInset * 0.4),
+        child: row,
+      ),
     );
   }
 }

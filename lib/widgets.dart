@@ -400,31 +400,37 @@ class Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    late Color fg, bg;
+    late Color fg, bg, border;
     switch (tone) {
       case PillTone.success:
         fg = c.success;
         bg = c.successSoft;
+        border = Colors.transparent;
         break;
       case PillTone.danger:
         fg = c.danger;
         bg = c.dangerSoft;
+        border = Colors.transparent;
         break;
       case PillTone.warn:
         fg = c.warn;
         bg = c.warnSoft;
+        border = Colors.transparent;
         break;
       case PillTone.primary:
         fg = c.primaryInk;
         bg = c.primarySoft;
+        border = Colors.transparent;
         break;
       case PillTone.accent:
         fg = c.accentInk;
         bg = c.accentSoft;
+        border = Colors.transparent;
         break;
       case PillTone.neutral:
         fg = c.ink2;
         bg = c.surface2;
+        border = c.border;
         break;
     }
     // Statuses are localised and can be much longer than their Uzbek source.
@@ -433,10 +439,11 @@ class Pill extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 132),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: border),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -457,7 +464,8 @@ class Pill extends StatelessWidget {
                 style: TextStyle(
                   fontFamily: SfType.ui,
                   fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.22,
                   color: fg,
                 ),
               ),
@@ -944,7 +952,59 @@ class HBars extends StatelessWidget {
 
 // ── Layout helpers ─────────────────────────────────────────────────────
 
-/// A surface card matching `.am-card`.
+/// Adapted from the Staff app's `SfSurfaceCard`.
+///
+/// This is the shared physical surface for the CEO console.  It intentionally
+/// owns the reference app's radius, border, soft elevation and clipping so
+/// feature screens no longer construct their own unrelated Container cards.
+class SfSurfaceCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final BorderRadius borderRadius;
+  final Color? color;
+  const SfSurfaceCard({
+    super.key,
+    required this.child,
+    this.padding = EdgeInsets.zero,
+    this.borderRadius = const BorderRadius.all(Radius.circular(22)),
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Material(
+      color: color ?? c.surface,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: borderRadius,
+        side: BorderSide(color: c.border.withValues(alpha: 0.92)),
+      ),
+      elevation: 0,
+      shadowColor: c.ink.withValues(alpha: 0.08),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: borderRadius,
+          boxShadow: [
+            BoxShadow(
+              color: c.ink.withValues(alpha: 0.045),
+              blurRadius: 24,
+              offset: const Offset(0, 9),
+            ),
+            BoxShadow(
+              color: Colors.white.withValues(alpha: 0.45),
+              blurRadius: 1,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Padding(padding: padding, child: child),
+      ),
+    );
+  }
+}
+
+/// Backward-compatible facade over the reference surface component.
 class SfCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
@@ -957,17 +1017,9 @@ class SfCard extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
     return Container(
       margin: margin,
-      padding: padding,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border.all(color: c.border),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: child,
+      child: SfSurfaceCard(padding: padding ?? EdgeInsets.zero, child: child),
     );
   }
 }
@@ -1066,6 +1118,161 @@ class SfHead extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Large page header adapted from the reference project's `SfLargeAppBar`.
+/// Existing pages may keep their current title/copy while sharing the new
+/// hierarchy, breathing room and editorial type scale.
+class SfLargeAppBar extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final Widget? leading;
+  final List<Widget> actions;
+  const SfLargeAppBar({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.leading,
+    this.actions = const [],
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 8, 12, 16),
+      color: c.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: 44,
+            child: Row(
+              children: [
+                ?leading,
+                const Spacer(),
+                for (final action in actions)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: action,
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.84,
+              color: c.ink,
+            ),
+          ),
+          if (subtitle != null && subtitle!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                subtitle!,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: c.muted,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Reference-style form/search input. It wraps Flutter's native text field,
+/// so focus, validation and existing callbacks remain unchanged.
+class SfTextField extends StatelessWidget {
+  final TextEditingController? controller;
+  final FocusNode? focusNode;
+  final String? label;
+  final String? hint;
+  final IconData? prefixIcon;
+  final Widget? suffix;
+  final bool autofocus;
+  final bool readOnly;
+  final TextInputType? keyboardType;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onChanged;
+  final VoidCallback? onTap;
+  const SfTextField({
+    super.key,
+    this.controller,
+    this.focusNode,
+    this.label,
+    this.hint,
+    this.prefixIcon,
+    this.suffix,
+    this.autofocus = false,
+    this.readOnly = false,
+    this.keyboardType,
+    this.textInputAction,
+    this.onChanged,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return TextField(
+      controller: controller,
+      focusNode: focusNode,
+      autofocus: autofocus,
+      readOnly: readOnly,
+      keyboardType: keyboardType,
+      textInputAction: textInputAction,
+      onChanged: onChanged,
+      onTap: onTap,
+      cursorColor: c.primary,
+      style: TextStyle(
+        fontFamily: SfType.ui,
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        color: c.ink,
+      ),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, size: 19),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: c.surface,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 15,
+        ),
+        labelStyle: TextStyle(
+          fontFamily: SfType.ui,
+          fontSize: 13,
+          color: c.muted,
+        ),
+        hintStyle: TextStyle(
+          fontFamily: SfType.ui,
+          fontSize: 14,
+          color: c.muted,
+        ),
+        prefixIconColor: c.muted,
+        suffixIconColor: c.muted,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: c.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: c.primary, width: 1.7),
+        ),
       ),
     );
   }
@@ -1400,15 +1607,21 @@ class SfButton extends StatelessWidget {
     final c = SfTheme.of(context);
     return Material(
       color: primary ? c.primary : c.surface2,
-      borderRadius: BorderRadius.circular(12),
+      // Buttons in the reference workspace are deliberately pill-shaped. It
+      // gives primary actions a calm, recognisable affordance across pages.
+      borderRadius: BorderRadius.circular(999),
+      elevation: primary ? 2 : 0,
+      shadowColor: primary
+          ? c.primary.withValues(alpha: 0.26)
+          : Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
           decoration: BoxDecoration(
             border: primary ? null : Border.all(color: c.border),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(999),
           ),
           // mainAxisSize.max + center keeps the button full-width and its label
           // centred WITHOUT making the box greedily expand to fill all available
@@ -1451,13 +1664,14 @@ void sfSnack(BuildContext context, String msg, {Color? bg}) {
       SnackBar(
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
-        // Notifications are intentionally shown at the top of the mobile view,
-        // where they do not hide the composer or bottom navigation.
+        // Keep the floating snack bar inside the safe area. A large synthetic
+        // bottom margin can push it completely off small screens or above a
+        // sheet, making feedback invisible and triggering a layout error.
         margin: EdgeInsets.fromLTRB(
           12,
           0,
           12,
-          MediaQuery.of(context).size.height - 92,
+          12 + MediaQuery.of(context).padding.bottom,
         ),
         backgroundColor: bg ?? const Color(0xFF3A332A),
         content: Text(

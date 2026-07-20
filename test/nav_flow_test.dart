@@ -19,10 +19,7 @@ Widget _app(AppStore store) {
       store: store,
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: Console(
-          cfg: kRoleConfigs[SfRole.ceo]!,
-          onSwitchRole: () {},
-        ),
+        home: Console(cfg: kRoleConfigs[SfRole.ceo]!, onSwitchRole: () {}),
       ),
     ),
   );
@@ -61,7 +58,9 @@ void main() {
     await t.pump(const Duration(seconds: 1));
     await t.tap(find.byIcon(Icons.person_rounded).last);
     await t.pump(const Duration(seconds: 1));
-    final notif = find.byIcon(Icons.notifications_none_rounded);
+    // The dashboard's top bar remains in AnimatedSwitcher while the profile
+    // enters, so restrict the finder to an actually tappable icon.
+    final notif = find.byIcon(Icons.notifications_none_rounded).hitTestable();
     if (notif.evaluate().isNotEmpty) {
       await t.tap(notif.first);
       await t.pump();
@@ -72,7 +71,9 @@ void main() {
 
   testWidgets('chat header opens the contact personal cabinet', (t) async {
     final store = AppStore.seed(SfRole.ceo);
-    await t.pumpWidget(_chatHost(store, ChatScreen(threadIdx: 0, colors: SfColors.light)));
+    await t.pumpWidget(
+      _chatHost(store, ChatScreen(threadIdx: 0, colors: SfColors.light)),
+    );
     await t.pump(const Duration(seconds: 1));
     await t.tap(find.byKey(const ValueKey('chat-profile-header')));
     await t.pumpAndSettle();
@@ -85,10 +86,15 @@ void main() {
     t,
   ) async {
     final store = AppStore.seed(SfRole.ceo);
-    await t.pumpWidget(_chatHost(
-      store,
-      StudentChatScreen(student: store.students.first, colors: SfColors.light),
-    ));
+    await t.pumpWidget(
+      _chatHost(
+        store,
+        StudentChatScreen(
+          student: store.students.first,
+          colors: SfColors.light,
+        ),
+      ),
+    );
     await t.pump(const Duration(seconds: 1));
     await t.tap(find.byKey(const ValueKey('student-chat-profile-header')));
     await t.pumpAndSettle();
