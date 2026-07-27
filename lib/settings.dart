@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'theme.dart';
 import 'data.dart';
 
@@ -168,6 +171,8 @@ class AppSettings extends ChangeNotifier {
   String? chatWallpaperPath;
   int font; // index into kFonts
   SfCurrency currency;
+  final Set<String> readNotificationKeys;
+  final Set<String> hiddenNotificationKeys;
 
   AppSettings({
     this.dark = false,
@@ -175,15 +180,91 @@ class AppSettings extends ChangeNotifier {
     this.palette = 0,
     this.layout = 0,
     this.density = 1,
-    this.pattern = SfPattern.dots,
+    // Decorative patterns must be opt-in. Rendering a dot layer before the
+    // first screen has painted makes cold starts look like a loading glitch.
+    this.pattern = SfPattern.none,
     this.chatDesign = SfChatDesign.telegram,
     this.chatWallpaper = SfChatWallpaper.telegramClouds,
     this.chatWallpaperPath,
     this.font = 0,
     this.currency = SfCurrency.uzs,
-  }) {
+    Set<String>? readNotificationKeys,
+    Set<String>? hiddenNotificationKeys,
+  }) : readNotificationKeys = readNotificationKeys ?? <String>{},
+       hiddenNotificationKeys = hiddenNotificationKeys ?? <String>{} {
     gCurrency = currency;
     SfType.ui = kFonts[font].$1;
+  }
+
+  static Future<AppSettings> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    int index(String key, int length, int fallback) {
+      final value = prefs.getInt(key);
+      return value != null && value >= 0 && value < length ? value : fallback;
+    }
+
+    return AppSettings(
+      dark: prefs.getBool('appearance.dark') ?? false,
+      lang: SfLang.values[index('appearance.lang', SfLang.values.length, 0)],
+      palette: index('appearance.palette', kPalettes.length, 0),
+      layout: index('appearance.layout', kLayouts.length, 0),
+      density: index('appearance.density', kDensities.length, 1),
+      pattern: SfPattern
+          .values[index('appearance.pattern', SfPattern.values.length, 0)],
+      chatDesign:
+          SfChatDesign.values[index(
+            'appearance.chat_design',
+            SfChatDesign.values.length,
+            0,
+          )],
+      chatWallpaper:
+          SfChatWallpaper.values[index(
+            'appearance.chat_wallpaper',
+            SfChatWallpaper.values.length,
+            0,
+          )],
+      chatWallpaperPath: prefs.getString('appearance.chat_wallpaper_path'),
+      font: index('appearance.font', kFonts.length, 0),
+      currency: SfCurrency
+          .values[index('appearance.currency', SfCurrency.values.length, 0)],
+      readNotificationKeys:
+          (prefs.getStringList('notifications.read') ?? const []).toSet(),
+      hiddenNotificationKeys:
+          (prefs.getStringList('notifications.hidden') ?? const []).toSet(),
+    );
+  }
+
+  void _commit() {
+    unawaited(_save());
+    notifyListeners();
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setBool('appearance.dark', dark),
+      prefs.setInt('appearance.lang', lang.index),
+      prefs.setInt('appearance.palette', palette),
+      prefs.setInt('appearance.layout', layout),
+      prefs.setInt('appearance.density', density),
+      prefs.setInt('appearance.pattern', pattern.index),
+      prefs.setInt('appearance.chat_design', chatDesign.index),
+      prefs.setInt('appearance.chat_wallpaper', chatWallpaper.index),
+      prefs.setInt('appearance.font', font),
+      prefs.setInt('appearance.currency', currency.index),
+      prefs.setStringList(
+        'notifications.read',
+        readNotificationKeys.toList(growable: false),
+      ),
+      prefs.setStringList(
+        'notifications.hidden',
+        hiddenNotificationKeys.toList(growable: false),
+      ),
+      if (chatWallpaperPath == null)
+        prefs.remove('appearance.chat_wallpaper_path')
+      else
+        prefs.setString('appearance.chat_wallpaper_path', chatWallpaperPath!),
+    ]);
   }
 
   SfColors get colors {
@@ -195,33 +276,61 @@ class AppSettings extends ChangeNotifier {
 
   double get textScale => kDensities[density];
 
+  String _notificationKey(SfRole role, String id) => '${role.name}|$id';
+
+  bool notificationIsRead(SfRole role, String id) =>
+      readNotificationKeys.contains(_notificationKey(role, id));
+
+  bool notificationIsHidden(SfRole role, String id) =>
+      hiddenNotificationKeys.contains(_notificationKey(role, id));
+
+  void markNotificationRead(SfRole role, String id) {
+    if (!readNotificationKeys.add(_notificationKey(role, id))) return;
+    _commit();
+  }
+
+  void markNotificationsRead(SfRole role, Iterable<String> ids) {
+    final before = readNotificationKeys.length;
+    readNotificationKeys.addAll(ids.map((id) => _notificationKey(role, id)));
+    if (before != readNotificationKeys.length) _commit();
+  }
+
+  void hideNotification(SfRole role, String id) {
+    final key = _notificationKey(role, id);
+    final hiddenChanged = hiddenNotificationKeys.add(key);
+    final readChanged = readNotificationKeys.add(key);
+    if (hiddenChanged || readChanged) _commit();
+  }
+
+  Future<void> saveNotificationState() => _save();
+
   void toggleTheme() {
     dark = !dark;
-    notifyListeners();
+    _commit();
   }
 
   void setDark(bool v) {
     if (dark == v) return;
     dark = v;
-    notifyListeners();
+    _commit();
   }
 
   void setLang(SfLang l) {
     if (lang == l) return;
     lang = l;
-    notifyListeners();
+    _commit();
   }
 
   void setPalette(int i) {
     if (palette == i) return;
     palette = i;
-    notifyListeners();
+    _commit();
   }
 
   void setLayout(int i) {
     if (layout == i) return;
     layout = i;
-    notifyListeners();
+    _commit();
   }
 
   void cycleLang() {
@@ -237,45 +346,45 @@ class AppSettings extends ChangeNotifier {
   void setDensity(int i) {
     if (density == i) return;
     density = i;
-    notifyListeners();
+    _commit();
   }
 
   void setPattern(SfPattern p) {
     if (pattern == p) return;
     pattern = p;
-    notifyListeners();
+    _commit();
   }
 
   void setChatWallpaper(SfChatWallpaper wallpaper) {
     if (chatWallpaper == wallpaper) return;
     chatWallpaper = wallpaper;
-    notifyListeners();
+    _commit();
   }
 
   void setChatDesign(SfChatDesign design) {
     if (chatDesign == design) return;
     chatDesign = design;
-    notifyListeners();
+    _commit();
   }
 
   void setChatWallpaperPath(String path) {
     chatWallpaper = SfChatWallpaper.custom;
     chatWallpaperPath = path;
-    notifyListeners();
+    _commit();
   }
 
   void setFont(int i) {
     if (font == i) return;
     font = i;
     SfType.ui = kFonts[i].$1;
-    notifyListeners();
+    _commit();
   }
 
   void setCurrency(SfCurrency cur) {
     if (currency == cur) return;
     currency = cur;
     gCurrency = cur;
-    notifyListeners();
+    _commit();
   }
 
   void reset() {
@@ -283,7 +392,7 @@ class AppSettings extends ChangeNotifier {
     palette = 0;
     layout = 0;
     density = 1;
-    pattern = SfPattern.dots;
+    pattern = SfPattern.none;
     chatDesign = SfChatDesign.telegram;
     chatWallpaper = SfChatWallpaper.telegramClouds;
     chatWallpaperPath = null;
@@ -291,7 +400,7 @@ class AppSettings extends ChangeNotifier {
     currency = SfCurrency.uzs;
     gCurrency = SfCurrency.uzs;
     SfType.ui = 'Manrope';
-    notifyListeners();
+    _commit();
   }
 }
 

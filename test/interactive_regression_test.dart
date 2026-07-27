@@ -67,6 +67,9 @@ void main() {
       'Matematika',
     );
 
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.more_horiz_rounded), findsWidgets);
     await tester.tap(find.byIcon(Icons.more_horiz_rounded).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Boshqa bo‘limga ko‘chirish'));
@@ -119,9 +122,13 @@ void main() {
       find.byType(Scrollable).first,
       const Offset(0, -300),
     );
-    await tester.tap(find.text(store.students.first.name));
+    final studentName = find.text(store.students.first.name);
+    await tester.ensureVisible(studentName.last);
     await tester.pumpAndSettle();
-    expect(find.text("Yo'q"), findsAtLeastNWidgets(2));
+    await tester.tap(studentName.last);
+    await tester.pumpAndSettle();
+    expect(find.text("Yo'q"), findsWidgets);
+    await tester.ensureVisible(find.text('Saqlash'));
     await tester.tap(find.text('Saqlash'));
     await tester.pump();
     expect(tester.takeException(), isNull);

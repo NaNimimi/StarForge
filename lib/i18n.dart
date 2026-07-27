@@ -7,7 +7,11 @@ import 'settings.dart';
 /// translated, which is what makes the language switch visibly work.
 const Map<String, List<String>> _strings = {
   // ── Login ─────────────────────────────────────────────────────────────
-  'brand_sub': ["O'quv markazi boshqaruvi", 'Управление учебным центром', 'Education center management'],
+  'brand_sub': [
+    "O'quv markazi boshqaruvi",
+    'Управление учебным центром',
+    'Education center management',
+  ],
   'login_title': ['Hisobga kirish', 'Вход в систему', 'Sign in'],
   'login_sub': [
     'Konsolingizga kirish uchun login va parol',
@@ -17,8 +21,16 @@ const Map<String, List<String>> _strings = {
   'login_hint': ['Login', 'Логин', 'Login'],
   'pass_hint': ['Parol', 'Пароль', 'Password'],
   'sign_in': ['Kirish', 'Войти', 'Sign in'],
-  'err_empty': ['Login va parolni kiriting', 'Введите логин и пароль', 'Enter login and password'],
-  'err_wrong': ["Login yoki parol noto'g'ri", 'Неверный логин или пароль', 'Wrong login or password'],
+  'err_empty': [
+    'Login va parolni kiriting',
+    'Введите логин и пароль',
+    'Enter login and password',
+  ],
+  'err_wrong': [
+    "Login yoki parol noto'g'ri",
+    'Неверный логин или пароль',
+    'Wrong login or password',
+  ],
 
   // ── Tabs ──────────────────────────────────────────────────────────────
   'tab_dash': ['Panel', 'Панель', 'Panel'],
@@ -35,16 +47,28 @@ const Map<String, List<String>> _strings = {
   'greet_manager': ['Filial paneli', 'Панель филиала', 'Branch panel'],
   'greet_audit': ['Audit paneli', 'Панель аудита', 'Audit panel'],
   'scope_all': ['Barcha filiallar', 'Все филиалы', 'All branches'],
-  'scope_audit': ['Barcha filiallar · nazorat', 'Все филиалы · контроль', 'All branches · oversight'],
+  'scope_audit': [
+    'Barcha filiallar · nazorat',
+    'Все филиалы · контроль',
+    'All branches · oversight',
+  ],
   'kpi_revenue': ['Oylik daromad', 'Доход за месяц', 'Monthly revenue'],
   'kpi_students': ["O'quvchilar", 'Ученики', 'Students'],
   'kpi_attendance': ['Davomat', 'Посещаемость', 'Attendance'],
   'kpi_debt': ['Qarzdorlik', 'Задолженность', 'Debt'],
   'card_revenue12': ['Daromad · 12 oy', 'Доход · 12 мес', 'Revenue · 12 mo'],
   'link_ledger': ['Kassa daftari', 'Кассовая книга', 'Cash ledger'],
-  'card_branch_rank': ['Filiallar reytingi', 'Рейтинг филиалов', 'Branch ranking'],
+  'card_branch_rank': [
+    'Filiallar reytingi',
+    'Рейтинг филиалов',
+    'Branch ranking',
+  ],
   'link_all': ['Hammasi', 'Все', 'All'],
-  'card_attendance_health': ['Davomat salomatligi', 'Состояние посещаемости', 'Attendance health'],
+  'card_attendance_health': [
+    'Davomat salomatligi',
+    'Состояние посещаемости',
+    'Attendance health',
+  ],
   'legend_good': ['Yaxshi', 'Хорошо', 'Good'],
   'legend_mid': ["O'rta", 'Средне', 'Medium'],
   'legend_low': ['Past', 'Низко', 'Low'],
@@ -60,9 +84,17 @@ const Map<String, List<String>> _strings = {
   'kpi_active_cases': ['Faol holatlar', 'Активные дела', 'Active cases'],
   'kpi_anomaly': ['Anomaliya', 'Аномалии', 'Anomaly'],
   'kpi_compliance': ['Muvofiqlik', 'Соответствие', 'Compliance'],
-  'card_anomaly30': ['Anomaliya · 30 kun', 'Аномалии · 30 дней', 'Anomalies · 30 days'],
+  'card_anomaly30': [
+    'Anomaliya · 30 kun',
+    'Аномалии · 30 дней',
+    'Anomalies · 30 days',
+  ],
   'card_recent_flags': ["So'nggi flaglar", 'Последние флаги', 'Recent flags'],
-  'card_branch_compliance': ['Filiallar muvofiqligi', 'Соответствие филиалов', 'Branch compliance'],
+  'card_branch_compliance': [
+    'Filiallar muvofiqligi',
+    'Соответствие филиалов',
+    'Branch compliance',
+  ],
 
   // ── Screen headers ────────────────────────────────────────────────────
   'students_title': ["O'quvchilar", 'Ученики', 'Students'],
@@ -85,16 +117,32 @@ const Map<String, List<String>> _strings = {
   'anom_reco': ['Tavsiya', 'Рекомендация', 'Recommendation'],
   'case_status_label': ['Holat', 'Статус', 'Status'],
   'case_timeline': ['Tarix', 'Хронология', 'Timeline'],
-  'case_change_status': ["Holatni o'zgartirish", 'Изменить статус', 'Change status'],
-  'audit_search_hint': ['Qidirish · filial, tur…', 'Поиск · филиал, тип…', 'Search · branch, kind…'],
+  'case_change_status': [
+    "Holatni o'zgartirish",
+    'Изменить статус',
+    'Change status',
+  ],
+  'audit_search_hint': [
+    'Qidirish · filial, tur…',
+    'Поиск · филиал, тип…',
+    'Search · branch, kind…',
+  ],
   'groups_title': ['Guruhlar', 'Группы', 'Groups'],
-  'groups_search': ['Guruh · ustoz qidirish…', 'Поиск · группа, педагог…', 'Search · group, teacher…'],
+  'groups_search': [
+    'Guruh · ustoz qidirish…',
+    'Поиск · группа, педагог…',
+    'Search · group, teacher…',
+  ],
   'unit_group': ['guruh', 'групп', 'groups'],
   'group_teacher': ['Ustoz', 'Педагог', 'Teacher'],
   'group_avg': ["O'rtacha davomat", 'Средняя посещ.', 'Avg attendance'],
   'messages_title': ['Xabarlar', 'Сообщения', 'Messages'],
   'messages_eyebrow': ['Aloqa markazi', 'Центр связи', 'Communication hub'],
-  'ai_title': ['Strategik tahlil', 'Стратегический анализ', 'Strategic analysis'],
+  'ai_title': [
+    'Strategik tahlil',
+    'Стратегический анализ',
+    'Strategic analysis',
+  ],
   'ai_eyebrow': ['AI yordamchi', 'AI помощник', 'AI assistant'],
   'ai_history': ['Suhbatlar', 'История чатов', 'Chats'],
   'ai_new_chat': ['Yangi suhbat', 'Новый чат', 'New chat'],
@@ -119,7 +167,11 @@ const Map<String, List<String>> _strings = {
   'filter_call': ["Qo'ng'iroq", 'Звонок', 'Call'],
   'filter_branch': ['Filial', 'Филиал', 'Branch'],
   'filter_level': ['Daraja', 'Уровень', 'Level'],
-  'students_search': ['Qidirish · ism, guruh…', 'Поиск · имя, группа…', 'Search · name, group…'],
+  'students_search': [
+    'Qidirish · ism, guruh…',
+    'Поиск · имя, группа…',
+    'Search · name, group…',
+  ],
   'f_open': ['Ochiq', 'Открыт', 'Open'],
   'f_review': ['Tekshir', 'Проверка', 'Review'],
   'f_closed': ['Yopilgan', 'Закрыт', 'Closed'],
@@ -167,14 +219,38 @@ const Map<String, List<String>> _strings = {
   // ── Report screen ─────────────────────────────────────────────────────
   'report_title': ['Hisobot', 'Отчёт', 'Report'],
   'report_audit_title': ['Audit hisoboti', 'Аудит-отчёт', 'Audit report'],
-  'report_period': ['May 2026 · oylik', 'Май 2026 · месяц', 'May 2026 · monthly'],
-  'report_summary': ['Asosiy ko‘rsatkichlar', 'Ключевые показатели', 'Key metrics'],
-  'report_finance': ['Moliyaviy holat', 'Финансовое состояние', 'Financial position'],
+  'report_period': [
+    'May 2026 · oylik',
+    'Май 2026 · месяц',
+    'May 2026 · monthly',
+  ],
+  'report_summary': [
+    'Asosiy ko‘rsatkichlar',
+    'Ключевые показатели',
+    'Key metrics',
+  ],
+  'report_finance': [
+    'Moliyaviy holat',
+    'Финансовое состояние',
+    'Financial position',
+  ],
   'report_branches': ['Filiallar kesimi', 'По филиалам', 'By branch'],
-  'report_compliance': ['Nazorat holati', 'Состояние контроля', 'Compliance status'],
+  'report_compliance': [
+    'Nazorat holati',
+    'Состояние контроля',
+    'Compliance status',
+  ],
   'report_export': ['PDF eksport', 'Экспорт PDF', 'Export PDF'],
-  'report_exported': ['📄 Hisobot PDF tayyorlandi (demo)', '📄 Отчёт PDF готов (демо)', '📄 Report PDF ready (demo)'],
-  'report_gen': ['Avtomatik tayyorlandi', 'Сформировано автоматически', 'Generated automatically'],
+  'report_exported': [
+    '📄 Hisobot fayli tayyorlandi',
+    '📄 Файл отчёта подготовлен',
+    '📄 Report file is ready',
+  ],
+  'report_gen': [
+    'Avtomatik tayyorlandi',
+    'Сформировано автоматически',
+    'Generated automatically',
+  ],
 
   // ── Create sheet ──────────────────────────────────────────────────────
   'create_branch': ['Yangi filial', 'Новый филиал', 'New branch'],
@@ -185,12 +261,16 @@ const Map<String, List<String>> _strings = {
   'create_note': ['Izoh', 'Заметка', 'Note'],
   'create_submit': ['Yaratish', 'Создать', 'Create'],
   'create_cancel': ['Bekor qilish', 'Отмена', 'Cancel'],
-  'create_done': ['✓ Yaratildi (demo)', '✓ Создано (демо)', '✓ Created (demo)'],
+  'create_done': ['✓ Yaratildi', '✓ Создано', '✓ Created'],
   'create_need_name': ['Nomini kiriting', 'Введите название', 'Enter a name'],
 
   // ── Settings page ─────────────────────────────────────────────────────
   'settings_title': ['Sozlamalar', 'Настройки', 'Settings'],
-  'settings_eyebrow': ['Ilova sozlamalari', 'Настройки приложения', 'App preferences'],
+  'settings_eyebrow': [
+    'Ilova sozlamalari',
+    'Настройки приложения',
+    'App preferences',
+  ],
   'appearance': ["Ko'rinish", 'Внешний вид', 'Appearance'],
   'language': ['Til', 'Язык', 'Language'],
 
@@ -211,13 +291,25 @@ const Map<String, List<String>> _strings = {
   'chat_role': ['Rol', 'Роль', 'Role'],
   'chat_phone': ['Telefon', 'Телефон', 'Phone'],
   'chat_members': ["Ishtirokchilar", 'Участники', 'Members'],
-  'chat_offline': ["Hozir tarmoqda emas", 'Сейчас не в сети', 'Currently offline'],
+  'chat_offline': [
+    "yaqinda tarmoqda edi",
+    'был(а) недавно',
+    'last seen recently',
+  ],
   'chat_send_message': ['Xabar yozish', 'Написать сообщение', 'Send message'],
 
   // ── Notifications ─────────────────────────────────────────────────────
   'notifs_title': ['Bildirishnomalar', 'Уведомления', 'Notifications'],
-  'notif_mark_read': ["Hammasini o'qilgan deb belgilash", 'Отметить всё прочитанным', 'Mark all as read'],
-  'notif_all_read': ['✓ Bildirishnomalar tozalandi', '✓ Уведомления очищены', '✓ Notifications cleared'],
+  'notif_mark_read': [
+    "Hammasini o'qilgan deb belgilash",
+    'Отметить всё прочитанным',
+    'Mark all as read',
+  ],
+  'notif_all_read': [
+    '✓ Bildirishnomalar tozalandi',
+    '✓ Уведомления очищены',
+    '✓ Notifications cleared',
+  ],
   'notif_new': ['yangi', 'новых', 'new'],
   'notif_today': ['Bugun', 'Сегодня', 'Today'],
   'notif_earlier': ['Avvalroq', 'Ранее', 'Earlier'],
@@ -226,16 +318,28 @@ const Map<String, List<String>> _strings = {
   'f_direct': ['Shaxsiy', 'Личные', 'Direct'],
   'f_groups': ['Guruhlar', 'Группы', 'Groups'],
   'f_unread': ["O'qilmagan", 'Непрочит.', 'Unread'],
-  'no_messages': ['Bu filtrda suhbat yo‘q', 'Нет чатов по этому фильтру', 'No chats in this filter'],
+  'no_messages': [
+    'Bu filtrda suhbat yo‘q',
+    'Нет чатов по этому фильтру',
+    'No chats in this filter',
+  ],
   'f_archive': ['Arxiv', 'Архив', 'Archive'],
   'msg_pinned': ['Mahkamlangan', 'Закреплённые', 'Pinned'],
   'msg_pin': ['Mahkamlash', 'Закрепить', 'Pin'],
   'msg_unpin': ['Mahkamlashni olish', 'Открепить', 'Unpin'],
   'msg_archive': ['Arxivlash', 'В архив', 'Archive'],
   'msg_unarchive': ['Arxivdan olish', 'Из архива', 'Unarchive'],
-  'msg_mark_read': ["O'qilgan deb belgilash", 'Отметить прочитанным', 'Mark as read'],
+  'msg_mark_read': [
+    "O'qilgan deb belgilash",
+    'Отметить прочитанным',
+    'Mark as read',
+  ],
   'msg_search': ['Suhbatlarni qidirish…', 'Поиск чатов…', 'Search chats…'],
-  'pick_filter': ['Boshqa filtrni tanlang.', 'Выберите другой фильтр.', 'Try another filter.'],
+  'pick_filter': [
+    'Boshqa filtrni tanlang.',
+    'Выберите другой фильтр.',
+    'Try another filter.',
+  ],
 
   // ── Ledger entry detail ───────────────────────────────────────────────
   'tx_title': ['Harakat tafsiloti', 'Детали операции', 'Transaction details'],
@@ -255,10 +359,18 @@ const Map<String, List<String>> _strings = {
   ],
 
   // ── Student detail ────────────────────────────────────────────────────
-  'stu_trend': ['Davomat tendensiyasi · 8 hafta', 'Тренд посещаемости · 8 нед', 'Attendance trend · 8 wks'],
+  'stu_trend': [
+    'Davomat tendensiyasi · 8 hafta',
+    'Тренд посещаемости · 8 нед',
+    'Attendance trend · 8 wks',
+  ],
   'stu_status': ['Holat', 'Статус', 'Status'],
   'stu_call': ['Ota-onaga qo‘ng‘iroq', 'Звонок родителю', 'Call parent'],
-  'stu_remind': ['To‘lov eslatmasi', 'Напоминание об оплате', 'Payment reminder'],
+  'stu_remind': [
+    'To‘lov eslatmasi',
+    'Напоминание об оплате',
+    'Payment reminder',
+  ],
   'stu_message': ['Xabar yuborish', 'Отправить сообщение', 'Send message'],
   'stat_attendance': ['Davomat', 'Посещаемость', 'Attendance'],
   'stat_debt': ['Qarzdorlik', 'Задолженность', 'Debt'],
@@ -278,7 +390,11 @@ const Map<String, List<String>> _strings = {
   'stu_father': ['Ota', 'Отец', 'Father'],
   'stu_mother': ['Ona', 'Мать', 'Mother'],
   'stu_years': ['yosh', 'лет', 'yrs'],
-  'stu_cabinet': ['Shaxsiy kabinet · xabar', 'Личный кабинет · сообщение', 'Personal cabinet · message'],
+  'stu_cabinet': [
+    'Shaxsiy kabinet · xabar',
+    'Личный кабинет · сообщение',
+    'Personal cabinet · message',
+  ],
   'dm_hint': ['Xabar yozing…', 'Напишите сообщение…', 'Write a message…'],
   // Call status (green / amber / red by recency of last parent call)
   'call_recent': ["Yaqinda qo'ng'iroq", 'Звонок недавно', 'Called recently'],
@@ -288,20 +404,52 @@ const Map<String, List<String>> _strings = {
   'call_days_ago': ['kun oldin', 'дн назад', 'd ago'],
   'call_last': ["Oxirgi qo'ng'iroq", 'Последний звонок', 'Last call'],
   // Edit profile
-  'edit_profile': ['Profilni tahrirlash', 'Редактировать профиль', 'Edit profile'],
+  'edit_profile': [
+    'Profilni tahrirlash',
+    'Редактировать профиль',
+    'Edit profile',
+  ],
   'edit_jobtitle': ['Lavozim', 'Должность', 'Job title'],
   'change_photo': ["Rasmni o'zgartirish", 'Изменить фото', 'Change photo'],
   'save': ['Saqlash', 'Сохранить', 'Save'],
-  'profile_saved': ['✓ Profil saqlandi', '✓ Профиль сохранён', '✓ Profile saved'],
+  'profile_saved': [
+    '✓ Profil saqlandi',
+    '✓ Профиль сохранён',
+    '✓ Profile saved',
+  ],
 
   // ── Dashboard (web design) ────────────────────────────────────────────
-  'dash_title_ceo': ['Boshqaruv paneli', 'Панель управления', 'Management panel'],
+  'dash_title_ceo': [
+    'Boshqaruv paneli',
+    'Панель управления',
+    'Management panel',
+  ],
   'dash_title_manager': ['Filial paneli', 'Панель филиала', 'Branch panel'],
-  'dash_eyebrow_ceo': ['Seshanba · 19 May 2026 · 4 filial', 'Вторник · 19 мая 2026 · 4 филиала', 'Tuesday · 19 May 2026 · 4 branches'],
-  'dash_eyebrow_manager': ['Yunusobod filiali · 19 May 2026', 'Филиал Юнусабад · 19 мая 2026', 'Yunusobod branch · 19 May 2026'],
-  'dash_sub_ceo': ['Barcha filiallar bo‘yicha jonli ko‘rsatkichlar', 'Живые показатели по всем филиалам', 'Live metrics across all branches'],
-  'dash_sub_manager': ['512 o‘quvchi · 28 guruh · 16 xodim', '512 учеников · 28 групп · 16 сотрудников', '512 students · 28 groups · 16 staff'],
-  'search_hint': ['Hamma narsa bo‘yicha izlash…', 'Поиск по всему…', 'Search everything…'],
+  'dash_eyebrow_ceo': [
+    'Seshanba · 19 May 2026 · 4 filial',
+    'Вторник · 19 мая 2026 · 4 филиала',
+    'Tuesday · 19 May 2026 · 4 branches',
+  ],
+  'dash_eyebrow_manager': [
+    'Yunusobod filiali · 19 May 2026',
+    'Филиал Юнусабад · 19 мая 2026',
+    'Yunusobod branch · 19 May 2026',
+  ],
+  'dash_sub_ceo': [
+    'Barcha filiallar bo‘yicha jonli ko‘rsatkichlar',
+    'Живые показатели по всем филиалам',
+    'Live metrics across all branches',
+  ],
+  'dash_sub_manager': [
+    '512 o‘quvchi · 28 guruh · 16 xodim',
+    '512 учеников · 28 групп · 16 сотрудников',
+    '512 students · 28 groups · 16 staff',
+  ],
+  'search_hint': [
+    'Hamma narsa bo‘yicha izlash…',
+    'Поиск по всему…',
+    'Search everything…',
+  ],
   'btn_report': ['Hisobot', 'Отчёт', 'Report'],
   'btn_new_branch': ['Yangi filial', 'Новый филиал', 'New branch'],
   'btn_new_group': ['Yangi guruh', 'Новая группа', 'New group'],
@@ -312,12 +460,36 @@ const Map<String, List<String>> _strings = {
   'kpi_pending': ['Tasdiq kutmoqda', 'Ждут заявки', 'Pending'],
   'kpi_anom_score': ['Anomaliya skori', 'Скор аномалий', 'Anomaly score'],
   'kpi_checked': ['Tekshirilgan', 'Проверено', 'Checked'],
-  'audit_eyebrow': ['Barcha filiallar · nazorat · 19 May 2026', 'Все филиалы · контроль · 19 мая 2026', 'All branches · oversight · 19 May 2026'],
-  'audit_sub': ['Anomaliyalar, adolat va muvofiqlik monitoringi', 'Мониторинг аномалий, справедливости и соответствия', 'Anomaly, fairness & compliance monitoring'],
-  'card_rev_dynamics': ['Daromad dinamikasi · 12 oy', 'Динамика дохода · 12 мес', 'Revenue dynamics · 12 mo'],
-  'card_branch_rev': ['Filial daromadi · 12 oy', 'Доход филиала · 12 мес', 'Branch revenue · 12 mo'],
-  'card_anom_signals': ['Anomaliya signallari · 30 kun', 'Сигналы аномалий · 30 дней', 'Anomaly signals · 30 days'],
-  'card_pending_today': ['Bugungi tasdiqlash', 'Заявки на сегодня', 'Today’s approvals'],
+  'audit_eyebrow': [
+    'Barcha filiallar · nazorat · 19 May 2026',
+    'Все филиалы · контроль · 19 мая 2026',
+    'All branches · oversight · 19 May 2026',
+  ],
+  'audit_sub': [
+    'Anomaliyalar, adolat va muvofiqlik monitoringi',
+    'Мониторинг аномалий, справедливости и соответствия',
+    'Anomaly, fairness & compliance monitoring',
+  ],
+  'card_rev_dynamics': [
+    'Daromad dinamikasi · 12 oy',
+    'Динамика дохода · 12 мес',
+    'Revenue dynamics · 12 mo',
+  ],
+  'card_branch_rev': [
+    'Filial daromadi · 12 oy',
+    'Доход филиала · 12 мес',
+    'Branch revenue · 12 mo',
+  ],
+  'card_anom_signals': [
+    'Anomaliya signallari · 30 kun',
+    'Сигналы аномалий · 30 дней',
+    'Anomaly signals · 30 days',
+  ],
+  'card_pending_today': [
+    'Bugungi tasdiqlash',
+    'Заявки на сегодня',
+    'Today’s approvals',
+  ],
   'card_case_status': ['Holatlar holati', 'Статус дел', 'Case status'],
   'seg_12mo': ['12 oy', '12 мес', '12 mo'],
   'seg_6mo': ['6 oy', '6 мес', '6 mo'],
@@ -325,14 +497,22 @@ const Map<String, List<String>> _strings = {
   'foot_forecast': ['Yillik prognoz', 'Годовой прогноз', 'Yearly forecast'],
   'foot_avg_check': ['O‘rtacha chek', 'Средний чек', 'Avg check'],
   'foot_pay_rate': ['To‘lov darajasi', 'Уровень оплат', 'Payment rate'],
-  'legend_open_serious': ['Ochiq · jiddiy', 'Открыто · серьёзно', 'Open · serious'],
+  'legend_open_serious': [
+    'Ochiq · jiddiy',
+    'Открыто · серьёзно',
+    'Open · serious',
+  ],
   'legend_reviewing': ['Tekshirilmoqda', 'На проверке', 'Reviewing'],
   'legend_closed': ['Yopilgan', 'Закрыто', 'Closed'],
   'unit_total': ['JAMI', 'ВСЕГО', 'TOTAL'],
 
   // ── Tweaks panel (design control) ─────────────────────────────────────
   'tweaks_title': ['Ko‘rinishni sozlash', 'Настройка вида', 'Customize look'],
-  'tweaks_sub': ['Rang, zichlik, fon — jonli', 'Цвет, плотность, фон — вживую', 'Color, density, pattern — live'],
+  'tweaks_sub': [
+    'Rang, zichlik, fon — jonli',
+    'Цвет, плотность, фон — вживую',
+    'Color, density, pattern — live',
+  ],
   'tw_palette': ['Rang mavzusi', 'Цветовая тема', 'Color theme'],
   'tw_theme': ['Rejim', 'Режим', 'Mode'],
   'tw_density': ['Zichlik', 'Плотность', 'Density'],
@@ -351,7 +531,11 @@ const Map<String, List<String>> _strings = {
   'tw_menu_order': ['Bo‘limlar', 'Разделы', 'Sections'],
   'tw_done': ['Tayyor', 'Готово', 'Done'],
   'lay_sidebar': ['Sidebar', 'Боковая', 'Sidebar'],
-  'lay_sidebar_d': ['Klassik chap panel', 'Классическая панель', 'Classic left panel'],
+  'lay_sidebar_d': [
+    'Klassik chap panel',
+    'Классическая панель',
+    'Classic left panel',
+  ],
   'lay_rail': ['Rail', 'Лента', 'Rail'],
   'lay_rail_d': ['Ixcham ikonka', 'Узкие иконки', 'Compact icons'],
   'lay_topbar': ['Top nav', 'Верхняя', 'Top nav'],
@@ -369,7 +553,7 @@ const Map<String, List<String>> _strings = {
   'currency_pick': ["Valyutani tanlang", 'Выберите валюту', 'Choose currency'],
 
   // ── Misc ──────────────────────────────────────────────────────────────
-  'coming_soon': ['tez orada (demo)', 'скоро (демо)', 'coming soon (demo)'],
+  'coming_soon': ['tez orada', 'скоро', 'coming soon'],
   'pill_high': ['Yuqori', 'Высокий', 'High'],
   'pill_mid': ["O'rta", 'Средний', 'Medium'],
 };
@@ -380,7 +564,18 @@ const Map<String, List<String>> _strings = {
 const Map<String, List<String>> _menuLabels = {
   'Boshqaruv paneli': ['Boshqaruv paneli', 'Панель управления', 'Dashboard'],
   'Audit paneli': ['Audit paneli', 'Панель аудита', 'Audit panel'],
+  'Buyruqlar markazi': ['Buyruqlar markazi', 'Центр команд', 'Command center'],
   'Filiallar': ['Filiallar', 'Филиалы', 'Branches'],
+  'Filiallarni solishtirish': [
+    'Filiallarni solishtirish',
+    'Сравнение филиалов',
+    'Compare branches',
+  ],
+  'So‘nggi hodisalar': [
+    'So‘nggi hodisalar',
+    'Последние события',
+    'Recent activity',
+  ],
   'O‘quvchilar': ['O‘quvchilar', 'Ученики', 'Students'],
   'Guruhlar': ['Guruhlar', 'Группы', 'Groups'],
   'O‘qituvchilar': ['O‘qituvchilar', 'Учителя', 'Teachers'],
@@ -394,18 +589,38 @@ const Map<String, List<String>> _menuLabels = {
   'Xabarlar': ['Xabarlar', 'Сообщения', 'Messages'],
   'Suhbat nazorati': ['Suhbat nazorati', 'Контроль чатов', 'Chat oversight'],
   'AI tahlil': ['AI tahlil', 'AI-анализ', 'AI analysis'],
-  'Ruxsatlar · RBAC': ['Ruxsatlar · RBAC', 'Доступы · RBAC', 'Permissions · RBAC'],
+  'Ruxsatlar · RBAC': [
+    'Ruxsatlar · RBAC',
+    'Доступы · RBAC',
+    'Permissions · RBAC',
+  ],
   'Lidlar · Qabul': ['Lidlar · Qabul', 'Лиды · Приём', 'Leads · Intake'],
   'Qabul · Test': ['Qabul · Test', 'Приём · Тест', 'Intake · Test'],
   'Tasdiqlash': ['Tasdiqlash', 'Подтверждение', 'Approvals'],
-  'Jadval · Xonalar': ['Jadval · Xonalar', 'Расписание · Кабинеты', 'Schedule · Rooms'],
+  'Jadval · Xonalar': [
+    'Jadval · Xonalar',
+    'Расписание · Кабинеты',
+    'Schedule · Rooms',
+  ],
   'Anomaliyalar': ['Anomaliyalar', 'Аномалии', 'Anomalies'],
   'Karta adolati': ['Karta adolati', 'Справедливость карт', 'Card fairness'],
-  'Moliyaviy tekshir': ['Moliyaviy tekshir', 'Финансовая проверка', 'Financial audit'],
+  'Moliyaviy tekshir': [
+    'Moliyaviy tekshir',
+    'Финансовая проверка',
+    'Financial audit',
+  ],
   'Kirish jurnali': ['Kirish jurnali', 'Журнал входов', 'Access log'],
   'AI monitoring': ['AI monitoring', 'AI-мониторинг', 'AI monitoring'],
-  'So‘rovnoma yaxlitligi': ['So‘rovnoma yaxlitligi', 'Целостность опросов', 'Survey integrity'],
-  'Holatlar · Flaglar': ['Holatlar · Flaglar', 'Кейсы · Флаги', 'Cases · Flags'],
+  'So‘rovnoma yaxlitligi': [
+    'So‘rovnoma yaxlitligi',
+    'Целостность опросов',
+    'Survey integrity',
+  ],
+  'Holatlar · Flaglar': [
+    'Holatlar · Flaglar',
+    'Кейсы · Флаги',
+    'Cases · Flags',
+  ],
   'Sozlamalar': ['Sozlamalar', 'Настройки', 'Settings'],
 };
 
@@ -465,4 +680,8 @@ String tabLabel(BuildContext context, String id, String fallback) {
 
 /// Human-readable language name in the current language (for the settings row).
 String langName(BuildContext context, SfLang lang) =>
-    tr(context, switch (lang) { SfLang.uz => 'lang_uz', SfLang.ru => 'lang_ru', SfLang.en => 'lang_en' });
+    tr(context, switch (lang) {
+      SfLang.uz => 'lang_uz',
+      SfLang.ru => 'lang_ru',
+      SfLang.en => 'lang_en',
+    });

@@ -1,8 +1,12 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:just_audio/just_audio.dart';
@@ -10,6 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:video_player/video_player.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'api_client.dart';
+import 'api_connection.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
@@ -17,10 +23,105 @@ import 'settings.dart';
 import 'i18n.dart';
 import 'modules.dart';
 import 'pages.dart';
+import 'live_pages.dart';
 import 'reference_ui.dart';
 import 'widgets.dart';
 
 const _pad = EdgeInsets.fromLTRB(16, 4, 16, 24);
+
+Object? _dashboardField(Map<String, dynamic> row, List<String> keys) {
+  final wanted = keys.map((key) => key.toLowerCase()).toSet();
+  for (final entry in row.entries) {
+    if (wanted.contains(entry.key.toLowerCase()) && entry.value != null) {
+      return entry.value;
+    }
+  }
+  return null;
+}
+
+num? _dashboardNumber(Map<String, dynamic> row, List<String> keys) {
+  final value = _dashboardField(row, keys);
+  if (value is num) return value;
+  return num.tryParse('$value'.replaceAll(RegExp(r'[^0-9.\-]'), ''));
+}
+
+String _dashboardText(Map<String, dynamic> row, List<String> keys) {
+  final value = _dashboardField(row, keys);
+  if (value is Map) {
+    final map = Map<String, dynamic>.from(value);
+    return _dashboardText(map, const ['name', 'full_name', 'title', 'id']);
+  }
+  return value?.toString().trim().isNotEmpty == true ? '$value' : '—';
+}
+
+DateTime? _dashboardDate(Map<String, dynamic> row) {
+  final value = _dashboardField(row, const [
+    'paid_at',
+    'payment_date',
+    'created_at',
+    'date',
+    'timestamp',
+  ]);
+  if (value == null) return null;
+  if (value is num) {
+    final milliseconds = value > 100000000000
+        ? value.toInt()
+        : value.toInt() * 1000;
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+  final text = value.toString().trim();
+  final direct = DateTime.tryParse(text);
+  if (direct != null) return direct;
+  final parts = text.split(RegExp(r'[./-]'));
+  if (parts.length >= 3) {
+    final first = int.tryParse(parts[0]);
+    final second = int.tryParse(parts[1]);
+    final third = int.tryParse(parts[2].split(' ').first);
+    if (first != null && second != null && third != null) {
+      if (first > 1900) return DateTime(first, second, third);
+      if (third > 1900) return DateTime(third, second, first);
+    }
+  }
+  return null;
+}
+
+bool _dashboardPaymentCountsAsRevenue(Map<String, dynamic> row) {
+  final raw = _dashboardField(row, const ['payment_status', 'status', 'state']);
+  if (raw == null) return true;
+  final status = raw.toString().trim().toLowerCase();
+  if (status.isEmpty) return true;
+  const excluded = {
+    'pending',
+    'processing',
+    'failed',
+    'rejected',
+    'cancelled',
+    'canceled',
+    'refunded',
+    'reversed',
+    'void',
+  };
+  return !excluded.contains(status);
+}
+
+bool _dashboardRecordIsOpen(Map<String, dynamic> row) {
+  final raw = _dashboardField(row, const [
+    'status',
+    'state',
+    'resolution_status',
+  ]);
+  if (raw == null || raw.toString().trim().isEmpty) return true;
+  const closed = {
+    'closed',
+    'resolved',
+    'dismissed',
+    'rejected',
+    'archived',
+    'completed',
+    'done',
+  };
+  return !closed.contains(raw.toString().trim().toLowerCase());
+}
 
 Widget _mono(
   BuildContext c,
@@ -57,118 +158,183 @@ Future<void> _launchPhoneCall(BuildContext context, String phone) async {
   }
 }
 
-// ── Top bar (dashboard greeting) ───────────────────────────────────────
-class _TopBar extends StatelessWidget {
-  final RoleConfig cfg;
-  final String hello;
-  final String sub;
-  const _TopBar({required this.cfg, required this.hello, required this.sub});
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    final store = AppScope.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
-      child: Row(
-        children: [
-          // Tap the avatar to change it.
-          GestureDetector(
-            onTap: () => Navigator.of(
-              context,
-            ).push(sfPageRoute(AvatarPickerScreen(colors: c))),
-            child: SfAvatar(
-              name: cfg.who,
-              size: 36,
-              color: cfg.accent(c),
-              choice: store.avatarChoice,
-            ),
+/// Shared record inspector used by compact timeline rows and notifications.
+///
+/// A tap must reveal useful context instead of ending in a transient toast.
+/// Keeping the presentation here also gives every inspector the same Material
+/// 3 hierarchy and phone-safe bottom padding.
+Future<void> _showDetailsSheet(
+  BuildContext context, {
+  required String title,
+  required IconData icon,
+  String? subtitle,
+  required List<({IconData icon, String label, String value})> fields,
+  String? primaryLabel,
+  IconData? primaryIcon,
+  VoidCallback? onPrimary,
+}) {
+  final colors = SfTheme.of(context);
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => SfTheme(
+      colors: colors,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * .82,
           ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  hello,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: c.ink,
-                  ),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.borderStrong,
+                  borderRadius: RefRadius.pill,
                 ),
-                Text(
-                  sub,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 11,
-                    color: c.muted,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Quick chat access (Sardor's console has no Chat tab — it lives here).
-          GestureDetector(
-            onTap: () => Navigator.of(context).push(
-              sfPageRoute(SfTheme(colors: c, child: const _MessagesPage())),
-            ),
-            child: Container(
-              width: 38,
-              height: 38,
-              margin: const EdgeInsets.only(right: 8),
-              decoration: BoxDecoration(
-                color: c.surface2,
-                borderRadius: BorderRadius.circular(11),
               ),
-              child: Icon(
-                Icons.chat_bubble_outline_rounded,
-                size: 18,
-                color: c.ink2,
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: () => _showNotifications(context),
-            child: Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: c.surface2,
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(
-                    Icons.notifications_none_rounded,
-                    size: 19,
-                    color: c.ink2,
-                  ),
-                  Positioned(
-                    top: 9,
-                    right: 10,
-                    child: Container(
-                      width: 7,
-                      height: 7,
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: colors.primarySoft,
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Icon(icon, color: colors.primary, size: 23),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                style: RefType.ui(
+                                  size: 17,
+                                  weight: FontWeight.w800,
+                                  color: colors.ink,
+                                ),
+                              ),
+                              if (subtitle != null) ...[
+                                const SizedBox(height: 3),
+                                Text(
+                                  subtitle,
+                                  style: RefType.ui(
+                                    size: 11.5,
+                                    color: colors.muted,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
                       decoration: BoxDecoration(
-                        color: c.danger,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: c.surface2, width: 2),
+                        color: colors.surface2,
+                        borderRadius: BorderRadius.circular(17),
+                        border: Border.all(color: colors.border),
+                      ),
+                      child: Column(
+                        children: [
+                          for (var index = 0; index < fields.length; index++)
+                            _DetailsSheetRow(
+                              field: fields[index],
+                              last: index == fields.length - 1,
+                            ),
+                        ],
                       ),
                     ),
-                  ),
-                ],
+                    if (primaryLabel != null && onPrimary != null) ...[
+                      const SizedBox(height: 14),
+                      RefButton(
+                        label: primaryLabel,
+                        leading: primaryIcon,
+                        block: true,
+                        onPressed: () {
+                          Navigator.of(sheetContext).pop();
+                          onPrimary();
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _DetailsSheetRow extends StatelessWidget {
+  const _DetailsSheetRow({required this.field, required this.last});
+
+  final ({IconData icon, String label, String value}) field;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = SfTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 13),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: colors.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(field.icon, size: 18, color: colors.muted),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Text(
+                field.label,
+                style: RefType.ui(size: 11.5, color: colors.muted),
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                field.value,
+                textAlign: TextAlign.end,
+                style: RefType.ui(
+                  size: 12,
+                  weight: FontWeight.w700,
+                  color: colors.ink,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// Notifications bottom sheet (demo content) opened from the dashboard bell.
+/// Notifications page opened from the dashboard bell.
 void _showNotifications(BuildContext context) {
   final c = SfTheme.of(context);
   Navigator.of(context).push(
@@ -186,6 +352,8 @@ class _Notif {
   final IconData icon;
   final PillTone tone;
   final String title, body, time, group;
+  final String route;
+  final Set<SfRole> roles;
   final bool unread;
   const _Notif(
     this.icon,
@@ -194,8 +362,12 @@ class _Notif {
     this.body,
     this.time,
     this.group, {
+    required this.route,
+    required this.roles,
     this.unread = false,
   });
+
+  String get id => '$group|$title|$time';
 }
 
 const _kNotifs = <_Notif>[
@@ -206,6 +378,8 @@ const _kNotifs = <_Notif>[
     'Azizova Madina · 600 000 so‘m · Payme',
     '2 daq oldin',
     'today',
+    route: 'payments',
+    roles: {SfRole.ceo, SfRole.manager},
     unread: true,
   ),
   _Notif(
@@ -215,6 +389,8 @@ const _kNotifs = <_Notif>[
     'Naqd · kvitansiyasiz · AI skor 88',
     '18 daq oldin',
     'today',
+    route: 'anomalies',
+    roles: {SfRole.audit},
     unread: true,
   ),
   _Notif(
@@ -224,6 +400,8 @@ const _kNotifs = <_Notif>[
     '18/18 o‘rin band · yangi guruh ochish mumkin',
     '1 soat oldin',
     'today',
+    route: 'groups',
+    roles: {SfRole.ceo, SfRole.manager},
     unread: true,
   ),
   _Notif(
@@ -233,6 +411,8 @@ const _kNotifs = <_Notif>[
     "To'lov qaytarish · ta'til · chiqarish",
     '2 soat oldin',
     'today',
+    route: 'approvals',
+    roles: {SfRole.ceo, SfRole.manager},
   ),
   _Notif(
     Icons.call_rounded,
@@ -241,6 +421,8 @@ const _kNotifs = <_Notif>[
     "Ota-onaga 21 kundan beri qo'ng'iroq qilinmagan",
     'Kecha 16:20',
     'earlier',
+    route: 'students',
+    roles: {SfRole.ceo, SfRole.manager},
   ),
   _Notif(
     Icons.emoji_events_rounded,
@@ -249,6 +431,8 @@ const _kNotifs = <_Notif>[
     "Chilonzor filiali oyning eng yaxshisi",
     'Kecha 12:05',
     'earlier',
+    route: 'comparison',
+    roles: {SfRole.ceo},
   ),
   _Notif(
     Icons.warning_amber_rounded,
@@ -257,14 +441,24 @@ const _kNotifs = <_Notif>[
     '38 tasi 30+ kun · eslatma yuborish tavsiya etiladi',
     '2 kun oldin',
     'earlier',
+    route: 'payments',
+    roles: {SfRole.ceo, SfRole.manager},
   ),
 ];
 
 /// Full notifications page (was a bottom sheet) — grouped Today / Earlier,
 /// each entry with an icon, body and relative time.
-class NotificationsScreen extends StatelessWidget {
+class NotificationsScreen extends StatefulWidget {
   final SfColors colors;
-  const NotificationsScreen({super.key, required this.colors});
+  final ValueChanged<String>? onNavigate;
+  const NotificationsScreen({super.key, required this.colors, this.onNavigate});
+
+  @override
+  State<NotificationsScreen> createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  bool _unreadOnly = true;
 
   Color _toneColor(SfColors c, PillTone t) => switch (t) {
     PillTone.success => c.success,
@@ -277,10 +471,31 @@ class NotificationsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = colors;
-    final today = _kNotifs.where((n) => n.group == 'today').toList();
-    final earlier = _kNotifs.where((n) => n.group == 'earlier').toList();
-    final unread = _kNotifs.where((n) => n.unread).length;
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    final settings = SettingsScope.of(context);
+    final relevant = _kNotifs
+        .where(
+          (notification) =>
+              notification.roles.contains(store.role) &&
+              roleCanNavigate(store.role, notification.route),
+        )
+        .toList(growable: false);
+    final visible = relevant
+        .where(
+          (notification) =>
+              !_isHidden(store, settings, notification) &&
+              (!_unreadOnly || _isUnread(store, settings, notification)),
+        )
+        .toList();
+    final today = visible.where((n) => n.group == 'today').toList();
+    final earlier = visible.where((n) => n.group == 'earlier').toList();
+    final unread = relevant
+        .where(
+          (n) =>
+              !_isHidden(store, settings, n) && _isUnread(store, settings, n),
+        )
+        .length;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -317,13 +532,53 @@ class NotificationsScreen extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment<bool>(
+                  value: false,
+                  label: Text('История'),
+                  icon: Icon(Icons.history_rounded),
+                ),
+                ButtonSegment<bool>(
+                  value: true,
+                  label: Text('Новые'),
+                  icon: Icon(Icons.mark_email_unread_outlined),
+                ),
+              ],
+              selected: {_unreadOnly},
+              showSelectedIcon: false,
+              onSelectionChanged: (selection) =>
+                  setState(() => _unreadOnly = selection.first),
+            ),
+            const SizedBox(height: 12),
+            if (visible.isEmpty)
+              RefStatusTile(
+                icon: Icons.done_all_rounded,
+                title: _unreadOnly
+                    ? 'Непрочитанных уведомлений нет'
+                    : 'Уведомлений нет',
+                subtitle: _unreadOnly
+                    ? 'Прочитанные события находятся в истории'
+                    : 'Новые события появятся здесь',
+                tone: RefMetricTone.success,
+                onTap: _unreadOnly
+                    ? () => setState(() => _unreadOnly = false)
+                    : null,
+              ),
             if (today.isNotEmpty) ...[
               _setSec(c, tr(context, 'notif_today')),
               SfCard(
                 child: Column(
                   children: [
                     for (int i = 0; i < today.length; i++)
-                      _notifRow(context, c, today[i], i == today.length - 1),
+                      _notifRow(
+                        context,
+                        c,
+                        store,
+                        settings,
+                        today[i],
+                        i == today.length - 1,
+                      ),
                   ],
                 ),
               ),
@@ -338,6 +593,8 @@ class NotificationsScreen extends StatelessWidget {
                       _notifRow(
                         context,
                         c,
+                        store,
+                        settings,
                         earlier[i],
                         i == earlier.length - 1,
                       ),
@@ -359,15 +616,24 @@ class NotificationsScreen extends StatelessWidget {
             border: Border(top: BorderSide(color: c.border)),
           ),
           child: SfButton(
-            icon: Icons.done_all_rounded,
-            label: tr(context, 'notif_mark_read'),
-            primary: true,
+            icon: unread == 0
+                ? Icons.check_circle_outline_rounded
+                : Icons.done_all_rounded,
+            label: unread == 0
+                ? (_unreadOnly ? 'Открыть историю' : 'Всё прочитано')
+                : '${tr(context, 'notif_mark_read')} · $unread',
+            primary: unread > 0 || _unreadOnly,
             onTap: () {
-              Navigator.of(context).maybePop();
-              _snack(
-                context,
-                tr(context, 'notif_all_read'),
-                bg: const Color(0xFF4F7B3B),
+              if (unread == 0) {
+                if (_unreadOnly) setState(() => _unreadOnly = false);
+                return;
+              }
+              store.markAllLocalNotificationsRead(
+                relevant.where((n) => n.unread).map((n) => n.id),
+              );
+              settings.markNotificationsRead(
+                store.role,
+                relevant.where((n) => n.unread).map((n) => n.id),
               );
             },
           ),
@@ -376,82 +642,210 @@ class NotificationsScreen extends StatelessWidget {
     );
   }
 
-  Widget _notifRow(BuildContext context, SfColors c, _Notif n, bool last) {
+  bool _isUnread(AppStore store, AppSettings settings, _Notif notification) =>
+      notification.unread &&
+      !store.localNotificationIsRead(notification.id) &&
+      !settings.notificationIsRead(store.role, notification.id);
+
+  bool _isHidden(AppStore store, AppSettings settings, _Notif notification) =>
+      store.localNotificationIsHidden(notification.id) ||
+      settings.notificationIsHidden(store.role, notification.id);
+
+  Widget _notifRow(
+    BuildContext context,
+    SfColors c,
+    AppStore store,
+    AppSettings settings,
+    _Notif n,
+    bool last,
+  ) {
     final col = _toneColor(c, n.tone);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+    final unread = _isUnread(store, settings, n);
+    return Dismissible(
+      key: ValueKey('notification-${n.id}'),
+      direction: DismissDirection.horizontal,
+      onDismissed: (_) {
+        store.hideLocalNotification(n.id);
+        settings.hideNotification(store.role, n.id);
+      },
+      background: Container(
+        color: c.success,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 18),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.task_alt_rounded, color: Colors.white),
+            SizedBox(width: 7),
+            Text('Решено', style: TextStyle(color: Colors.white)),
+          ],
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: col.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(10),
+      secondaryBackground: Container(
+        color: c.danger,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 18),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Убрать', style: TextStyle(color: Colors.white)),
+            SizedBox(width: 7),
+            Icon(Icons.archive_outlined, color: Colors.white),
+          ],
+        ),
+      ),
+      child: InkWell(
+        onTap: () => _openNotification(context, store, settings, n),
+        onLongPress: () => _showDetailsSheet(
+          context,
+          title: n.title,
+          subtitle: n.time,
+          icon: n.icon,
+          fields: [
+            (icon: Icons.notes_rounded, label: 'Описание', value: n.body),
+            (icon: Icons.schedule_rounded, label: 'Время', value: n.time),
+            (
+              icon: Icons.route_outlined,
+              label: 'Раздел',
+              value: _notificationRouteLabel(n.route),
             ),
-            child: Icon(n.icon, size: 18, color: col),
+            (
+              icon: Icons.check_circle_outline_rounded,
+              label: 'Статус',
+              value: unread ? 'Новое' : 'Прочитано',
+            ),
+          ],
+          primaryLabel: 'Перейти в раздел',
+          primaryIcon: Icons.arrow_forward_rounded,
+          onPrimary: () => _openNotification(context, store, settings, n),
+        ),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: last ? BorderSide.none : BorderSide(color: c.border),
+            ),
           ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: col.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(n.icon, size: 18, color: col),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (n.unread)
-                      Container(
-                        margin: const EdgeInsets.only(right: 6),
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: c.danger,
-                          shape: BoxShape.circle,
+                    Row(
+                      children: [
+                        if (unread)
+                          Container(
+                            margin: const EdgeInsets.only(right: 6),
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: c.danger,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        Expanded(
+                          child: Text(
+                            n.title,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                              color: c.ink,
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      n.body,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 11,
+                        color: c.muted,
                       ),
-                    Expanded(
-                      child: Text(
-                        n.title,
-                        style: TextStyle(
-                          fontFamily: SfType.ui,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: c.ink,
-                        ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${n.time} · ${_notificationRouteLabel(n.route)}',
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 9.5,
+                        color: c.muted2,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  n.body,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 11,
-                    color: c.muted,
-                  ),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 11),
+                child: Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 13,
+                  color: c.muted2,
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  n.time,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 9.5,
-                    color: c.muted2,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
+
+  void _openNotification(
+    BuildContext context,
+    AppStore store,
+    AppSettings settings,
+    _Notif notification,
+  ) {
+    store.markLocalNotificationRead(notification.id);
+    settings.markNotificationRead(store.role, notification.id);
+    if (widget.onNavigate case final navigate?) {
+      navigate(notification.route);
+      return;
+    }
+    final page = buildAdminPage(notification.route, widget.colors, store.role);
+    if (page != null) {
+      Navigator.of(context).push(sfPageRoute(page));
+      return;
+    }
+    _showDetailsSheet(
+      context,
+      title: notification.title,
+      subtitle: notification.time,
+      icon: notification.icon,
+      fields: [
+        (
+          icon: Icons.notes_rounded,
+          label: 'Описание',
+          value: notification.body,
+        ),
+      ],
+    );
+  }
+
+  String _notificationRouteLabel(String route) => switch (route) {
+    'payments' => 'Платежи',
+    'anomalies' => 'Аномалии',
+    'groups' => 'Группы',
+    'approvals' => 'Согласования',
+    'students' => 'Ученики',
+    'comparison' => 'Филиалы',
+    _ => 'Связанный раздел',
+  };
 }
 
 // ── KPI tile ───────────────────────────────────────────────────────────
@@ -603,11 +997,6 @@ class DashboardScreen extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.zero,
       children: [
-        _TopBar(
-          cfg: cfg,
-          hello: ceo ? tr(context, 'greet_ceo') : tr(context, 'greet_manager'),
-          sub: ceo ? tr(context, 'scope_all') : cfg.scope,
-        ),
         Padding(
           padding: _pad,
           child: Column(
@@ -755,7 +1144,8 @@ class DashboardScreen extends StatelessWidget {
               ),
               SfAiCard(
                 badge: 'Strategik',
-                quote: store.stats.aiQuote,
+                quote:
+                    'AI ещё не подключен. Откройте ассистента, чтобы проверить backend и AI endpoint.',
                 onTap: () => go(ceo ? 'ai' : 'approvals'),
               ),
               if (ceo)
@@ -874,22 +1264,466 @@ class DashboardScreen extends StatelessWidget {
 
 /// Rebuilt dashboard composition using the reference app's large header,
 /// metric-card grid, status tiles and editorial decision surfaces.
-class _ReferenceDashboardPage extends StatelessWidget {
+class _ReferenceDashboardPage extends StatefulWidget {
   const _ReferenceDashboardPage({required this.cfg, required this.go});
 
   final RoleConfig cfg;
   final void Function(String tab) go;
 
   @override
+  State<_ReferenceDashboardPage> createState() =>
+      _ReferenceDashboardPageState();
+}
+
+class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
+  final List<String> _recentDashboardQueries = <String>[];
+
+  RoleConfig get cfg => widget.cfg;
+  void Function(String tab) get go => widget.go;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final api = ApiScope.maybeOf(context)?.notifier;
+      if (mounted && api?.authenticated == true) {
+        api!.refreshDashboard().catchError((_) {});
+      }
+    });
+  }
+
+  List<_DashboardSearchResult> _dashboardSearchResults(
+    AppStore store,
+    ApiSession api,
+  ) {
+    final results = <_DashboardSearchResult>[
+      _DashboardSearchResult(
+        category: 'Tezkor buyruqlar',
+        label: 'Daromad hisoboti',
+        subtitle: 'Davrlar, tushum va moliyaviy trend',
+        icon: Icons.trending_up_rounded,
+        route: cfg.role == SfRole.audit
+            ? 'finance'
+            : cfg.role == SfRole.ceo
+            ? 'report'
+            : 'payments',
+        keywords: 'revenue daromad chart hisobot moliya 6 12 oy',
+      ),
+      const _DashboardSearchResult(
+        category: 'Tezkor buyruqlar',
+        label: 'O‘quvchilarni ochish',
+        subtitle: 'Ro‘yxat, qidiruv va profillar',
+        icon: Icons.groups_rounded,
+        route: 'students',
+        keywords: 'student pupil oquvchi profil',
+      ),
+      const _DashboardSearchResult(
+        category: 'Tezkor buyruqlar',
+        label: 'Guruhlarni ochish',
+        subtitle: 'Guruhlar, davomat va natijalar',
+        icon: Icons.workspaces_rounded,
+        route: 'groups',
+        keywords: 'group guruh sinf',
+      ),
+      const _DashboardSearchResult(
+        category: 'Tezkor buyruqlar',
+        label: 'To‘lovlarni ochish',
+        subtitle: 'Operatsiyalar va to‘lov tafsilotlari',
+        icon: Icons.payments_rounded,
+        route: 'payments',
+        keywords: 'payment pay tolov pul operatsiya',
+      ),
+      _DashboardSearchResult(
+        category: 'Tezkor buyruqlar',
+        label: cfg.role == SfRole.audit
+            ? 'Signallarni tekshirish'
+            : 'AI tahlilni ochish',
+        subtitle: cfg.role == SfRole.audit
+            ? 'Risk va anomaliyalar'
+            : 'Tahlil va tavsiyalar',
+        icon: cfg.role == SfRole.audit
+            ? Icons.flag_rounded
+            : Icons.auto_awesome_rounded,
+        route: cfg.role == SfRole.audit ? 'anomalies' : 'ai',
+        keywords: 'ai suniy intellekt signal risk anomaly',
+      ),
+    ];
+
+    for (final group in menuFor(cfg.role)) {
+      for (final item in group.items) {
+        results.add(
+          _DashboardSearchResult(
+            category: 'Bo‘limlar',
+            label: item.label,
+            subtitle: group.title,
+            icon: item.icon,
+            route: item.id,
+            keywords: '${group.title} ${item.id} ${item.label}',
+          ),
+        );
+      }
+    }
+
+    final live = api.authenticated;
+    if (live) {
+      void addApiResults({
+        required String resource,
+        required String category,
+        required String route,
+        required IconData icon,
+        required List<String> labelKeys,
+        required List<String> subtitleKeys,
+      }) {
+        for (final row in api.records(resource)) {
+          final label = _dashboardText(row, labelKeys);
+          if (label == '—') continue;
+          final subtitle = _dashboardText(row, subtitleKeys);
+          results.add(
+            _DashboardSearchResult(
+              category: category,
+              label: label,
+              subtitle: subtitle == '—' ? 'Backend · $category' : subtitle,
+              icon: icon,
+              route: route,
+              keywords: row.values.join(' '),
+              apiResource: resource,
+              apiRecord: row,
+            ),
+          );
+        }
+      }
+
+      addApiResults(
+        resource: 'students',
+        category: 'O‘quvchilar',
+        route: 'students',
+        icon: Icons.person_rounded,
+        labelKeys: const ['full_name', 'name', 'student_name', 'username'],
+        subtitleKeys: const ['group_name', 'group', 'phone', 'student_id'],
+      );
+      addApiResults(
+        resource: 'groups',
+        category: 'Guruhlar',
+        route: 'groups',
+        icon: Icons.workspaces_rounded,
+        labelKeys: const ['name', 'group_name', 'title'],
+        subtitleKeys: const [
+          'teacher_name',
+          'teacher',
+          'branch_name',
+          'branch',
+        ],
+      );
+      addApiResults(
+        resource: 'payments',
+        category: 'To‘lovlar',
+        route: 'payments',
+        icon: Icons.receipt_long_rounded,
+        labelKeys: const [
+          'operation_number',
+          'transaction_number',
+          'student_name',
+          'payer_name',
+          'id',
+        ],
+        subtitleKeys: const ['amount', 'status', 'payment_method', 'method'],
+      );
+      addApiResults(
+        resource: 'teachers',
+        category: 'O‘qituvchilar',
+        route: 'teachers',
+        icon: Icons.school_outlined,
+        labelKeys: const ['full_name', 'name', 'teacher_name', 'username'],
+        subtitleKeys: const ['subject', 'department_name', 'branch_name'],
+      );
+      addApiResults(
+        resource: 'parents',
+        category: 'Ota-onalar',
+        route: 'parents',
+        icon: Icons.family_restroom_rounded,
+        labelKeys: const ['full_name', 'name', 'parent_name', 'phone'],
+        subtitleKeys: const ['student_name', 'child_name', 'teacher_name'],
+      );
+      addApiResults(
+        resource: 'departments',
+        category: 'Bo‘limlar',
+        route: 'departments',
+        icon: Icons.account_balance_outlined,
+        labelKeys: const ['name', 'department_name', 'title'],
+        subtitleKeys: const ['manager_name', 'head_name', 'branch_name'],
+      );
+      addApiResults(
+        resource: 'branches',
+        category: 'Filiallar',
+        route: 'branches',
+        icon: Icons.account_tree_rounded,
+        labelKeys: const ['name', 'branch_name', 'title'],
+        subtitleKeys: const ['address', 'manager_name', 'phone'],
+      );
+    } else {
+      for (final student in store.students) {
+        final profile = studentProfile(student);
+        results.add(
+          _DashboardSearchResult(
+            category: 'O‘quvchilar',
+            label: student.name,
+            subtitle: '${student.group} · ${profile.branch}',
+            icon: Icons.person_rounded,
+            route: 'students',
+            keywords:
+                '${student.name} ${student.group} ${profile.branch} '
+                '${student.studentNumber ?? profile.studentId} '
+                '${student.phone ?? profile.phone}',
+            student: student,
+          ),
+        );
+      }
+      for (final group in _groupsFrom(store.students, store.extraGroups)) {
+        results.add(
+          _DashboardSearchResult(
+            category: 'Guruhlar',
+            label: group.name,
+            subtitle: '${group.teacher} · ${group.branch}',
+            icon: Icons.workspaces_rounded,
+            route: 'groups',
+            keywords:
+                '${group.name} ${group.teacher} ${group.branch} '
+                '${group.level} ${group.schedule}',
+            group: group,
+          ),
+        );
+      }
+      for (final entry in store.ledger) {
+        results.add(
+          _DashboardSearchResult(
+            category: 'To‘lovlar',
+            label: entry.id,
+            subtitle: '${entry.title} · ${fmtMoney(entry.amount)}',
+            icon: entry.inflow
+                ? Icons.south_west_rounded
+                : Icons.north_east_rounded,
+            route: 'payments',
+            keywords:
+                '${entry.id} ${entry.title} ${entry.who} ${entry.payer ?? ''} '
+                '${entry.student ?? ''} ${entry.group ?? ''} '
+                '${entry.channel} ${entry.status}',
+            payment: entry,
+          ),
+        );
+      }
+      for (final branch in store.branches) {
+        results.add(
+          _DashboardSearchResult(
+            category: 'Filiallar',
+            label: branch.name,
+            subtitle:
+                '${branch.students} o‘quvchi · ${fmtMoney(branch.revenue)}',
+            icon: Icons.account_tree_rounded,
+            route: 'branches',
+            keywords:
+                '${branch.name} ${branch.students} ${branch.revenue} filial',
+            branch: branch,
+          ),
+        );
+      }
+      for (final member in store.staff) {
+        results.add(
+          _DashboardSearchResult(
+            category: 'Xodimlar',
+            label: member.fullName,
+            subtitle: '${member.subject} · ${member.branch}',
+            icon: Icons.badge_outlined,
+            route: 'teachers',
+            keywords:
+                '${member.fullName} ${member.username} ${member.phone} '
+                '${member.subject} ${member.department} ${member.branch}',
+            member: member,
+          ),
+        );
+      }
+    }
+    // Search is also a navigation surface: never reveal a record or command
+    // whose destination is outside the authenticated role's route matrix.
+    return results
+        .where((result) => roleCanNavigate(cfg.role, result.route))
+        .toList(growable: false);
+  }
+
+  Future<void> _showDashboardSearch(AppStore store, ApiSession api) async {
+    final selection = await showModalBottomSheet<_DashboardSearchSelection>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SfTheme(
+        colors: SfTheme.of(context),
+        child: _DashboardSearchSheet(
+          results: _dashboardSearchResults(store, api),
+          recentQueries: _recentDashboardQueries,
+        ),
+      ),
+    );
+    if (selection == null || !mounted) return;
+    final query = selection.query.trim();
+    if (query.isNotEmpty) {
+      setState(() {
+        _recentDashboardQueries.remove(query);
+        _recentDashboardQueries.insert(0, query);
+        if (_recentDashboardQueries.length > 5) {
+          _recentDashboardQueries.removeLast();
+        }
+      });
+    }
+    final result = selection.result;
+    if (result.student != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          StudentDetailScreen(
+            student: result.student!,
+            colors: SfTheme.of(context),
+          ),
+        ),
+      );
+      return;
+    }
+    if (result.group != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          GroupDetailScreen(group: result.group!, colors: SfTheme.of(context)),
+        ),
+      );
+      return;
+    }
+    if (result.payment != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          LedgerEntryScreen(
+            entry: result.payment!,
+            colors: SfTheme.of(context),
+          ),
+        ),
+      );
+      return;
+    }
+    if (result.member != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          StaffDetailScreen(
+            member: result.member!,
+            colors: SfTheme.of(context),
+          ),
+        ),
+      );
+      return;
+    }
+    if (result.branch != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          BranchWorkspaceScreen(
+            branch: result.branch!,
+            colors: SfTheme.of(context),
+          ),
+        ),
+      );
+      return;
+    }
+    if (result.apiRecord != null && result.apiResource != null) {
+      await Navigator.of(context).push(
+        sfPageRoute(
+          LiveRecordDetailPage(
+            resource: result.apiResource!,
+            initial: result.apiRecord!,
+            title: '${result.category} · ${result.label}',
+            colors: SfTheme.of(context),
+          ),
+        ),
+      );
+      return;
+    }
+    go(result.route);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final store = AppScope.of(context);
+    final settings = SettingsScope.of(context);
+    // The app itself always provides ApiScope. This empty session only keeps
+    // the established offline/demo shell free of accidental network work.
+    final api = ApiScope.maybeOf(context)?.notifier ?? ApiSession();
+    final live = api.authenticated;
+    final unreadNotifications = live
+        ? api.unreadNotificationCount
+        : _kNotifs
+              .where(
+                (notification) =>
+                    notification.roles.contains(store.role) &&
+                    roleCanNavigate(store.role, notification.route) &&
+                    notification.unread &&
+                    !store.localNotificationIsHidden(notification.id) &&
+                    !store.localNotificationIsRead(notification.id) &&
+                    !settings.notificationIsHidden(
+                      store.role,
+                      notification.id,
+                    ) &&
+                    !settings.notificationIsRead(store.role, notification.id),
+              )
+              .length;
     final ceo = cfg.role == SfRole.ceo;
     final audit = cfg.role == SfRole.audit;
-    final revenue = store.scopedRevenue(ceo ? 1284000000 : 342000000);
-    final debt = ((ceo ? 84000000 : 22400000) * store.rangeFactor).round();
-    final students = store.scopedStudents(ceo ? 1842 : 512);
-    final attendance = store.scopedAttendance(91);
+    final payments = api.records('payments');
+    final liveRevenue = payments
+        .where(_dashboardPaymentCountsAsRevenue)
+        .fold<num>(
+          0,
+          (sum, row) =>
+              sum +
+              (_dashboardNumber(row, const [
+                    'amount',
+                    'paid_amount',
+                    'total',
+                  ]) ??
+                  0),
+        );
+    final liveStudents = api.records('students');
+    final liveStaff = api.records('staff');
+    final liveDebt = liveStudents.fold<num>(
+      0,
+      (sum, row) =>
+          sum +
+          (_dashboardNumber(row, const [
+                'debt',
+                'outstanding',
+                'balance_due',
+                'amount_due',
+              ]) ??
+              0),
+    );
+    final summary = api.document('attendanceSummary');
+    final summaryMap = summary is Map
+        ? Map<String, dynamic>.from(summary)
+        : const <String, dynamic>{};
+    final liveAttendance = _dashboardNumber(summaryMap, const [
+      'attendance',
+      'attendance_rate',
+      'attendance_percentage',
+      'percentage',
+      'present_rate',
+    ]);
+    final revenue = live
+        ? liveRevenue
+        : store.scopedRevenue(ceo ? 1284000000 : 342000000);
+    final debt = live
+        ? liveDebt
+        : ((ceo ? 84000000 : 22400000) * store.rangeFactor).round();
+    final students = live
+        ? (api.totalFor('students') > 0
+              ? api.totalFor('students')
+              : liveStudents.length)
+        : store.scopedStudents(ceo ? 1842 : 512);
+    final attendance = live
+        ? liveAttendance
+        : store.scopedAttendance(91).toDouble();
     final title = audit
         ? tr(context, 'greet_audit')
         : tr(context, ceo ? 'dash_title_ceo' : 'dash_title_manager');
@@ -900,94 +1734,131 @@ class _ReferenceDashboardPage extends StatelessWidget {
         ? <Widget>[
             RefMetricCard(
               label: tr(context, 'kpi_open_flags'),
-              value: '12',
+              value: live
+                  ? '${api.records('studentRisk').where(_dashboardRecordIsOpen).length}'
+                  : '12',
               icon: Icons.flag_rounded,
               tone: RefMetricTone.danger,
-              detail: '3 ta yuqori',
+              detail: live ? 'Intelligence risk API' : '3 ta yuqori',
               onTap: () => go('anomalies'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_active_cases'),
-              value: '8',
+              value: live ? '—' : '8',
               icon: Icons.push_pin_rounded,
               tone: RefMetricTone.primary,
-              detail: '2 ta jiddiy',
+              detail: live
+                  ? 'Case endpoint hali e’lon qilinmagan'
+                  : '2 ta jiddiy',
               onTap: () => go('cases'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_anom_score'),
-              value: '2.4%',
+              value: live ? '—' : '2.4%',
               icon: Icons.analytics_outlined,
               tone: RefMetricTone.warning,
-              detail: 'tranzaksiyalar',
+              detail: live ? 'API bu KPI ni qaytarmadi' : 'tranzaksiyalar',
               onTap: () => go('anomalies'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_compliance'),
-              value: '96.8%',
+              value: live ? '—' : '96.8%',
               icon: Icons.shield_rounded,
               tone: RefMetricTone.success,
-              detail: '+1.2%',
+              detail: live ? 'API bu KPI ni qaytarmadi' : '+1.2%',
               onTap: () => go('cases'),
             ),
           ]
         : <Widget>[
             RefMetricCard(
               label: tr(context, 'kpi_revenue'),
-              value: fmtMoneyMln(revenue),
+              value: live && payments.isEmpty ? '—' : fmtMoneyMln(revenue),
               icon: Icons.trending_up_rounded,
               tone: RefMetricTone.success,
-              detail: '+12.4%',
-              onTap: () => Navigator.of(
-                context,
-              ).push(sfPageRoute(LedgerScreen(colors: c))),
+              detail: live
+                  ? '${api.totalFor('payments') > 0 ? api.totalFor('payments') : payments.length} API to‘lov'
+                  : '+12.4%',
+              onTap: () => go(ceo ? 'report' : 'payments'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_students'),
               value: '$students',
               icon: Icons.groups_rounded,
               tone: RefMetricTone.primary,
-              detail: '+4.1%',
+              detail: live ? 'Backend ro‘yxati' : '+4.1%',
               onTap: () => go('students'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_attendance'),
-              value: '$attendance%',
+              value: live
+                  ? attendance == null
+                        ? '—'
+                        : '${attendance.toStringAsFixed(attendance % 1 == 0 ? 0 : 1)}%'
+                  : '$attendance%',
               icon: Icons.how_to_reg_rounded,
               tone: RefMetricTone.success,
-              detail: '+0.8%',
-              onTap: () => Navigator.of(context).push(
-                sfPageRoute(
-                  SfTheme(
-                    colors: c,
-                    child: AttendanceScreen(colors: c),
-                  ),
-                ),
-              ),
+              detail: live ? 'Attendance summary' : '+0.8%',
+              onTap: () => go('attendance'),
             ),
             RefMetricCard(
-              label: tr(context, 'kpi_churn'),
-              value: '3.4%',
-              icon: Icons.trending_down_rounded,
-              tone: RefMetricTone.danger,
-              detail: 'Maqsad: < 4%',
-              onTap: () => go('ai'),
+              label: live ? 'Xodimlar' : tr(context, 'kpi_churn'),
+              value: live ? '${liveStaff.length}' : '3.4%',
+              icon: live ? Icons.badge_rounded : Icons.trending_down_rounded,
+              tone: live ? RefMetricTone.primary : RefMetricTone.danger,
+              detail: live ? 'Backend ro‘yxati' : 'Maqsad: < 4%',
+              onTap: () => go(live ? 'teachers' : 'ai'),
             ),
             RefMetricCard(
               label: tr(context, 'kpi_debt'),
-              value: fmtMoneyMln(debt),
+              value: live && liveStudents.isEmpty ? '—' : fmtMoneyMln(debt),
               icon: Icons.account_balance_wallet_outlined,
               tone: RefMetricTone.warning,
-              detail: ceo ? '142 oila' : '38 oila',
-              onTap: () => go('students'),
+              detail: live
+                  ? 'Student balances'
+                  : ceo
+                  ? '142 oila'
+                  : '38 oila',
+              onTap: () => go(
+                live
+                    ? ceo
+                          ? 'report'
+                          : 'payments'
+                    : 'students',
+              ),
             ),
             RefMetricCard(
-              label: ceo ? tr(context, 'kpi_nps') : tr(context, 'kpi_pending'),
-              value: ceo ? '72' : '${store.pendingCount}',
-              icon: ceo ? Icons.star_rounded : Icons.task_alt_rounded,
-              tone: ceo ? RefMetricTone.accent : RefMetricTone.warning,
-              detail: ceo ? 'Ota-onalar' : "To'lov · ta'til",
-              onTap: () => go(ceo ? 'ai' : 'approvals'),
+              label: live
+                  ? 'O‘qituvchilar'
+                  : ceo
+                  ? tr(context, 'kpi_nps')
+                  : tr(context, 'kpi_pending'),
+              value: live
+                  ? '${api.records('teachers').length}'
+                  : ceo
+                  ? '72'
+                  : '${store.pendingCount}',
+              icon: live
+                  ? Icons.school_outlined
+                  : ceo
+                  ? Icons.star_rounded
+                  : Icons.task_alt_rounded,
+              tone: live
+                  ? RefMetricTone.primary
+                  : ceo
+                  ? RefMetricTone.accent
+                  : RefMetricTone.warning,
+              detail: live
+                  ? 'Jamoa va biriktirilgan guruhlar'
+                  : ceo
+                  ? 'Ota-onalar'
+                  : "To'lov · ta'til",
+              onTap: () => go(
+                live
+                    ? 'teachers'
+                    : ceo
+                    ? 'ai'
+                    : 'approvals',
+              ),
             ),
           ];
     return ListView(
@@ -1016,26 +1887,41 @@ class _ReferenceDashboardPage extends StatelessWidget {
             RefIconAction(
               icon: Icons.chat_bubble_outline_rounded,
               tooltip: 'Xabarlar',
-              onPressed: () => Navigator.of(context).push(
-                sfPageRoute(SfTheme(colors: c, child: const _MessagesPage())),
-              ),
+              onPressed: () => go('messages'),
             ),
             RefIconAction(
               icon: Icons.notifications_none_rounded,
               tooltip: 'Bildirishnomalar',
-              badge: 1,
-              onPressed: () => _showNotifications(context),
+              badge: unreadNotifications,
+              onPressed: () => go('notifications'),
             ),
             RefIconAction(
               icon: Icons.description_outlined,
               tooltip: audit
                   ? tr(context, 'btn_audit_report')
                   : tr(context, 'btn_report'),
-              onPressed: () => Navigator.of(
-                context,
-              ).push(sfPageRoute(ReportScreen(colors: c, role: cfg.role))),
+              onPressed: () => go(
+                audit
+                    ? 'finance'
+                    : ceo
+                    ? 'report'
+                    : 'payments',
+              ),
             ),
           ],
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
+          child: _CommandPulse(
+            audit: audit,
+            live: live,
+            revenue: live && payments.isEmpty ? '—' : fmtMoneyMln(revenue),
+            students: students,
+            signals: audit
+                ? (live ? api.records('studentRisk').length : 12)
+                : unreadNotifications,
+            onOpen: () => go(audit ? 'anomalies' : 'notifications'),
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 28),
@@ -1043,8 +1929,8 @@ class _ReferenceDashboardPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               RefPressable(
-                onPressed: () =>
-                    _snack(context, '🔎 ${tr(context, 'search_hint')}'),
+                key: const ValueKey('dashboard-global-search'),
+                onPressed: () => _showDashboardSearch(store, api),
                 borderRadius: RefRadius.md,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
@@ -1079,7 +1965,7 @@ class _ReferenceDashboardPage extends StatelessWidget {
               ),
               if (!audit) ...[
                 const SizedBox(height: 12),
-                _ReferenceDashboardContext(showBranches: ceo),
+                _ReferenceDashboardContext(showBranches: ceo, live: live),
               ],
               const SizedBox(height: 16),
               RefAdaptiveGrid(children: metrics),
@@ -1088,17 +1974,21 @@ class _ReferenceDashboardPage extends StatelessWidget {
                 _ReferenceRevenuePanel(
                   revenue: revenue,
                   ceo: ceo,
-                  onTap: () => Navigator.of(
-                    context,
-                  ).push(sfPageRoute(LedgerScreen(colors: c))),
+                  live: live,
+                  livePayments: payments,
+                  onTap: () => go(ceo ? 'report' : 'payments'),
                 )
               else
                 _ReferenceAuditSignals(onTap: () => go('anomalies')),
               const SizedBox(height: 12),
               _ReferenceAiInsight(
                 quote: audit
-                    ? 'Sebzorda 3 ta yuqori signal: davomat, naqd to‘lov va karta nomutanosibligi.'
-                    : store.stats.aiQuote,
+                    ? live
+                          ? '${api.records('studentRisk').length} ta live risk yozuvi mavjud. Tafsilotlar uchun Signal sahifasini oching.'
+                          : 'Sebzorda 3 ta yuqori signal: davomat, naqd to‘lov va karta nomutanosibligi.'
+                    : live
+                    ? 'Live backend ma’lumotlari ulangan. Reyting, davomat va moliyani tegishli kartadan oching.'
+                    : 'AI ещё не подключен. Откройте ассистента, чтобы проверить backend и AI endpoint.',
                 onTap: () => go(
                   audit
                       ? 'anomalies'
@@ -1112,37 +2002,57 @@ class _ReferenceDashboardPage extends StatelessWidget {
               if (audit)
                 _ReferenceAuditQueue(onTap: () => go('anomalies'))
               else ...[
-                _ReferenceTeacherRanking(store: store, colors: c),
+                _ReferenceTeacherRanking(
+                  store: store,
+                  colors: c,
+                  apiTeachers: live ? api.records('teachers') : null,
+                  onOpen: () => go('teachers'),
+                ),
                 const SizedBox(height: 20),
                 RefSectionHeader(
                   title: tr(context, 'card_branch_rank'),
                   subtitle: ceo
                       ? 'Filiallar bo‘yicha joriy ko‘rsatkich'
                       : 'Operatsion ustuvorliklar',
-                ),
-                const SizedBox(height: 8),
-                _ReferenceBranchRank(
-                  branches: store.branches,
-                  colors: c,
-                  onOpen: (branch) => Navigator.of(context).push(
-                    sfPageRoute(
-                      BranchWorkspaceScreen(branch: branch, colors: c),
+                  trailing: TextButton(
+                    onPressed: () => go(ceo ? 'branches' : 'groups'),
+                    child: Text(
+                      tr(context, 'link_all'),
+                      style: RefType.ui(
+                        size: 11.5,
+                        weight: FontWeight.w700,
+                        color: c.primary,
+                      ),
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                if (live)
+                  RefStatusTile(
+                    icon: Icons.account_tree_rounded,
+                    title: 'Filiallar',
+                    subtitle:
+                        '${api.records('branches').length} ta backend filiali',
+                    tone: RefMetricTone.primary,
+                    trailing: const Icon(Icons.arrow_forward_rounded),
+                    onTap: () => go(ceo ? 'branches' : 'groups'),
+                  )
+                else
+                  _ReferenceBranchRank(
+                    branches: store.branches,
+                    colors: c,
+                    onOpen: (branch) => Navigator.of(context).push(
+                      sfPageRoute(
+                        BranchWorkspaceScreen(branch: branch, colors: c),
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 20),
                 RefSectionHeader(
                   title: tr(context, 'card_attendance_health'),
                   subtitle: 'Bugungi holat',
                   trailing: TextButton(
-                    onPressed: () => Navigator.of(context).push(
-                      sfPageRoute(
-                        SfTheme(
-                          colors: c,
-                          child: AttendanceScreen(colors: c),
-                        ),
-                      ),
-                    ),
+                    onPressed: () => go('attendance'),
                     child: Text(
                       tr(context, 'link_all'),
                       style: RefType.ui(
@@ -1155,14 +2065,18 @@ class _ReferenceDashboardPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _ReferenceAttendanceHealth(
-                  onTap: () => Navigator.of(context).push(
-                    sfPageRoute(
-                      SfTheme(
-                        colors: c,
-                        child: AttendanceScreen(colors: c),
-                      ),
-                    ),
-                  ),
+                  percentage: live
+                      ? liveAttendance == null
+                            ? '—'
+                            : '${liveAttendance.toStringAsFixed(liveAttendance % 1 == 0 ? 0 : 1)}%'
+                      : '91%',
+                  subtitle: live
+                      ? '${api.records('attendanceRecords').length} ta attendance qaydi'
+                      : '72% yaxshi · 19% kuzatuv · 9% e’tibor',
+                  fraction: attendance == null
+                      ? null
+                      : (attendance / 100).clamp(0.0, 1.0).toDouble(),
+                  onTap: () => go('attendance'),
                 ),
               ],
             ],
@@ -1173,10 +2087,578 @@ class _ReferenceDashboardPage extends StatelessWidget {
   }
 }
 
+class _DashboardSearchResult {
+  final String category;
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final String route;
+  final String keywords;
+  final Student? student;
+  final GroupInfo? group;
+  final LedgerEntry? payment;
+  final StaffMember? member;
+  final Branch? branch;
+  final String? apiResource;
+  final Map<String, dynamic>? apiRecord;
+
+  const _DashboardSearchResult({
+    required this.category,
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.route,
+    required this.keywords,
+    this.student,
+    this.group,
+    this.payment,
+    this.member,
+    this.branch,
+    this.apiResource,
+    this.apiRecord,
+  });
+
+  bool matches(String query) {
+    final normalized = query.trim().toLowerCase();
+    if (normalized.isEmpty) return category == 'Tezkor buyruqlar';
+    return '$label $subtitle $category $keywords'.toLowerCase().contains(
+      normalized,
+    );
+  }
+}
+
+class _DashboardSearchSelection {
+  final _DashboardSearchResult result;
+  final String query;
+
+  const _DashboardSearchSelection(this.result, this.query);
+}
+
+class _DashboardSearchSheet extends StatefulWidget {
+  const _DashboardSearchSheet({
+    required this.results,
+    required this.recentQueries,
+  });
+
+  final List<_DashboardSearchResult> results;
+  final List<String> recentQueries;
+
+  @override
+  State<_DashboardSearchSheet> createState() => _DashboardSearchSheetState();
+}
+
+class _DashboardSearchSheetState extends State<_DashboardSearchSheet> {
+  final TextEditingController _controller = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _setQuery(String value) {
+    _controller
+      ..text = value
+      ..selection = TextSelection.collapsed(offset: value.length);
+    setState(() => _query = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final filtered = widget.results
+        .where((result) => result.matches(_query))
+        .toList(growable: false);
+    final grouped = <String, List<_DashboardSearchResult>>{};
+    for (final result in filtered) {
+      grouped.putIfAbsent(result.category, () => []).add(result);
+    }
+    final height = MediaQuery.sizeOf(context).height * .88;
+    return Container(
+      // Landscape phones can be shorter than 420 px. Never make the search
+      // sheet taller than the available viewport.
+      height: height.clamp(280, 760).toDouble(),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: .18),
+            blurRadius: 34,
+            offset: const Offset(0, -8),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 12, 10, 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: c.border,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  'Global qidiruv',
+                  style: RefType.ui(
+                    size: 15,
+                    weight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                const Spacer(),
+                RefIconAction(
+                  icon: Icons.close_rounded,
+                  tooltip: 'Yopish',
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+            child: TextField(
+              key: const ValueKey('dashboard-search-input'),
+              controller: _controller,
+              focusNode: _focusNode,
+              textInputAction: TextInputAction.search,
+              onChanged: (value) => setState(() => _query = value),
+              style: RefType.ui(
+                size: 14,
+                weight: FontWeight.w600,
+                color: c.ink,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Bo‘lim, o‘quvchi, guruh yoki to‘lov...',
+                prefixIcon: Icon(Icons.search_rounded, color: c.primary),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        key: const ValueKey('dashboard-search-clear'),
+                        tooltip: 'Tozalash',
+                        onPressed: () => _setQuery(''),
+                        icon: const Icon(Icons.cancel_rounded),
+                      ),
+                filled: true,
+                fillColor: c.surface2,
+                border: OutlineInputBorder(
+                  borderRadius: RefRadius.md,
+                  borderSide: BorderSide(color: c.border),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: RefRadius.md,
+                  borderSide: BorderSide(color: c.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: RefRadius.md,
+                  borderSide: BorderSide(color: c.primary, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+          if (_query.isEmpty && widget.recentQueries.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    for (final recent in widget.recentQueries)
+                      ActionChip(
+                        avatar: Icon(
+                          Icons.history_rounded,
+                          size: 16,
+                          color: c.primary,
+                        ),
+                        label: Text(
+                          recent,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onPressed: () => _setQuery(recent),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          Divider(height: 1, color: c.border),
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(
+                    key: const ValueKey('dashboard-search-empty'),
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.search_off_rounded,
+                            size: 44,
+                            color: c.muted2,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Natija topilmadi',
+                            style: RefType.ui(
+                              size: 16,
+                              weight: FontWeight.w800,
+                              color: c.ink,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            'Ism, guruh, operatsiya raqami yoki bo‘lim nomini tekshiring.',
+                            textAlign: TextAlign.center,
+                            style: RefType.ui(size: 12, color: c.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                    children: [
+                      for (final category in grouped.entries) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 12, 8, 6),
+                          child: Text(
+                            category.key.toUpperCase(),
+                            style: RefType.eyebrow(color: c.muted),
+                          ),
+                        ),
+                        for (final result in category.value)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Material(
+                              color: Colors.transparent,
+                              borderRadius: RefRadius.sm,
+                              child: ListTile(
+                                key: ValueKey(
+                                  'dashboard-search-result-${result.route}-${result.label}',
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: RefRadius.sm,
+                                ),
+                                tileColor: c.surface2.withValues(alpha: .5),
+                                leading: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: c.primarySoft,
+                                    borderRadius: RefRadius.sm,
+                                  ),
+                                  child: Icon(
+                                    result.icon,
+                                    size: 20,
+                                    color: c.primary,
+                                  ),
+                                ),
+                                title: Text(
+                                  result.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: RefType.ui(
+                                    size: 13.5,
+                                    weight: FontWeight.w800,
+                                    color: c.ink,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  result.subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: RefType.ui(size: 11, color: c.muted),
+                                ),
+                                trailing: Icon(
+                                  Icons.north_west_rounded,
+                                  size: 17,
+                                  color: c.primary,
+                                ),
+                                onTap: () => Navigator.of(context).pop(
+                                  _DashboardSearchSelection(
+                                    result,
+                                    _query.trim().isEmpty
+                                        ? result.label
+                                        : _query.trim(),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A dashboard-specific command centre, deliberately unlike the legacy stack
+/// of neutral cards. It gives the first viewport a decisive, live-operating
+/// surface on both narrow and wide screens.
+class _CommandPulse extends StatelessWidget {
+  const _CommandPulse({
+    required this.audit,
+    required this.live,
+    required this.revenue,
+    required this.students,
+    required this.signals,
+    required this.onOpen,
+  });
+
+  final bool audit;
+  final bool live;
+  final String revenue;
+  final int students;
+  final int signals;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final base = dark ? c.surface2 : c.ink;
+    final foreground = dark ? c.ink : c.surface;
+    final muted = foreground.withValues(alpha: .68);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            base,
+            Color.alphaBlend(
+              c.primary.withValues(alpha: dark ? .45 : .66),
+              base,
+            ),
+            Color.alphaBlend(
+              c.accent.withValues(alpha: dark ? .26 : .34),
+              base,
+            ),
+          ],
+        ),
+        borderRadius: RefRadius.xl,
+        boxShadow: [
+          BoxShadow(
+            color: c.primary.withValues(alpha: .28),
+            blurRadius: 32,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: RefRadius.xl,
+        child: Stack(
+          children: [
+            Positioned(
+              top: -56,
+              right: -28,
+              child: Container(
+                width: 176,
+                height: 176,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: c.accent.withValues(alpha: .18),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -72,
+              right: 76,
+              child: Container(
+                width: 176,
+                height: 176,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: c.primary.withValues(alpha: .18),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 410;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 9,
+                            height: 9,
+                            decoration: BoxDecoration(
+                              color: c.accent,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: c.accent.withValues(alpha: .7),
+                                  blurRadius: 12,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              live
+                                  ? 'LIVE CONTROL TOWER'
+                                  : 'TODAY / CONTROL TOWER',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: RefType.mono(
+                                size: 10,
+                                weight: FontWeight.w700,
+                                color: muted,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          RefPressable(
+                            onPressed: onOpen,
+                            borderRadius: RefRadius.pill,
+                            semanticLabel: 'Tafsilotlarni ochish',
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 11,
+                                vertical: 7,
+                              ),
+                              decoration: BoxDecoration(
+                                color: foreground.withValues(alpha: .12),
+                                borderRadius: RefRadius.pill,
+                                border: Border.all(
+                                  color: foreground.withValues(alpha: .18),
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.north_east_rounded,
+                                size: 17,
+                                color: foreground,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        audit
+                            ? 'Signal va xavflar\nradardan chetda emas.'
+                            : 'Bugun nimani\nboshqarishingiz kerak.',
+                        style: RefType.display(
+                          size: compact ? 33 : 39,
+                          color: foreground,
+                          height: .95,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Wrap(
+                        spacing: 22,
+                        runSpacing: 14,
+                        children: [
+                          _CommandPulseStat(
+                            value: audit ? '$signals' : revenue,
+                            label: audit ? 'ochiq signal' : 'bugungi oqim',
+                            color: c.accent,
+                            foreground: foreground,
+                          ),
+                          _CommandPulseStat(
+                            value: audit ? '96.8%' : '$students',
+                            label: audit ? 'compliance' : 'faol o‘quvchi',
+                            color: c.primary.withValues(alpha: .92),
+                            foreground: foreground,
+                          ),
+                          _CommandPulseStat(
+                            value: audit ? '02' : '$signals',
+                            label: audit ? 'yuqori ustuvor' : 'yangi xabar',
+                            color: c.warn,
+                            foreground: foreground,
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CommandPulseStat extends StatelessWidget {
+  const _CommandPulseStat({
+    required this.value,
+    required this.label,
+    required this.color,
+    required this.foreground,
+  });
+
+  final String value;
+  final String label;
+  final Color color;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Container(width: 24, height: 3, color: color),
+      const SizedBox(height: 7),
+      Text(
+        value,
+        style: RefType.mono(
+          size: 18,
+          weight: FontWeight.w700,
+          color: foreground,
+        ),
+      ),
+      const SizedBox(height: 2),
+      Text(
+        label.toUpperCase(),
+        style: RefType.ui(
+          size: 9.5,
+          weight: FontWeight.w700,
+          letterSpacing: .6,
+          color: foreground.withValues(alpha: .62),
+        ),
+      ),
+    ],
+  );
+}
+
 class _ReferenceDashboardContext extends StatelessWidget {
-  const _ReferenceDashboardContext({required this.showBranches});
+  const _ReferenceDashboardContext({
+    required this.showBranches,
+    this.live = false,
+  });
 
   final bool showBranches;
+  final bool live;
 
   String _short(DateTime date) {
     const months = [
@@ -1324,8 +2806,49 @@ class _ReferenceDashboardContext extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (live) {
+      return _ReferenceContextAction(
+        icon: Icons.cloud_done_outlined,
+        label: 'Live · область доступа backend',
+        onTap: () => _showDetailsSheet(
+          context,
+          title: 'Live-область данных',
+          subtitle: 'Параметры текущей API-сессии',
+          icon: Icons.cloud_done_outlined,
+          fields: const [
+            (
+              icon: Icons.security_rounded,
+              label: 'Доступ',
+              value: 'Определяется backend permissions',
+            ),
+            (
+              icon: Icons.account_tree_outlined,
+              label: 'Филиалы',
+              value: 'Только разрешённые API',
+            ),
+            (
+              icon: Icons.date_range_rounded,
+              label: 'Период',
+              value: 'Параметры live-запроса',
+            ),
+          ],
+        ),
+      );
+    }
     final store = AppScope.of(context);
     final items = <Widget>[
+      _ReferenceContextAction(
+        icon: Icons.science_outlined,
+        label: 'OFFLINE DEMO',
+        onTap: () => Navigator.of(context).push(
+          sfPageRoute(
+            SfTheme(
+              colors: SfTheme.of(context),
+              child: const ApiConnectionScreen(),
+            ),
+          ),
+        ),
+      ),
       _ReferenceContextAction(
         icon: Icons.date_range_rounded,
         label:
@@ -1414,11 +2937,15 @@ class _ReferenceRevenuePanel extends StatefulWidget {
   const _ReferenceRevenuePanel({
     required this.revenue,
     required this.ceo,
+    required this.live,
+    required this.livePayments,
     required this.onTap,
   });
 
   final num revenue;
   final bool ceo;
+  final bool live;
+  final List<Map<String, dynamic>> livePayments;
   final VoidCallback onTap;
 
   @override
@@ -1444,44 +2971,76 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
     100,
   ];
 
-  static final _dates = <DateTime>[
-    DateTime(2025, 8, 20),
-    DateTime(2025, 9, 20),
-    DateTime(2025, 10, 20),
-    DateTime(2025, 11, 20),
-    DateTime(2025, 12, 20),
-    DateTime(2026, 1, 20),
-    DateTime(2026, 2, 20),
-    DateTime(2026, 3, 20),
-    DateTime(2026, 4, 20),
-    DateTime(2026, 5, 20),
-    DateTime(2026, 6, 20),
-    DateTime(2026, 7, 20),
-  ];
-
-  String _dateLabel(DateTime value) =>
-      '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
-
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    final start = _months == 6 ? _monthlyRevenue.length - 6 : 0;
-    final baseline = widget.ceo ? 1284000000 : 342000000;
-    final scale = widget.revenue / baseline;
-    final visible = _monthlyRevenue
+    final now = DateTime.now();
+    final calendarMonths = List<DateTime>.generate(12, (index) {
+      final offset = 11 - index;
+      return DateTime(now.year, now.month - offset);
+    });
+    late final List<double> source;
+    if (widget.live) {
+      source = List<double>.filled(calendarMonths.length, 0);
+      for (final payment in widget.livePayments) {
+        if (!_dashboardPaymentCountsAsRevenue(payment)) continue;
+        final amount =
+            _dashboardNumber(payment, const [
+              'amount',
+              'paid_amount',
+              'total',
+            ]) ??
+            0;
+        if (amount <= 0) continue;
+        // An undated payment cannot be assigned to a reporting month without
+        // inventing data. Keep it in the source table, but exclude it from the
+        // period chart until the backend supplies a real timestamp.
+        final date = _dashboardDate(payment);
+        if (date == null) continue;
+        final index = calendarMonths.indexWhere(
+          (month) => month.year == date.year && month.month == date.month,
+        );
+        if (index >= 0) source[index] += amount.toDouble();
+      }
+    } else {
+      final weightTotal = _monthlyRevenue.fold<double>(
+        0,
+        (sum, value) => sum + value,
+      );
+      source = _monthlyRevenue
+          .map((weight) => widget.revenue * weight / weightTotal)
+          .toList(growable: false);
+    }
+    final count = source.length < _months ? source.length : _months;
+    final start = source.length - count;
+    final visible = source.sublist(start);
+    final labels = calendarMonths
         .sublist(start)
-        .map((value) => value * 1e6 * scale)
-        .toList();
-    final dates = _dates.sublist(start);
+        .map(
+          (date) =>
+              '${date.month.toString().padLeft(2, '0')}/${date.year.toString().substring(2)}',
+        )
+        .toList(growable: false);
+    final periodRevenue = visible.fold<double>(0, (sum, value) => sum + value);
     final spots = <FlSpot>[
       for (var index = 0; index < visible.length; index++)
         FlSpot(index.toDouble(), visible[index] / 1e6),
     ];
+    final selectedPoint =
+        _selectedPoint != null && _selectedPoint! < spots.length
+        ? _selectedPoint
+        : null;
     final values = spots.map((spot) => spot.y).toList();
-    final minY = (values.reduce((a, b) => a < b ? a : b) * .92).floorToDouble();
-    final maxY = (values.reduce((a, b) => a > b ? a : b) * 1.08).ceilToDouble();
-    final horizontalInterval =
-        ((maxY - minY) / 3).clamp(1, double.infinity).toDouble();
+    final minY = values.isEmpty
+        ? 0.0
+        : (values.reduce((a, b) => a < b ? a : b) * .92).floorToDouble();
+    var maxY = values.isEmpty
+        ? 1.0
+        : (values.reduce((a, b) => a > b ? a : b) * 1.08).ceilToDouble();
+    if (maxY <= minY) maxY = minY + 1;
+    final horizontalInterval = ((maxY - minY) / 3)
+        .clamp(1, double.infinity)
+        .toDouble();
     return RefSurfaceCard(
       padding: EdgeInsets.zero,
       elevated: true,
@@ -1531,7 +3090,11 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
                             ),
                           ),
                           Text(
-                            widget.ceo ? 'Barcha filiallar' : 'Joriy filial',
+                            widget.live
+                                ? '${widget.livePayments.length} ta live payment'
+                                : widget.ceo
+                                ? 'Barcha filiallar'
+                                : 'Joriy filial',
                             style: RefType.ui(size: 11, color: c.muted),
                           ),
                         ],
@@ -1543,7 +3106,10 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
               ),
               const SizedBox(height: 18),
               Text(
-                fmtMoneyMln(widget.revenue),
+                widget.live && widget.livePayments.isEmpty
+                    ? '—'
+                    : fmtMoneyMln(periodRevenue),
+                key: const ValueKey('dashboard-revenue-period-total'),
                 style: RefType.mono(
                   size: 28,
                   weight: FontWeight.w800,
@@ -1553,7 +3119,9 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
               ),
               const SizedBox(height: 6),
               Text(
-                '+12.4% o‘tgan davrga nisbatan',
+                'Tanlangan $_months oy jami'
+                '${widget.live ? ' · API to‘lovlari' : ''}',
+                key: const ValueKey('dashboard-revenue-period-label'),
                 style: RefType.ui(
                   size: 12,
                   weight: FontWeight.w700,
@@ -1573,158 +3141,170 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
               const SizedBox(height: 12),
               SizedBox(
                 height: 190,
-                child: LineChart(
-                  LineChartData(
-                    minX: 0,
-                    maxX: (spots.length - 1).toDouble(),
-                    minY: minY,
-                    maxY: maxY,
-                    clipData: const FlClipData.all(),
-                    gridData: FlGridData(
-                      show: true,
-                      drawVerticalLine: false,
-                      horizontalInterval: horizontalInterval,
-                      getDrawingHorizontalLine: (value) => FlLine(
-                        color: c.border.withValues(alpha: .8),
-                        strokeWidth: 1,
-                        dashArray: const [4, 4],
-                      ),
-                    ),
-                    borderData: FlBorderData(show: false),
-                    titlesData: FlTitlesData(
-                      topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                      leftTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                      rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false),
-                      ),
-                      bottomTitles: AxisTitles(
-                        sideTitles: SideTitles(
-                          showTitles: true,
-                          reservedSize: 28,
-                          interval: _months == 12 ? 2 : 1,
-                          getTitlesWidget: (value, meta) {
-                            final index = value.round();
-                            if (index < 0 ||
-                                index >= dates.length ||
-                                value != index) {
-                              return const SizedBox.shrink();
-                            }
-                            return SideTitleWidget(
-                              axisSide: meta.axisSide,
-                              child: Text(
-                                '${dates[index].month.toString().padLeft(2, '0')}/${dates[index].year.toString().substring(2)}',
-                                style: RefType.mono(
-                                  size: 8.5,
-                                  weight: FontWeight.w700,
-                                  color: c.muted,
-                                ),
-                              ),
-                            );
-                          },
+                child: visible.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Trend uchun backendda to‘lov yozuvi yo‘q',
+                          style: RefType.ui(size: 12, color: c.muted),
                         ),
-                      ),
-                    ),
-                    extraLinesData: ExtraLinesData(
-                      horizontalLines: [
-                        HorizontalLine(
-                          y: minY,
-                          color: c.success.withValues(alpha: .24),
-                          strokeWidth: 1,
-                        ),
-                        HorizontalLine(
-                          y: maxY,
-                          color: c.success.withValues(alpha: .16),
-                          strokeWidth: 1,
-                        ),
-                      ],
-                    ),
-                    lineTouchData: LineTouchData(
-                      handleBuiltInTouches: true,
-                      touchCallback: (event, response) {
-                        final touched = response?.lineBarSpots;
-                        if (touched == null || touched.isEmpty) return;
-                        final next = touched.first.spotIndex;
-                        if (next != _selectedPoint) {
-                          setState(() => _selectedPoint = next);
-                        }
-                      },
-                      touchTooltipData: LineTouchTooltipData(
-                        getTooltipColor: (_) => c.ink,
-                        tooltipRoundedRadius: 10,
-                        tooltipPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        tooltipMargin: 12,
-                        fitInsideHorizontally: true,
-                        fitInsideVertically: true,
-                        getTooltipItems: (touchedSpots) =>
-                            touchedSpots.map((spot) {
-                              final index = spot.spotIndex;
-                              final amount = visible[index];
-                              return LineTooltipItem(
-                                '${_dateLabel(dates[index])}\n',
-                                RefType.mono(
-                                  size: 10,
-                                  weight: FontWeight.w800,
-                                  color: c.bg,
-                                ),
-                                children: [
-                                  TextSpan(
-                                    text: 'Revenue: ${fmtMoney(amount)}',
-                                    style: RefType.ui(
-                                      size: 10.5,
-                                      weight: FontWeight.w700,
-                                      color: c.bg,
+                      )
+                    : LineChart(
+                        LineChartData(
+                          minX: 0,
+                          maxX: (spots.length - 1).toDouble(),
+                          minY: minY,
+                          maxY: maxY,
+                          clipData: const FlClipData.all(),
+                          gridData: FlGridData(
+                            show: true,
+                            drawVerticalLine: false,
+                            horizontalInterval: horizontalInterval,
+                            getDrawingHorizontalLine: (value) => FlLine(
+                              color: c.border.withValues(alpha: .8),
+                              strokeWidth: 1,
+                              dashArray: const [4, 4],
+                            ),
+                          ),
+                          borderData: FlBorderData(show: false),
+                          titlesData: FlTitlesData(
+                            topTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            leftTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            rightTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                reservedSize: 28,
+                                interval: _months == 12 ? 2 : 1,
+                                getTitlesWidget: (value, meta) {
+                                  final index = value.round();
+                                  if (index < 0 ||
+                                      index >= labels.length ||
+                                      value != index) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return SideTitleWidget(
+                                    axisSide: meta.axisSide,
+                                    child: Text(
+                                      labels[index],
+                                      style: RefType.mono(
+                                        size: 8.5,
+                                        weight: FontWeight.w700,
+                                        color: c.muted,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              );
-                            }).toList(),
-                      ),
-                    ),
-                    lineBarsData: [
-                      LineChartBarData(
-                        spots: spots,
-                        isCurved: true,
-                        curveSmoothness: .22,
-                        color: c.success,
-                        barWidth: 3,
-                        isStrokeCapRound: true,
-                        showingIndicators: _selectedPoint == null
-                            ? const []
-                            : [_selectedPoint!],
-                        dotData: FlDotData(
-                          show: true,
-                          getDotPainter: (spot, percent, bar, index) =>
-                              FlDotCirclePainter(
-                                radius: index == _selectedPoint ? 5 : 3.5,
-                                color: c.surface,
-                                strokeWidth: index == _selectedPoint ? 3 : 2,
-                                strokeColor: c.success,
+                                  );
+                                },
                               ),
-                        ),
-                        belowBarData: BarAreaData(
-                          show: true,
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              c.success.withValues(alpha: .30),
-                              c.success.withValues(alpha: .02),
+                            ),
+                          ),
+                          extraLinesData: ExtraLinesData(
+                            horizontalLines: [
+                              HorizontalLine(
+                                y: minY,
+                                color: c.success.withValues(alpha: .24),
+                                strokeWidth: 1,
+                              ),
+                              HorizontalLine(
+                                y: maxY,
+                                color: c.success.withValues(alpha: .16),
+                                strokeWidth: 1,
+                              ),
                             ],
                           ),
+                          lineTouchData: LineTouchData(
+                            handleBuiltInTouches: true,
+                            touchCallback: (event, response) {
+                              final touched = response?.lineBarSpots;
+                              if (touched == null || touched.isEmpty) return;
+                              final next = touched.first.spotIndex;
+                              if (next != _selectedPoint) {
+                                setState(() => _selectedPoint = next);
+                              }
+                            },
+                            touchTooltipData: LineTouchTooltipData(
+                              getTooltipColor: (_) => c.ink,
+                              tooltipRoundedRadius: 10,
+                              tooltipPadding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 8,
+                              ),
+                              tooltipMargin: 12,
+                              fitInsideHorizontally: true,
+                              fitInsideVertically: true,
+                              getTooltipItems: (touchedSpots) =>
+                                  touchedSpots.map((spot) {
+                                    final index = spot.spotIndex;
+                                    final amount = visible[index];
+                                    return LineTooltipItem(
+                                      '${labels[index]}\n',
+                                      RefType.mono(
+                                        size: 10,
+                                        weight: FontWeight.w800,
+                                        color: c.bg,
+                                      ),
+                                      children: [
+                                        TextSpan(
+                                          text: 'Revenue: ${fmtMoney(amount)}',
+                                          style: RefType.ui(
+                                            size: 10.5,
+                                            weight: FontWeight.w700,
+                                            color: c.bg,
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  }).toList(),
+                            ),
+                          ),
+                          lineBarsData: [
+                            LineChartBarData(
+                              spots: spots,
+                              isCurved: true,
+                              curveSmoothness: .22,
+                              color: c.success,
+                              barWidth: 3,
+                              isStrokeCapRound: true,
+                              showingIndicators: selectedPoint == null
+                                  ? const []
+                                  : [selectedPoint],
+                              dotData: FlDotData(
+                                show: true,
+                                getDotPainter: (spot, percent, bar, index) =>
+                                    FlDotCirclePainter(
+                                      radius: index == selectedPoint ? 5 : 3.5,
+                                      color: c.surface,
+                                      strokeWidth: index == selectedPoint
+                                          ? 3
+                                          : 2,
+                                      strokeColor: c.success,
+                                    ),
+                              ),
+                              belowBarData: BarAreaData(
+                                show: true,
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    c.success.withValues(alpha: .30),
+                                    c.success.withValues(alpha: .02),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
+                        duration: RefMotion.resolve(
+                          context,
+                          const Duration(milliseconds: 260),
+                        ),
+                        curve: Curves.easeOutCubic,
                       ),
-                    ],
-                  ),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                ),
               ),
             ],
           ),
@@ -1813,10 +3393,17 @@ class _ReferenceAiInsight extends StatelessWidget {
 }
 
 class _ReferenceTeacherRanking extends StatelessWidget {
-  const _ReferenceTeacherRanking({required this.store, required this.colors});
+  const _ReferenceTeacherRanking({
+    required this.store,
+    required this.colors,
+    required this.apiTeachers,
+    required this.onOpen,
+  });
 
   final AppStore store;
   final SfColors colors;
+  final List<Map<String, dynamic>>? apiTeachers;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -1825,28 +3412,139 @@ class _ReferenceTeacherRanking extends StatelessWidget {
         .take(3)
         .toList();
     final entries = teachers.isEmpty ? store.staff.take(3).toList() : teachers;
+    final apiEntries = [...?apiTeachers]
+      ..sort(
+        (a, b) =>
+            (_dashboardNumber(b, const [
+                      'rating',
+                      'average_rating',
+                      'performance_score',
+                      'score',
+                    ]) ??
+                    -1)
+                .compareTo(
+                  _dashboardNumber(a, const [
+                        'rating',
+                        'average_rating',
+                        'performance_score',
+                        'score',
+                      ]) ??
+                      -1,
+                ),
+      );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         RefSectionHeader(
           title: 'O‘qituvchi reytingi',
-          subtitle: 'Eng barqaror natija ko‘rsatganlar',
+          subtitle: apiTeachers == null
+              ? 'Eng barqaror natija ko‘rsatganlar'
+              : '${apiEntries.length} ta backend o‘qituvchisi',
+          trailing: TextButton(
+            onPressed: onOpen,
+            child: Text(
+              'Barchasi',
+              style: RefType.ui(
+                size: 11.5,
+                weight: FontWeight.w700,
+                color: colors.primary,
+              ),
+            ),
+          ),
         ),
         const SizedBox(height: 8),
         RefSurfaceCard(
           child: Column(
             children: [
-              for (var index = 0; index < entries.length; index++)
-                _ReferenceRankRow(
-                  member: entries[index],
-                  place: index + 1,
-                  colors: colors,
-                  last: index == entries.length - 1,
-                ),
+              if (apiTeachers == null)
+                for (var index = 0; index < entries.length; index++)
+                  _ReferenceRankRow(
+                    member: entries[index],
+                    place: index + 1,
+                    colors: colors,
+                    last: index == entries.length - 1,
+                  )
+              else if (apiEntries.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'Backend o‘qituvchi qaytarmadi',
+                    style: RefType.ui(size: 12, color: colors.muted),
+                  ),
+                )
+              else
+                for (
+                  var index = 0;
+                  index < apiEntries.length && index < 3;
+                  index++
+                )
+                  _ReferenceApiRankRow(
+                    teacher: apiEntries[index],
+                    place: index + 1,
+                    colors: colors,
+                    last: index == apiEntries.length - 1 || index == 2,
+                    onOpen: onOpen,
+                  ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ReferenceApiRankRow extends StatelessWidget {
+  const _ReferenceApiRankRow({
+    required this.teacher,
+    required this.place,
+    required this.colors,
+    required this.last,
+    required this.onOpen,
+  });
+
+  final Map<String, dynamic> teacher;
+  final int place;
+  final SfColors colors;
+  final bool last;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final rating = _dashboardNumber(teacher, const [
+      'rating',
+      'average_rating',
+      'performance_score',
+      'score',
+    ]);
+    final attendance = _dashboardNumber(teacher, const [
+      'attendance',
+      'attendance_rate',
+      'attendance_percentage',
+    ]);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: last ? null : Border(bottom: BorderSide(color: colors.border)),
+      ),
+      child: RefStatusTile(
+        icon: place == 1
+            ? Icons.workspace_premium_rounded
+            : Icons.emoji_events_outlined,
+        title: _dashboardText(teacher, const [
+          'full_name',
+          'name',
+          'teacher_name',
+          'username',
+          'id',
+        ]),
+        subtitle:
+            '${_dashboardText(teacher, const ['subject', 'department_name', 'department'])} · ${attendance == null ? '—' : '$attendance%'}',
+        tone: place == 1 ? RefMetricTone.accent : RefMetricTone.primary,
+        trailing: RefPill(
+          label: rating == null ? '#$place' : '#$place · $rating',
+          tone: place == 1 ? RefPillTone.accent : RefPillTone.success,
+        ),
+        onTap: onOpen,
+      ),
     );
   }
 }
@@ -1932,9 +3630,17 @@ class _ReferenceBranchRank extends StatelessWidget {
 }
 
 class _ReferenceAttendanceHealth extends StatelessWidget {
-  const _ReferenceAttendanceHealth({required this.onTap});
+  const _ReferenceAttendanceHealth({
+    required this.onTap,
+    required this.percentage,
+    required this.subtitle,
+    required this.fraction,
+  });
 
   final VoidCallback onTap;
+  final String percentage;
+  final String subtitle;
+  final double? fraction;
 
   @override
   Widget build(BuildContext context) {
@@ -1956,7 +3662,7 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                 height: 64,
                 child: Center(
                   child: Text(
-                    '91%',
+                    percentage,
                     style: RefType.mono(
                       size: 19,
                       weight: FontWeight.w800,
@@ -1972,7 +3678,9 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Davomat barqaror',
+                    fraction == null
+                        ? 'Davomat ma’lumoti kutilmoqda'
+                        : 'Davomat holati',
                     style: RefType.ui(
                       size: 14,
                       weight: FontWeight.w800,
@@ -1980,13 +3688,10 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 3),
-                  Text(
-                    '72% yaxshi · 19% kuzatuv · 9% e’tibor',
-                    style: RefType.ui(size: 11.5, color: c.muted),
-                  ),
+                  Text(subtitle, style: RefType.ui(size: 11.5, color: c.muted)),
                   const SizedBox(height: 9),
                   LinearProgressIndicator(
-                    value: .91,
+                    value: fraction,
                     minHeight: 6,
                     borderRadius: const BorderRadius.all(Radius.circular(5)),
                     color: c.success,
@@ -3080,11 +4785,6 @@ class _AuditDash extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.zero,
       children: [
-        _TopBar(
-          cfg: cfg,
-          hello: tr(context, 'greet_audit'),
-          sub: tr(context, 'scope_audit'),
-        ),
         Padding(
           padding: _pad,
           child: Column(
@@ -3529,6 +5229,8 @@ class _StudentsScreenState extends State<StudentsScreen>
   int branchSel = 0;
   int levelSel = 0;
   bool showFilters = false;
+  int page = 1;
+  int pageSize = 5;
 
   bool _statusOk(Student s) => switch (statusSel) {
     1 => s.debt > 0,
@@ -3843,8 +5545,9 @@ class _ReferenceStudentsPage extends StatelessWidget {
     final students = all.where((student) {
       if (!state._statusOk(student) || !state._callOk(student)) return false;
       final profile = studentProfile(student);
-      if (wantedBranch != '__all' && profile.branch != wantedBranch)
+      if (wantedBranch != '__all' && profile.branch != wantedBranch) {
         return false;
+      }
       if (wantedLevel != '__all' && profile.level != wantedLevel) return false;
       if (query.isEmpty) return true;
       return [
@@ -3864,6 +5567,15 @@ class _ReferenceStudentsPage extends StatelessWidget {
         student.username ?? '',
       ].any((value) => value.toLowerCase().contains(query));
     }).toList();
+    final pageCount = students.isEmpty
+        ? 1
+        : ((students.length + state.pageSize - 1) ~/ state.pageSize);
+    final currentPage = state.page.clamp(1, pageCount).toInt();
+    final pageStart = (currentPage - 1) * state.pageSize;
+    final pageStudents = students
+        .skip(pageStart)
+        .take(state.pageSize)
+        .toList(growable: false);
     final statusLabels = [
       tr(context, 'f_all'),
       tr(context, 'f_debtor'),
@@ -3896,25 +5608,37 @@ class _ReferenceStudentsPage extends StatelessWidget {
         label: tr(context, 'filter_status'),
         items: statusLabels,
         selected: state.statusSel,
-        onSelect: (value) => state._update(() => state.statusSel = value),
+        onSelect: (value) => state._update(() {
+          state.statusSel = value;
+          state.page = 1;
+        }),
       ),
       _StudentFilterGroup(
         label: tr(context, 'filter_call'),
         items: callLabels,
         selected: state.callSel,
-        onSelect: (value) => state._update(() => state.callSel = value),
+        onSelect: (value) => state._update(() {
+          state.callSel = value;
+          state.page = 1;
+        }),
       ),
       _StudentFilterGroup(
         label: tr(context, 'filter_branch'),
         items: branchLabels,
         selected: state.branchSel,
-        onSelect: (value) => state._update(() => state.branchSel = value),
+        onSelect: (value) => state._update(() {
+          state.branchSel = value;
+          state.page = 1;
+        }),
       ),
       _StudentFilterGroup(
         label: tr(context, 'filter_level'),
         items: levelLabels,
         selected: state.levelSel,
-        onSelect: (value) => state._update(() => state.levelSel = value),
+        onSelect: (value) => state._update(() {
+          state.levelSel = value;
+          state.page = 1;
+        }),
       ),
     ];
     return CustomScrollView(
@@ -3953,8 +5677,10 @@ class _ReferenceStudentsPage extends StatelessWidget {
                 child: RefSearchField(
                   controller: state._referenceSearch,
                   hint: tr(context, 'students_search'),
-                  onChanged: (value) =>
-                      state._update(() => state.query = value),
+                  onChanged: (value) => state._update(() {
+                    state.query = value;
+                    state.page = 1;
+                  }),
                   suffix: state.query.isEmpty
                       ? null
                       : IconButton(
@@ -3962,6 +5688,7 @@ class _ReferenceStudentsPage extends StatelessWidget {
                           onPressed: () => state._update(() {
                             state._referenceSearch.clear();
                             state.query = '';
+                            state.page = 1;
                           }),
                           icon: Icon(Icons.close_rounded, color: c.muted),
                         ),
@@ -4034,14 +5761,14 @@ class _ReferenceStudentsPage extends StatelessWidget {
             hasScrollBody: false,
             child: _ReferenceStudentEmpty(hasQuery: query.isNotEmpty),
           )
-        else
+        else ...[
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
             sliver: SliverList.builder(
-              itemCount: students.length * 2 - 1,
+              itemCount: pageStudents.length * 2 - 1,
               itemBuilder: (context, index) {
                 if (index.isOdd) return const SizedBox(height: 10);
-                final student = students[index ~/ 2];
+                final student = pageStudents[index ~/ 2];
                 return RepaintBoundary(
                   child: RefStaggeredReveal(
                     order: index ~/ 2,
@@ -4051,6 +5778,24 @@ class _ReferenceStudentsPage extends StatelessWidget {
               },
             ),
           ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
+            sliver: SliverToBoxAdapter(
+              child: RefPaginationBar(
+                page: currentPage,
+                pages: pageCount,
+                total: students.length,
+                pageSize: state.pageSize,
+                onPageChanged: (value) =>
+                    state._update(() => state.page = value),
+                onPageSizeChanged: (value) => state._update(() {
+                  state.pageSize = value;
+                  state.page = 1;
+                }),
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -4122,7 +5867,7 @@ class _ReferenceStudentFilters extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return RefSurfaceCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       elevated: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4265,7 +6010,7 @@ class _ReferenceStudentFlow extends StatelessWidget {
       ),
     ];
     return RefSurfaceCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4274,9 +6019,10 @@ class _ReferenceStudentFlow extends StatelessWidget {
             subtitle: 'O‘quvchi holati · joriy davr',
             trailing: const RefPill(label: 'Bugun', tone: RefPillTone.primary),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 7),
           RefAdaptiveGrid(
-            minCellWidth: 142,
+            minCellWidth: 86,
+            spacing: 7,
             children: [
               for (final item in categories)
                 RefMetricCard(
@@ -4286,6 +6032,7 @@ class _ReferenceStudentFlow extends StatelessWidget {
                   icon: item.$3,
                   tone: item.$4,
                   uppercaseLabel: false,
+                  compact: true,
                   onTap: () => onOpen(item.$2, item.$1),
                 ),
             ],
@@ -4375,132 +6122,88 @@ class _ReferenceStudentCard extends StatelessWidget {
       borderRadius: RefRadius.lg,
       semanticLabel: 'O‘quvchi ${student.name}',
       child: RefSurfaceCard(
-        padding: const EdgeInsets.all(14),
-        elevated: true,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SfAvatar(name: student.name, size: 48),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            SfAvatar(name: student.name, size: 42),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    student.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.ui(
+                      size: 14,
+                      weight: FontWeight.w800,
+                      color: c.ink,
+                      letterSpacing: -.15,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${profile.branch} · ${student.group} · ${profile.level}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.ui(size: 10.5, color: c.muted),
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
                     children: [
-                      Text(
-                        student.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: RefType.ui(
-                          size: 15,
-                          weight: FontWeight.w800,
-                          color: c.ink,
-                          letterSpacing: -.2,
+                      Icon(
+                        Icons.phone_in_talk_rounded,
+                        size: 13,
+                        color: call.tone == PillTone.success
+                            ? c.success
+                            : call.tone == PillTone.warn
+                            ? c.warn
+                            : c.danger,
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          student.pay == 'left'
+                              ? studentExitReason(student)
+                              : _callAgo(context, studentCallDays(student)),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: RefType.ui(
+                            size: 9.5,
+                            weight: FontWeight.w600,
+                            color: c.ink2,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${profile.branch} · ${student.group}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: RefType.ui(size: 11, color: c.muted),
-                      ),
-                      const SizedBox(height: 7),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 5,
-                        children: [
-                          RefPill(
-                            label: student.pay == 'left'
-                                ? 'Ketgan'
-                                : payment.$2,
-                            tone: student.pay == 'left'
-                                ? RefPillTone.neutral
-                                : _paymentTone(payment.$1),
-                          ),
-                          RefPill(
-                            label: profile.level,
-                            tone: RefPillTone.accent,
-                          ),
-                        ],
                       ),
                     ],
                   ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${student.attendance}%',
+                  style: RefType.mono(
+                    size: 13.5,
+                    weight: FontWeight.w800,
+                    color: attendanceColor,
+                  ),
                 ),
-                const SizedBox(width: 8),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: attendanceColor.withValues(alpha: .11),
-                    borderRadius: RefRadius.md,
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 8,
-                    ),
-                    child: Column(
-                      children: [
-                        Text(
-                          '${student.attendance}%',
-                          style: RefType.mono(
-                            size: 14,
-                            weight: FontWeight.w800,
-                            color: attendanceColor,
-                          ),
-                        ),
-                        Text(
-                          'DAVOMAT',
-                          style: RefType.eyebrow(color: c.muted, size: 7.5),
-                        ),
-                      ],
-                    ),
-                  ),
+                const SizedBox(height: 4),
+                RefPill(
+                  label: student.pay == 'left' ? 'Ketgan' : payment.$2,
+                  tone: student.pay == 'left'
+                      ? RefPillTone.neutral
+                      : _paymentTone(payment.$1),
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: c.surface2,
-                borderRadius: RefRadius.md,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.phone_in_talk_rounded,
-                      size: 15,
-                      color: call.tone == PillTone.success
-                          ? c.success
-                          : call.tone == PillTone.warn
-                          ? c.warn
-                          : c.danger,
-                    ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        student.pay == 'left'
-                            ? studentExitReason(student)
-                            : '${tr(context, call.key)} · ${_callAgo(context, studentCallDays(student))}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: RefType.ui(
-                          size: 11,
-                          weight: FontWeight.w600,
-                          color: c.ink2,
-                        ),
-                      ),
-                    ),
-                    Icon(Icons.chevron_right_rounded, size: 18, color: c.muted),
-                  ],
-                ),
-              ),
             ),
           ],
         ),
@@ -4858,25 +6561,33 @@ class _StudentLifecycleCard extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: categories.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisExtent: 82,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-              ),
-              itemBuilder: (context, index) {
-                final item = categories[index];
-                final count = _studentsForFlow(students, item.$2).length;
-                return _StudentFlowMetric(
-                  label: item.$1,
-                  value: '$count',
-                  color: item.$3,
-                  category: item.$2,
-                  onTap: () => onOpen(item.$2, item.$1),
+            // The legacy fixed 3-column grid left most of a phone card blank
+            // and compressed labels.  A wrapping grid now uses the available
+            // width on every screen size while keeping each metric tappable.
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 560 ? 3 : 2;
+                return GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: categories.length,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns,
+                    mainAxisExtent: 82,
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                  ),
+                  itemBuilder: (context, index) {
+                    final item = categories[index];
+                    final count = _studentsForFlow(students, item.$2).length;
+                    return _StudentFlowMetric(
+                      label: item.$1,
+                      value: '$count',
+                      color: item.$3,
+                      category: item.$2,
+                      onTap: () => onOpen(item.$2, item.$1),
+                    );
+                  },
                 );
               },
             ),
@@ -5273,7 +6984,7 @@ class StudentDetailScreen extends StatelessWidget {
               const SizedBox(height: 14),
             ],
             // Call-status banner — green/amber/red by how long since the last
-            // parent call. Tapping places a (demo) call to the father.
+            // Parent call. Tapping opens the platform dialler.
             SfSurfaceCard(
               color: callColor.withValues(alpha: 0.12),
               padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
@@ -5539,11 +7250,19 @@ class StudentDetailScreen extends StatelessWidget {
                         ? tr(context, 'stu_remind')
                         : tr(context, 'stu_message'),
                     primary: false,
-                    onTap: () => _snack(
-                      context,
-                      s.debt > 0
-                          ? '🔔 To‘lov eslatmasi yuborildi (demo)'
-                          : '✉️ Xabar yuborildi (demo)',
+                    onTap: () => Navigator.of(context).push(
+                      sfPageRoute(
+                        SfTheme(
+                          colors: c,
+                          child: StudentChatScreen(
+                            student: s,
+                            colors: c,
+                            initialDraft: s.debt > 0
+                                ? 'Assalomu alaykum. ${s.name} uchun ${fmtMoney(s.debt)} miqdoridagi to‘lov muddati bo‘yicha siz bilan bog‘lanmoqchimiz.'
+                                : 'Assalomu alaykum. ${s.name} bo‘yicha sizga xabar yozmoqchimiz.',
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -5762,11 +7481,19 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                         label: s.debt > 0
                             ? tr(context, 'stu_remind')
                             : tr(context, 'stu_message'),
-                        onTap: () => _snack(
-                          context,
-                          s.debt > 0
-                              ? '🔔 To‘lov eslatmasi yuborildi (demo)'
-                              : '✉️ Xabar yuborildi (demo)',
+                        onTap: () => Navigator.of(context).push(
+                          sfPageRoute(
+                            SfTheme(
+                              colors: colors,
+                              child: StudentChatScreen(
+                                student: s,
+                                colors: colors,
+                                initialDraft: s.debt > 0
+                                    ? 'Assalomu alaykum. ${s.name} uchun ${fmtMoney(s.debt)} miqdoridagi to‘lov muddati bo‘yicha siz bilan bog‘lanmoqchimiz.'
+                                    : 'Assalomu alaykum. ${s.name} bo‘yicha sizga xabar yozmoqchimiz.',
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                       _ReferenceQuickAction(
@@ -6540,18 +8267,40 @@ class _TopStudentData extends StatelessWidget {
 class StudentChatScreen extends StatefulWidget {
   final Student student;
   final SfColors colors;
+  final String? initialDraft;
   const StudentChatScreen({
     super.key,
     required this.student,
     required this.colors,
+    this.initialDraft,
   });
   @override
   State<StudentChatScreen> createState() => _StudentChatScreenState();
 }
 
 class _StudentChatScreenState extends State<StudentChatScreen> {
+  static final Map<String, String> _drafts = <String, String>{};
+
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final FocusNode _composerFocus = FocusNode();
+  final ImagePicker _picker = ImagePicker();
+  final AudioRecorder _recorder = AudioRecorder();
+  final List<_PendingChatUpload> _pendingUploads = <_PendingChatUpload>[];
+  final Map<String, Timer> _uploadTimers = <String, Timer>{};
+  bool _recording = false;
+  bool _voiceLocked = false;
+  bool _recordGestureActive = false;
+  bool _emojiOpen = false;
+  bool _notificationsEnabled = true;
+  int? _editingIndex;
+  ChatMsg? _replyingTo;
+  final Set<ChatMsg> _editedMessages = <ChatMsg>{};
+  final Map<ChatMsg, ChatMsg> _replyTargets = <ChatMsg, ChatMsg>{};
+  final Set<ChatMsg> _pinnedMessages = <ChatMsg>{};
+  DateTime? _recordStartedAt;
+  Duration _recordElapsed = Duration.zero;
+  Timer? _recordTicker;
   late final List<ChatMsg> _msgs = [
     ChatMsg(
       'Assalomu alaykum! ${studentProfile(widget.student).firstName} bo‘yicha yangilik bormi?',
@@ -6561,20 +8310,63 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _ctrl.text =
+        _drafts[widget.student.name] ?? widget.initialDraft?.trim() ?? '';
+    if (_ctrl.text.isNotEmpty) {
+      _drafts[widget.student.name] = _ctrl.text;
+    }
+  }
+
+  @override
   void dispose() {
+    _drafts[widget.student.name] = _ctrl.text;
+    _recordTicker?.cancel();
+    for (final timer in _uploadTimers.values) {
+      timer.cancel();
+    }
+    _recorder.dispose();
     _ctrl.dispose();
     _scroll.dispose();
+    _composerFocus.dispose();
     super.dispose();
   }
 
   void _send([String? preset]) {
     final text = preset ?? _ctrl.text;
     if (text.trim().isEmpty) return;
+    final store = AppScope.of(context);
+    final editingIndex = preset == null ? _editingIndex : null;
     setState(() {
-      _msgs.add(ChatMsg(text.trim(), mine: true));
-      _msgs.add(ChatMsg(_familyReply(text.trim()), mine: false));
+      if (editingIndex != null &&
+          editingIndex >= 0 &&
+          editingIndex < _msgs.length) {
+        final previous = _msgs[editingIndex];
+        final edited = ChatMsg(text.trim(), mine: true);
+        _msgs[editingIndex] = edited;
+        final reaction = store.messageReactions.remove(previous);
+        if (reaction != null) store.messageReactions[edited] = reaction;
+        _editedMessages
+          ..remove(previous)
+          ..add(edited);
+        final replyTarget = _replyTargets.remove(previous);
+        if (replyTarget != null) _replyTargets[edited] = replyTarget;
+        if (_pinnedMessages.remove(previous)) _pinnedMessages.add(edited);
+        _editingIndex = null;
+      } else {
+        final outgoing = ChatMsg(text.trim(), mine: true);
+        _msgs.add(outgoing);
+        if (_replyingTo case final target?) {
+          _replyTargets[outgoing] = target;
+        }
+        _msgs.add(ChatMsg(_familyReply(text.trim()), mine: false));
+      }
+      _replyingTo = null;
+      _emojiOpen = false;
     });
     _ctrl.clear();
+    _drafts.remove(widget.student.name);
     FocusScope.of(context).unfocus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -6587,6 +8379,64 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     });
   }
 
+  void _insertStudentEmoji(String emoji) {
+    final value = _ctrl.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    final start = selection.start.clamp(0, value.text.length).toInt();
+    final end = selection.end.clamp(start, value.text.length).toInt();
+    _ctrl.value = value.copyWith(
+      text: value.text.replaceRange(start, end, emoji),
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+      composing: TextRange.empty,
+    );
+    _drafts[widget.student.name] = _ctrl.text;
+    setState(() {});
+    _composerFocus.requestFocus();
+  }
+
+  void _toggleStudentEmoji() {
+    setState(() => _emojiOpen = !_emojiOpen);
+    if (_emojiOpen) {
+      _composerFocus.unfocus();
+    } else {
+      _composerFocus.requestFocus();
+    }
+  }
+
+  void _beginStudentReply(ChatMsg message) {
+    setState(() {
+      _editingIndex = null;
+      _replyingTo = message;
+      _emojiOpen = false;
+    });
+    _composerFocus.requestFocus();
+  }
+
+  void _beginStudentEdit(ChatMsg message, int index) {
+    setState(() {
+      _editingIndex = index;
+      _replyingTo = null;
+      _emojiOpen = false;
+      _ctrl
+        ..text = message.text
+        ..selection = TextSelection.collapsed(offset: message.text.length);
+      _drafts[widget.student.name] = message.text;
+    });
+    _composerFocus.requestFocus();
+  }
+
+  void _cancelStudentContext() {
+    setState(() {
+      _editingIndex = null;
+      _replyingTo = null;
+      _ctrl.clear();
+      _drafts.remove(widget.student.name);
+    });
+    _composerFocus.requestFocus();
+  }
+
   String _familyReply(String q) {
     final s = q.toLowerCase();
     if (s.contains('qarz') || s.contains('to') || s.contains('pul')) {
@@ -6596,6 +8446,341 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
       return "Ertaga albatta keladi, ogohlantirdik 👍";
     }
     return "Rahmat, ma'lumot uchun! Aloqada bo'lamiz.";
+  }
+
+  void _startRecordTicker() {
+    _recordTicker?.cancel();
+    _recordTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final started = _recordStartedAt;
+      if (!mounted || !_recording || started == null) return;
+      setState(() => _recordElapsed = DateTime.now().difference(started));
+    });
+  }
+
+  void _finishRecordTicker() {
+    _recordTicker?.cancel();
+    _recordTicker = null;
+    _recordElapsed = Duration.zero;
+  }
+
+  Future<void> _toggleVoice() async {
+    if (_recording) {
+      final path = await _recorder.stop();
+      final duration = DateTime.now().difference(
+        _recordStartedAt ?? DateTime.now(),
+      );
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _voiceLocked = false;
+        _recordStartedAt = null;
+        _finishRecordTicker();
+        if (path != null) {
+          _msgs.add(
+            ChatMsg(
+              'Voice message',
+              mine: true,
+              kind: ChatMessageKind.voice,
+              path: path,
+              duration: duration,
+            ),
+          );
+        }
+      });
+      _scrollToEnd();
+      return;
+    }
+    if (!await _recorder.hasPermission()) {
+      if (mounted) _snack(context, 'Нужен доступ к микрофону');
+      return;
+    }
+    try {
+      final path = kIsWeb
+          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a'
+          : '${(await _studentMediaDirectory()).path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.aacLc),
+        path: path,
+      );
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _voiceLocked = false;
+        _emojiOpen = false;
+        _recordStartedAt = DateTime.now();
+        _recordElapsed = Duration.zero;
+      });
+      _startRecordTicker();
+      if (!_recordGestureActive && !_voiceLocked) {
+        await _toggleVoice();
+      }
+    } catch (_) {
+      if (mounted) _snack(context, 'Не удалось начать запись');
+    }
+  }
+
+  Future<void> _cancelVoice() async {
+    if (!_recording) return;
+    final path = await _recorder.stop();
+    if (!kIsWeb && path != null) {
+      final file = File(path);
+      if (await file.exists()) await file.delete();
+    }
+    if (!mounted) return;
+    setState(() {
+      _recording = false;
+      _voiceLocked = false;
+      _recordGestureActive = false;
+      _recordStartedAt = null;
+      _finishRecordTicker();
+    });
+    _snack(context, 'Запись отменена');
+  }
+
+  /// A screen-reader/keyboard activation starts recording in locked mode;
+  /// activating the same button again sends it. Pointer users still keep the
+  /// Telegram-style hold, swipe-up and swipe-left gestures.
+  Future<void> _activateStudentVoiceButton() async {
+    if (_recording) {
+      _recordGestureActive = false;
+      await _toggleVoice();
+      return;
+    }
+    _recordGestureActive = true;
+    await _toggleVoice();
+    _recordGestureActive = false;
+    if (mounted && _recording && !_voiceLocked) {
+      setState(() => _voiceLocked = true);
+    }
+  }
+
+  Future<Directory> _studentMediaDirectory() async {
+    final documents = await getApplicationDocumentsDirectory();
+    final directory = Directory('${documents.path}/chat_media');
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    return directory;
+  }
+
+  Future<String> _saveStudentAttachment(String sourcePath, String type) async {
+    if (kIsWeb) return sourcePath;
+    final directory = await _studentMediaDirectory();
+    final dot = sourcePath.lastIndexOf('.');
+    final extension = dot == -1 ? '' : sourcePath.substring(dot);
+    final target = File(
+      '${directory.path}/${type}_${DateTime.now().microsecondsSinceEpoch}$extension',
+    );
+    await File(sourcePath).copy(target.path);
+    return target.path;
+  }
+
+  Future<void> _attachStudentFile() async {
+    try {
+      final attachment = await _pickChatAttachment(
+        context: context,
+        colors: widget.colors,
+        picker: _picker,
+      );
+      if (attachment == null || !mounted) return;
+      var prepared = attachment;
+      if (attachment.messageKind != null) {
+        final localPath = await _saveStudentAttachment(
+          attachment.path,
+          attachment.messageKind == ChatMessageKind.video ? 'video' : 'image',
+        );
+        prepared = attachment.copyWith(path: localPath);
+      }
+      if (!mounted) return;
+      _queueStudentUpload(prepared);
+    } catch (_) {
+      if (mounted) _snack(context, 'Не удалось прикрепить файл');
+    }
+  }
+
+  void _queueStudentUpload(_PreparedChatAttachment attachment) {
+    final upload = _PendingChatUpload(attachment);
+    setState(() => _pendingUploads.add(upload));
+    _uploadTimers[upload.id] = Timer.periodic(
+      const Duration(milliseconds: 150),
+      (timer) {
+        if (!mounted || !_pendingUploads.contains(upload)) {
+          timer.cancel();
+          return;
+        }
+        upload.progress = (upload.progress + .09).clamp(0, 1).toDouble();
+        if (upload.progress >= 1) {
+          timer.cancel();
+          _uploadTimers.remove(upload.id);
+          setState(() {
+            _pendingUploads.remove(upload);
+            _msgs.add(
+              upload.attachment.messageKind == null
+                  ? ChatMsg('📎 ${upload.attachment.name}', mine: true)
+                  : ChatMsg(
+                      upload.attachment.name,
+                      mine: true,
+                      kind: upload.attachment.messageKind!,
+                      path: upload.attachment.path,
+                    ),
+            );
+          });
+          _scrollToEnd();
+        } else {
+          setState(() {});
+        }
+      },
+    );
+  }
+
+  void _cancelStudentUpload(_PendingChatUpload upload) {
+    _uploadTimers.remove(upload.id)?.cancel();
+    setState(() => _pendingUploads.remove(upload));
+    _snack(context, 'Подготовка вложения отменена');
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  void _showStudentSearch() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SfTheme(
+        colors: widget.colors,
+        child: _ChatSearchSheet(messages: _msgs),
+      ),
+    );
+  }
+
+  void _studentMessageActions(ChatMsg message, int index) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheet) => SfTheme(
+        colors: c,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: c.borderStrong,
+                    borderRadius: RefRadius.pill,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _TelegramReactionPicker(
+                  selected: store.reactionFor(message),
+                  onSelected: (reaction) {
+                    store.setMessageReaction(message, reaction);
+                    Navigator.of(sheet).pop();
+                  },
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: Icon(Icons.reply_rounded, color: c.primary),
+                  title: const Text('Ответить'),
+                  onTap: () {
+                    Navigator.of(sheet).pop();
+                    _beginStudentReply(message);
+                  },
+                ),
+                if (message.kind == ChatMessageKind.text)
+                  ListTile(
+                    leading: Icon(Icons.copy_rounded, color: c.ink2),
+                    title: const Text('Копировать'),
+                    onTap: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: message.text),
+                      );
+                      if (sheet.mounted) Navigator.of(sheet).pop();
+                    },
+                  ),
+                if (message.mine &&
+                    message.kind == ChatMessageKind.text &&
+                    !message.text.startsWith('📎 '))
+                  ListTile(
+                    leading: Icon(Icons.edit_outlined, color: c.primary),
+                    title: const Text('Изменить'),
+                    onTap: () {
+                      Navigator.of(sheet).pop();
+                      _beginStudentEdit(message, index);
+                    },
+                  ),
+                ListTile(
+                  leading: Icon(
+                    _pinnedMessages.contains(message)
+                        ? Icons.push_pin_outlined
+                        : Icons.push_pin_rounded,
+                    color: c.ink2,
+                  ),
+                  title: Text(
+                    _pinnedMessages.contains(message)
+                        ? 'Открепить'
+                        : 'Закрепить',
+                  ),
+                  onTap: () {
+                    Navigator.of(sheet).pop();
+                    setState(() {
+                      _pinnedMessages.contains(message)
+                          ? _pinnedMessages.remove(message)
+                          : _pinnedMessages.add(message);
+                    });
+                  },
+                ),
+                if (message.mine)
+                  ListTile(
+                    leading: Icon(
+                      Icons.delete_outline_rounded,
+                      color: c.danger,
+                    ),
+                    title: Text('Удалить', style: TextStyle(color: c.danger)),
+                    onTap: () {
+                      Navigator.of(sheet).pop();
+                      setState(() {
+                        final removed = _msgs.removeAt(index);
+                        _editedMessages.remove(removed);
+                        _replyTargets.remove(removed);
+                        _pinnedMessages.remove(removed);
+                        if (_editingIndex == index) {
+                          _editingIndex = null;
+                          _replyingTo = null;
+                          _ctrl.clear();
+                          _drafts.remove(widget.student.name);
+                        }
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -6692,8 +8877,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
             ),
             IconButton(
               icon: Icon(Icons.more_vert_rounded, size: 20, color: c.muted),
-              onPressed: () =>
-                  _snack(context, 'Profil · qidirish · mute (demo)'),
+              onPressed: _showStudentSearch,
             ),
           ],
         ),
@@ -6767,8 +8951,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                       size: 22,
                       color: c.muted,
                     ),
-                    onPressed: () =>
-                        _snack(context, 'Fayl · rasm · ovoz (demo)'),
+                    onPressed: _attachStudentFile,
                   ),
                   Expanded(
                     child: Container(
@@ -6812,10 +8995,10 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                         color: c.primary,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.send_rounded,
                         size: 17,
-                        color: Colors.white,
+                        color: c.surface,
                       ),
                     ),
                   ),
@@ -6831,102 +9014,289 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   Widget _referenceBuild(BuildContext context) {
     final c = widget.colors;
     final p = studentProfile(widget.student);
+    final store = AppScope.of(context);
     return SfTheme(
       colors: c,
       child: Scaffold(
         backgroundColor: c.bg,
         body: Column(
           children: [
-            RefNavHeader(
-              title: widget.student.name,
-              subtitle: '${p.branch} · ${tr(context, 'online')}',
+            _ChatConversationBar(
+              name: widget.student.name,
+              subtitle: tr(context, 'online'),
+              group: false,
               onBack: () => Navigator.of(context).maybePop(),
-              actions: [
-                RefIconAction(
-                  key: const ValueKey('student-chat-profile-header'),
-                  icon: Icons.person_outline_rounded,
-                  tooltip: tr(context, 'chat_profile'),
-                  onPressed: () => Navigator.of(context).push(
-                    sfPageRoute(
-                      ChatCabinetScreen(student: widget.student, colors: c),
+              profileKey: const ValueKey('student-chat-profile-header'),
+              onOpenProfile: () => Navigator.of(context).push(
+                sfPageRoute(
+                  ChatCabinetScreen(student: widget.student, colors: c),
+                ),
+              ),
+              onSearch: _showStudentSearch,
+              onCall: () => _launchPhoneCall(context, p.fatherPhone),
+              onMenu: () => showModalBottomSheet<void>(
+                context: context,
+                backgroundColor: Colors.transparent,
+                builder: (sheet) => SfTheme(
+                  colors: c,
+                  child: SafeArea(
+                    top: false,
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(24),
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ListTile(
+                            leading: Icon(
+                              Icons.person_outline_rounded,
+                              color: c.primary,
+                            ),
+                            title: const Text('Открыть профиль'),
+                            onTap: () {
+                              Navigator.of(sheet).pop();
+                              Navigator.of(context).push(
+                                sfPageRoute(
+                                  ChatCabinetScreen(
+                                    student: widget.student,
+                                    colors: c,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          ListTile(
+                            leading: Icon(
+                              _notificationsEnabled
+                                  ? Icons.notifications_off_outlined
+                                  : Icons.notifications_active_outlined,
+                              color: c.ink2,
+                            ),
+                            title: Text(
+                              _notificationsEnabled
+                                  ? 'Отключить уведомления'
+                                  : 'Включить уведомления',
+                            ),
+                            trailing: Switch(
+                              value: _notificationsEnabled,
+                              onChanged: (value) {
+                                Navigator.of(sheet).pop();
+                                setState(() => _notificationsEnabled = value);
+                              },
+                            ),
+                            onTap: () {
+                              Navigator.of(sheet).pop();
+                              setState(
+                                () => _notificationsEnabled =
+                                    !_notificationsEnabled,
+                              );
+                            },
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
+            if (_pinnedMessages.isNotEmpty)
+              _PinnedChatBanner(
+                message: _pinnedMessages.last,
+                onTap: () {
+                  final index = _msgs.indexOf(_pinnedMessages.last);
+                  _scrollToMessage(_scroll, index);
+                },
+                onClose: () => setState(_pinnedMessages.clear),
+              ),
             Expanded(
               child: ListView.separated(
                 controller: _scroll,
                 padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
                 itemCount: _msgs.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (_, index) => Align(
-                  alignment: _msgs[index].mine
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.of(context).size.width * .76,
-                    ),
-                    child: RefChatBubble(
-                      text: _msgs[index].text,
-                      mine: _msgs[index].mine,
-                      time: index.isEven ? '10:24' : '10:26',
-                    ),
-                  ),
+                separatorBuilder: (_, index) => SizedBox(
+                  height: store.reactionFor(_msgs[index]) == null ? 8 : 18,
+                ),
+                itemBuilder: (_, index) => _ReferenceConversationBubble(
+                  message: _msgs[index],
+                  time: index.isEven ? '10:24' : '10:26',
+                  reaction: store.reactionFor(_msgs[index]),
+                  edited: _editedMessages.contains(_msgs[index]),
+                  replyText: _replyTargets[_msgs[index]]?.text,
+                  onLongPress: () =>
+                      _studentMessageActions(_msgs[index], index),
                 ),
               ),
             ),
-            SizedBox(
-              height: 42,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+            if (!_recording)
+              SizedBox(
+                height: 39,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  children: [
+                    for (final reply in [
+                      "To'lov eslatmasi",
+                      'Dars jadvali',
+                      'Rahmat 🙏',
+                      'Yig‘ilish',
+                    ])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 7),
+                        child: ActionChip(
+                          visualDensity: VisualDensity.compact,
+                          side: BorderSide(color: c.border),
+                          backgroundColor: c.surface2,
+                          label: Text(
+                            reply,
+                            style: RefType.ui(
+                              size: 10.5,
+                              weight: FontWeight.w600,
+                              color: c.ink2,
+                            ),
+                          ),
+                          onPressed: () => _send(reply),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ClipRect(
+              child: AnimatedSize(
+                duration: RefMotion.resolve(context, RefMotion.quick),
+                curve: Curves.easeOutCubic,
+                child: _emojiOpen
+                    ? _EmojiTray(
+                        onSelect: _insertStudentEmoji,
+                        onClose: _toggleStudentEmoji,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+            if (_pendingUploads.isNotEmpty)
+              _ChatUploadQueue(
+                uploads: _pendingUploads,
+                onCancel: _cancelStudentUpload,
+              ),
+            _studentComposer(c),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _studentComposer(SfColors c) {
+    final hasText = _ctrl.text.trim().isNotEmpty;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border(top: BorderSide(color: c.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(7, 5, 7, 7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_editingIndex != null || _replyingTo != null)
+                _ComposerContextBanner(
+                  editing: _editingIndex != null,
+                  text:
+                      (_editingIndex != null
+                              ? _msgs[_editingIndex!]
+                              : _replyingTo!)
+                          .text,
+                  onCancel: _cancelStudentContext,
+                ),
+              Row(
                 children: [
-                  for (final reply in [
-                    "To'lov eslatmasi",
-                    'Dars jadvali',
-                    'Rahmat 🙏',
-                    'Yig‘ilish',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 7),
-                      child: RefPressable(
-                        onPressed: () => _send(reply),
-                        borderRadius: RefRadius.pill,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: c.surface2,
-                            borderRadius: RefRadius.pill,
-                            border: Border.all(color: c.border),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            child: Text(
-                              reply,
-                              style: RefType.ui(
-                                size: 11.5,
-                                weight: FontWeight.w600,
-                                color: c.ink2,
-                              ),
-                            ),
-                          ),
+                  IconButton(
+                    key: const ValueKey('student-chat-attachment'),
+                    tooltip: 'Прикрепить',
+                    onPressed: _attachStudentFile,
+                    icon: Icon(
+                      Icons.add_circle_outline_rounded,
+                      color: c.primary,
+                      size: 24,
+                    ),
+                  ),
+                  Expanded(
+                    child: _ChatComposerInput(
+                      controller: _ctrl,
+                      focusNode: _composerFocus,
+                      recording: _recording,
+                      locked: _voiceLocked,
+                      elapsed: _recordElapsed,
+                      colors: c,
+                      emojiOpen: _emojiOpen,
+                      hintText: tr(context, 'dm_hint'),
+                      onToggleEmoji: _toggleStudentEmoji,
+                      onCancelRecording: _cancelVoice,
+                      onSubmitted: _send,
+                      onChanged: (value) {
+                        _drafts[widget.student.name] = value;
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Semantics(
+                    button: true,
+                    label: hasText
+                        ? 'Отправить сообщение'
+                        : _recording
+                        ? 'Остановить и отправить голосовое сообщение'
+                        : 'Записать голосовое сообщение',
+                    onTap: hasText ? _send : _activateStudentVoiceButton,
+                    child: Tooltip(
+                      message: hasText
+                          ? 'Отправить'
+                          : _recording
+                          ? 'Отправить голосовое'
+                          : 'Удерживайте для записи',
+                      child: GestureDetector(
+                        onTap: hasText ? _send : _activateStudentVoiceButton,
+                        onLongPressStart: hasText
+                            ? null
+                            : (_) {
+                                _recordGestureActive = true;
+                                if (!_recording) _toggleVoice();
+                              },
+                        onLongPressMoveUpdate: hasText
+                            ? null
+                            : (details) {
+                                if (!_recording) return;
+                                if (details.offsetFromOrigin.dx < -64) {
+                                  _recordGestureActive = false;
+                                  _cancelVoice();
+                                } else if (details.offsetFromOrigin.dy < -48 &&
+                                    !_voiceLocked) {
+                                  setState(() => _voiceLocked = true);
+                                }
+                              },
+                        onLongPressEnd: hasText
+                            ? null
+                            : (_) {
+                                _recordGestureActive = false;
+                                if (_recording && !_voiceLocked) _toggleVoice();
+                              },
+                        child: _TelegramVoiceAction(
+                          hasText: hasText,
+                          recording: _recording,
+                          colors: c,
                         ),
                       ),
                     ),
+                  ),
                 ],
               ),
-            ),
-            RefComposer(
-              controller: _ctrl,
-              hint: tr(context, 'dm_hint'),
-              onSend: _send,
-              onAttach: () => _snack(context, 'Fayl · rasm · ovoz (demo)'),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -6963,33 +9333,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
       ),
     );
   }
-}
-
-void _toast(BuildContext context, String msg) {
-  Navigator.of(context).maybePop();
-  ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(
-      SnackBar(
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.fromLTRB(
-          12,
-          0,
-          12,
-          12 + MediaQuery.of(context).padding.bottom,
-        ),
-        backgroundColor: const Color(0xFF3A332A),
-        content: Text(
-          msg,
-          style: TextStyle(
-            fontFamily: SfType.ui,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
 }
 
 class _DetailStat extends StatelessWidget {
@@ -7069,13 +9412,18 @@ class _InfoRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Text(
-            value,
-            style: TextStyle(
-              fontFamily: mono ? SfType.mono : SfType.ui,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: onTap != null ? c.primary : c.ink,
+          Expanded(
+            child: Text(
+              value,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontFamily: mono ? SfType.mono : SfType.ui,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: onTap != null ? c.primary : c.ink,
+              ),
             ),
           ),
           if (onTap != null) ...[
@@ -7316,30 +9664,38 @@ class _AnomalyRow extends StatelessWidget {
                   ),
                   Row(
                     children: [
-                      Text(
-                        '${a.branch} · ',
-                        style: TextStyle(
-                          fontFamily: SfType.ui,
-                          fontSize: 10.5,
-                          color: c.muted,
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: c.surface2,
-                          borderRadius: BorderRadius.circular(5),
-                        ),
+                      Expanded(
                         child: Text(
-                          a.kind,
+                          '${a.branch} · ',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontFamily: SfType.ui,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w700,
-                            color: c.ink2,
+                            fontSize: 10.5,
+                            color: c.muted,
+                          ),
+                        ),
+                      ),
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: c.surface2,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            a.kind,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                              color: c.ink2,
+                            ),
                           ),
                         ),
                       ),
@@ -7684,7 +10040,7 @@ Future<void> _openApproval(
               ? '✓ Tasdiqlandi · ${fmtMoney(item.amount)} kassa daftariga yozildi'
               : '✓ "${item.title}" tasdiqlandi')
         : '✗ "${item.title}" rad etildi',
-    bg: decision ? const Color(0xFF4F7B3B) : const Color(0xFF8A4232),
+    bg: decision ? colors.success : colors.danger,
   );
 }
 
@@ -7975,17 +10331,18 @@ class _ApprBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Material(
-      color: primary ? c.primary : c.surface2,
-      borderRadius: BorderRadius.circular(9),
+      color: primary ? c.primary : c.primarySoft,
+      borderRadius: BorderRadius.circular(999),
       child: InkWell(
-        borderRadius: BorderRadius.circular(9),
+        borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Container(
           alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(vertical: 9),
+          constraints: const BoxConstraints(minHeight: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
           decoration: BoxDecoration(
-            border: primary ? null : Border.all(color: c.border),
-            borderRadius: BorderRadius.circular(9),
+            border: primary ? null : Border.all(color: c.primarySoft),
+            borderRadius: BorderRadius.circular(999),
           ),
           child: Text(
             label,
@@ -7993,7 +10350,7 @@ class _ApprBtn extends StatelessWidget {
               fontFamily: SfType.ui,
               fontSize: 12.5,
               fontWeight: FontWeight.w700,
-              color: primary ? const Color(0xFFFFFCF5) : c.ink2,
+              color: primary ? c.surface : c.primaryInk,
             ),
           ),
         ),
@@ -8052,7 +10409,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-/// Reusable single-select chip row (dark "ink" pill = active).
+/// Reusable single-select chip row with a tonal selected state.
 class _FilterChips extends StatelessWidget {
   final List<String> items;
   final int selected;
@@ -8066,7 +10423,7 @@ class _FilterChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return SizedBox(
-      height: 36,
+      height: 44,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: items.length,
@@ -8092,10 +10449,12 @@ class _FilterChips extends StatelessWidget {
                   alignment: Alignment.center,
                   padding: const EdgeInsets.symmetric(horizontal: 13),
                   decoration: BoxDecoration(
-                    color: on ? c.ink : c.surface,
+                    color: on ? c.primarySoft : c.surface,
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(
-                      color: on ? c.ink : c.borderStrong.withValues(alpha: 0.8),
+                      color: on
+                          ? c.primarySoft
+                          : c.borderStrong.withValues(alpha: 0.8),
                     ),
                   ),
                   child: Text(
@@ -8104,7 +10463,7 @@ class _FilterChips extends StatelessWidget {
                       fontFamily: SfType.ui,
                       fontSize: 11.5,
                       fontWeight: FontWeight.w700,
-                      color: on ? c.bg : c.ink2,
+                      color: on ? c.primaryInk : c.ink2,
                     ),
                   ),
                 ),
@@ -8140,11 +10499,11 @@ class _SheetShell extends StatelessWidget {
     final c = SfTheme.of(context);
     return Material(
       color: c.surface,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       clipBehavior: Clip.antiAlias,
       child: Container(
         decoration: BoxDecoration(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
           border: Border.all(color: c.border),
         ),
         padding: const EdgeInsets.fromLTRB(18, 10, 18, 24),
@@ -8528,6 +10887,37 @@ class LedgerEntryScreen extends StatelessWidget {
     final c = colors;
     final e = entry;
     final accent = e.inflow ? c.success : c.danger;
+    final statusLabel = switch (e.status.toLowerCase()) {
+      'accepted' || 'paid' || 'success' => 'Оплачен',
+      'pending' || 'processing' => 'В обработке',
+      'cancelled' || 'canceled' => 'Отменён',
+      'refunded' => 'Возвращён',
+      _ => e.status,
+    };
+    final normalizedStatus = e.status.toLowerCase();
+    final failedStatus =
+        normalizedStatus.contains('cancel') ||
+        normalizedStatus.contains('fail') ||
+        normalizedStatus.contains('reject');
+    final pendingStatus =
+        normalizedStatus.contains('pending') ||
+        normalizedStatus.contains('process') ||
+        normalizedStatus.contains('wait');
+    final statusColor = failedStatus
+        ? c.danger
+        : pendingStatus
+        ? c.warn
+        : c.success;
+    final statusSoft = failedStatus
+        ? c.dangerSoft
+        : pendingStatus
+        ? c.warnSoft
+        : c.successSoft;
+    final statusIcon = failedStatus
+        ? Icons.cancel_rounded
+        : pendingStatus
+        ? Icons.schedule_rounded
+        : Icons.verified_rounded;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -8555,7 +10945,7 @@ class LedgerEntryScreen extends StatelessWidget {
             // Hero amount card
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: c.surface,
                 border: Border.all(color: c.border),
@@ -8614,39 +11004,52 @@ class LedgerEntryScreen extends StatelessWidget {
               child: Column(
                 children: [
                   _row(context, tr(context, 'tx_type'), e.kind),
-                  _row(context, tr(context, 'tx_channel'), e.channel),
-                  _row(context, tr(context, 'tx_who'), e.who),
+                  _row(context, 'Sana', e.date),
                   _row(context, tr(context, 'tx_time'), e.time),
-                  _row(context, tr(context, 'tx_id'), e.id, last: true),
+                  _row(context, 'Сумма', fmtMoney(e.amount)),
+                  _row(context, 'Способ оплаты', e.channel),
+                  _row(context, 'Кто оплатил', e.payerName),
+                  _row(context, 'За ученика', e.studentName),
+                  _row(context, 'Группа', e.group ?? '—'),
+                  _row(context, 'Преподаватель', e.teacher ?? '—'),
+                  _row(context, 'Филиал', e.branch ?? '—'),
+                  _row(context, 'Номер операции', e.operationNumber ?? e.id),
+                  _row(context, 'Комментарий', e.comment ?? '—'),
+                  _row(context, 'Статус платежа', statusLabel, last: true),
                 ],
               ),
             ),
+            const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: c.successSoft,
+                color: statusSoft,
                 borderRadius: BorderRadius.circular(13),
               ),
               child: Row(
                 children: [
-                  Icon(Icons.verified_rounded, size: 20, color: c.success),
+                  Icon(statusIcon, size: 20, color: statusColor),
                   const SizedBox(width: 11),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          tr(context, 'tx_confirmed'),
+                          statusLabel,
                           style: TextStyle(
                             fontFamily: SfType.ui,
                             fontSize: 12.5,
                             fontWeight: FontWeight.w700,
-                            color: c.success,
+                            color: statusColor,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          tr(context, 'tx_immutable'),
+                          failedStatus
+                              ? 'Операция не проведена'
+                              : pendingStatus
+                              ? 'Ожидается подтверждение платёжной системы'
+                              : tr(context, 'tx_immutable'),
                           style: TextStyle(
                             fontFamily: SfType.ui,
                             fontSize: 11,
@@ -9019,13 +11422,13 @@ class _ReferenceBranchCard extends StatelessWidget {
                           ),
                         ],
                       ),
-                      child: const SizedBox(
+                      child: SizedBox(
                         width: 48,
                         height: 48,
                         child: Icon(
                           Icons.account_tree_rounded,
                           size: 23,
-                          color: Colors.white,
+                          color: colors.surface,
                         ),
                       ),
                     ),
@@ -9738,7 +12141,30 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
     Color color, {
     bool last = false,
   }) => InkWell(
-    onTap: () => _snack(context, '$title · $time'),
+    onTap: () => _showDetailsSheet(
+      context,
+      title: title,
+      subtitle: '${widget.branch.name} · $time',
+      icon: icon,
+      fields: [
+        (
+          icon: Icons.account_tree_outlined,
+          label: 'Филиал',
+          value: widget.branch.name,
+        ),
+        (icon: Icons.schedule_rounded, label: 'Время', value: time),
+        (
+          icon: Icons.storage_rounded,
+          label: 'Источник',
+          value: 'Журнал филиала',
+        ),
+        (
+          icon: Icons.verified_outlined,
+          label: 'Статус',
+          value: 'Зафиксировано',
+        ),
+      ],
+    ),
     child: Container(
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
       decoration: BoxDecoration(
@@ -9769,6 +12195,8 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
               color: c.muted,
             ),
           ),
+          const SizedBox(width: 5),
+          Icon(Icons.chevron_right_rounded, size: 17, color: c.muted),
         ],
       ),
     ),
@@ -9788,11 +12216,66 @@ class BranchConfigureScreen extends StatefulWidget {
 }
 
 class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
-  String staff = 'Madina Halimova';
+  String? staffUsername;
   late String target = widget.branch.name;
+  String? _transferError;
+  String? _lastTransfer;
+
+  Future<void> _transferStaff() async {
+    final store = AppScope.of(context);
+    final username = staffUsername;
+    if (username == null) {
+      setState(() => _transferError = 'Сотрудник не выбран');
+      return;
+    }
+    final member = store.staff.firstWhere((item) => item.username == username);
+    if (member.branch == target) {
+      setState(
+        () => _transferError =
+            '${member.fullName} уже работает в филиале $target',
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => SfTheme(
+        colors: widget.colors,
+        child: AlertDialog(
+          backgroundColor: widget.colors.surface,
+          title: const Text('Подтвердить перевод'),
+          content: Text(
+            '${member.fullName}\n${member.branch} → $target\n\nИзменение появится в профиле сотрудника и журнале действий.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.swap_horiz_rounded),
+              label: const Text('Перевести'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final from = member.branch;
+    store.transferStaffToBranch(member, target);
+    setState(() {
+      _transferError = null;
+      _lastTransfer = '${member.fullName} · $from → $target';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
+    final store = AppScope.of(context);
+    if (staffUsername == null && store.staff.isNotEmpty) {
+      staffUsername = store.staff.first.username;
+    }
     return SfScaffold(
       colors: c,
       title: '${widget.branch.name} · Configure',
@@ -9831,27 +12314,31 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 DropdownButtonFormField<String>(
-                  initialValue: staff,
+                  initialValue: staffUsername,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Xodim'),
-                  items:
-                      const [
-                            'Madina Halimova',
-                            'Sevara Ibragimova',
-                            'Munira Tosheva',
-                          ]
-                          .map(
-                            (v) => DropdownMenuItem(value: v, child: Text(v)),
-                          )
-                          .toList(),
-                  onChanged: (v) => setState(() => staff = v!),
+                  items: store.staff
+                      .map(
+                        (member) => DropdownMenuItem(
+                          value: member.username,
+                          child: Text(
+                            '${member.fullName} · ${member.branch}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() {
+                    staffUsername = value;
+                    _transferError = null;
+                  }),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: target,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Yangi filial'),
-                  items: AppScope.of(context).branches
+                  items: store.branches
                       .map(
                         (b) => DropdownMenuItem(
                           value: b.name,
@@ -9859,14 +12346,33 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) => setState(() => target = v!),
+                  onChanged: (value) => setState(() {
+                    target = value!;
+                    _transferError = null;
+                  }),
                 ),
+                if (_transferError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _transferError!,
+                    style: RefType.ui(size: 11.5, color: c.danger),
+                  ),
+                ],
+                if (_lastTransfer != null) ...[
+                  const SizedBox(height: 10),
+                  RefStatusTile(
+                    icon: Icons.check_circle_outline_rounded,
+                    title: 'Перевод выполнен',
+                    subtitle: _lastTransfer!,
+                    tone: RefMetricTone.success,
+                  ),
+                ],
                 const SizedBox(height: 14),
                 SfButton(
                   icon: Icons.swap_horiz_rounded,
                   label: 'Xodimni o‘tkazish',
                   primary: true,
-                  onTap: () => _snack(context, '$staff → $target'),
+                  onTap: _transferStaff,
                 ),
               ],
             ),
@@ -10289,6 +12795,7 @@ class _AiScreenState extends State<AiScreen> {
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scroll = ScrollController();
   bool _historyOpen = false;
+  bool _sending = false;
 
   @override
   void dispose() {
@@ -10297,12 +12804,45 @@ class _AiScreenState extends State<AiScreen> {
     super.dispose();
   }
 
-  void _send(AppStore store, [String? preset]) {
-    final text = preset ?? _ctrl.text;
-    if (text.trim().isEmpty) return;
-    store.sendChat(text);
+  Future<void> _send(AppStore store, [String? preset]) async {
+    final text = (preset ?? _ctrl.text).trim();
+    if (text.isEmpty || _sending) return;
+    store.addAiUserTurn(text);
     _ctrl.clear();
     FocusScope.of(context).unfocus();
+    setState(() => _sending = true);
+    try {
+      final api = ApiScope.maybeOf(context)?.notifier;
+      if (api == null || !api.authenticated) {
+        store.addAiAssistantTurn(
+          'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
+        );
+      } else {
+        final answer = await api.requestAi(text);
+        store.addAiAssistantTurn(answer);
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        store.addAiAssistantTurn(switch (error.status) {
+          401 || 404 =>
+            'AI ещё не подключен. Backend доступен, но AI endpoint не настроен.',
+          403 =>
+            'AI недоступен для вашей роли. Попросите администратора выдать разрешение.',
+          429 =>
+            'Лимит AI на сейчас исчерпан. Попробуйте позже или проверьте бюджет центра.',
+          _ =>
+            'AI временно недоступен. Соединение с backend есть, но сервис не ответил.',
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        store.addAiAssistantTurn(
+          'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
         _scroll.animateTo(
@@ -10319,33 +12859,15 @@ class _AiScreenState extends State<AiScreen> {
     final c = SfTheme.of(context);
     final store = AppScope.of(context);
     final cfg = widget.cfg;
-    final ceo = cfg.role == SfRole.ceo;
-    final audit = cfg.role == SfRole.audit;
-    final insights = [
-      (
-        'Churn riski',
-        'danger',
-        audit
-            ? "Sebzorda 3 yuqori signal to'plandi."
-            : ceo
-            ? "Sebzorda churn 2x yuqori. 3 o'qituvchi almashgan."
-            : "6 o'quvchi ketish belgisini ko'rsatmoqda.",
-      ),
-      (
-        'O\'sish',
-        'success',
-        ceo
-            ? 'Ingliz B2 to\'lgan — yangi guruh \$4.2k/oy.'
-            : "Kutish ro'yxatida 14 o'quvchi bor.",
-      ),
-      (
-        'Moliya',
-        'warn',
-        ceo
-            ? '142 oila qarzdor. 38 tasi 30+ kun.'
-            : '38 oila qarzdor (22.4 mln).',
-      ),
-    ];
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final backendConnected = api?.authenticated ?? false;
+    final prompts = cfg.role == SfRole.audit
+        ? const [
+            'Audit risklarini tekshir',
+            'Anomaliyalarni tushuntir',
+            'Xulosa',
+          ]
+        : const ['Churn sabablari', 'Daromad prognozi', 'Qarzdorlik rejasi'];
     final mainCol = Column(
       children: [
         // Top bar with the history (☰) button on the left and a new-chat (+).
@@ -10355,11 +12877,26 @@ class _AiScreenState extends State<AiScreen> {
             children: [
               _AiIconBtn(
                 icon: Icons.menu_rounded,
+                tooltip: 'Suhbatlar tarixi',
                 onTap: () => setState(() => _historyOpen = true),
               ),
+              const SizedBox(width: 8),
+              Pill(
+                backendConnected ? 'BACKEND · AI UNCHECKED' : 'AI OFFLINE',
+                tone: PillTone.neutral,
+                dot: true,
+              ),
               const Spacer(),
+              if (store.chat.isNotEmpty)
+                _AiIconBtn(
+                  icon: Icons.delete_sweep_outlined,
+                  tooltip: 'Suhbatni tozalash',
+                  onTap: store.clearActiveConversation,
+                ),
+              if (store.chat.isNotEmpty) const SizedBox(width: 6),
               _AiIconBtn(
                 icon: Icons.add_comment_rounded,
+                tooltip: 'Yangi suhbat',
                 onTap: () {
                   store.newConversation();
                   setState(() => _historyOpen = false);
@@ -10383,37 +12920,51 @@ class _AiScreenState extends State<AiScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (store.chat.isEmpty)
-                      for (final ins in insights)
-                        SfAiCard(
-                          badge: ins.$1,
-                          quote: ins.$3,
-                          trailing: Pill(
-                            ins.$2 == 'danger'
-                                ? 'Yuqori'
-                                : ins.$2 == 'warn'
-                                ? "O'rta"
-                                : 'Imkon',
-                            tone: toneFromString(ins.$2),
-                            dot: true,
-                          ),
-                        )
+                      RefStatusTile(
+                        icon: backendConnected
+                            ? Icons.hub_rounded
+                            : Icons.cloud_off_rounded,
+                        title: backendConnected
+                            ? 'Backend подключен'
+                            : 'AI ещё не подключен',
+                        subtitle: backendConnected
+                            ? 'AI endpoint будет проверен при первом запросе. Ответы не подменяются демо-данными.'
+                            : 'Подключите backend в настройках. До подключения приложение не генерирует фейковые ответы.',
+                        tone: RefMetricTone.neutral,
+                      )
                     else
                       for (final turn in store.chat) _ChatBubble(turn: turn),
+                    if (_sending) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: c.ai,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Проверяю AI endpoint…',
+                            style: RefType.ui(size: 11, color: c.muted),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     SizedBox(
-                      height: 34,
+                      height: 44,
                       child: ListView(
                         scrollDirection: Axis.horizontal,
                         children: [
-                          for (final p in [
-                            'Churn sabablari',
-                            'Daromad prognozi',
-                            'Reyting',
-                          ])
+                          for (final p in prompts)
                             Padding(
                               padding: const EdgeInsets.only(right: 6),
                               child: GestureDetector(
-                                onTap: () => _send(store, p),
+                                onTap: _sending ? null : () => _send(store, p),
                                 child: Container(
                                   alignment: Alignment.center,
                                   padding: const EdgeInsets.symmetric(
@@ -10458,6 +13009,7 @@ class _AiScreenState extends State<AiScreen> {
                 Expanded(
                   child: TextField(
                     controller: _ctrl,
+                    enabled: !_sending,
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _send(store),
                     style: TextStyle(
@@ -10478,21 +13030,18 @@ class _AiScreenState extends State<AiScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
-                GestureDetector(
-                  onTap: () => _send(store),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: c.primary,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.send_rounded,
-                      size: 16,
-                      color: Colors.white,
+                IconButton(
+                  key: const ValueKey('ai-send-button'),
+                  tooltip: 'Yuborish',
+                  onPressed: _sending ? null : () => _send(store),
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size.square(44),
+                    backgroundColor: _sending ? c.muted2 : c.primary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
+                  icon: Icon(Icons.send_rounded, size: 18, color: c.surface),
                 ),
               ],
             ),
@@ -10510,7 +13059,10 @@ class _AiScreenState extends State<AiScreen> {
           ignoring: !_historyOpen,
           child: AnimatedOpacity(
             opacity: _historyOpen ? 1 : 0,
-            duration: const Duration(milliseconds: 200),
+            duration: RefMotion.resolve(
+              context,
+              const Duration(milliseconds: 200),
+            ),
             child: GestureDetector(
               onTap: () => setState(() => _historyOpen = false),
               child: Container(color: Colors.black.withValues(alpha: 0.35)),
@@ -10519,7 +13071,10 @@ class _AiScreenState extends State<AiScreen> {
         ),
         // Sliding conversation-history panel
         AnimatedPositioned(
-          duration: const Duration(milliseconds: 260),
+          duration: RefMotion.resolve(
+            context,
+            const Duration(milliseconds: 260),
+          ),
           curve: Curves.easeOutCubic,
           left: _historyOpen ? 0 : -(w * 0.8),
           top: 0,
@@ -10547,22 +13102,40 @@ class _AiScreenState extends State<AiScreen> {
 /// Round icon button used in the AI top bar.
 class _AiIconBtn extends StatelessWidget {
   final IconData icon;
+  final String tooltip;
   final VoidCallback onTap;
-  const _AiIconBtn({required this.icon, required this.onTap});
+  const _AiIconBtn({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: c.surface2,
-          borderRadius: BorderRadius.circular(11),
-          border: Border.all(color: c.border),
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: c.surface2,
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(color: c.border),
+                ),
+                child: Icon(icon, size: 18, color: c.ink2),
+              ),
+            ),
+          ),
         ),
-        child: Icon(icon, size: 18, color: c.ink2),
       ),
     );
   }
@@ -10606,9 +13179,10 @@ class _AiHistoryPanel extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  GestureDetector(
-                    onTap: onClose,
-                    child: Icon(Icons.close_rounded, size: 20, color: c.muted),
+                  IconButton(
+                    tooltip: 'Yopish',
+                    onPressed: onClose,
+                    icon: Icon(Icons.close_rounded, size: 20, color: c.muted),
                   ),
                 ],
               ),
@@ -10627,11 +13201,7 @@ class _AiHistoryPanel extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(
-                        Icons.add_rounded,
-                        size: 17,
-                        color: Colors.white,
-                      ),
+                      Icon(Icons.add_rounded, size: 17, color: c.surface),
                       const SizedBox(width: 6),
                       Text(
                         tr(context, 'ai_new_chat'),
@@ -10639,7 +13209,7 @@ class _AiHistoryPanel extends StatelessWidget {
                           fontFamily: SfType.ui,
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                          color: c.surface,
                         ),
                       ),
                     ],
@@ -10733,37 +13303,43 @@ class _ChatBubble extends StatelessWidget {
     final mine = turn.mine;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-        decoration: BoxDecoration(
-          gradient: mine
-              ? null
-              : LinearGradient(
-                  colors: c.aiBg,
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-          color: mine ? c.primary : null,
-          border: mine ? null : Border.all(color: c.aiBorder),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(13),
-            topRight: const Radius.circular(13),
-            bottomLeft: Radius.circular(mine ? 13 : 4),
-            bottomRight: Radius.circular(mine ? 4 : 13),
+      child: GestureDetector(
+        onLongPress: () async {
+          await Clipboard.setData(ClipboardData(text: turn.text));
+          if (context.mounted) _snack(context, 'Javob nusxalandi');
+        },
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78,
           ),
-        ),
-        child: Text(
-          turn.text,
-          style: TextStyle(
-            fontFamily: mine ? SfType.ui : SfType.display,
-            fontStyle: mine ? FontStyle.normal : FontStyle.italic,
-            fontSize: mine ? 13 : 14.5,
-            height: 1.35,
-            color: mine ? Colors.white : c.ink,
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+          decoration: BoxDecoration(
+            gradient: mine
+                ? null
+                : LinearGradient(
+                    colors: c.aiBg,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+            color: mine ? c.primary : null,
+            border: mine ? null : Border.all(color: c.aiBorder),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(13),
+              topRight: const Radius.circular(13),
+              bottomLeft: Radius.circular(mine ? 13 : 4),
+              bottomRight: Radius.circular(mine ? 4 : 13),
+            ),
+          ),
+          child: Text(
+            turn.text,
+            style: TextStyle(
+              fontFamily: mine ? SfType.ui : SfType.display,
+              fontStyle: mine ? FontStyle.normal : FontStyle.italic,
+              fontSize: mine ? 13 : 14.5,
+              height: 1.35,
+              color: mine ? Colors.white : c.ink,
+            ),
           ),
         ),
       ),
@@ -10801,15 +13377,6 @@ class GroupInfo {
   );
 }
 
-const _kTeachers = [
-  'Nigora Karimova',
-  'Bobur Aliyev',
-  'Malika Yusupova',
-  'Sardor Tursunov',
-  'Feruza Rashidova',
-  'Jasur Komilov',
-  'Kamola Sobirova',
-];
 const _kSchedules = [
   'Du·Cho·Ju · 10:00',
   'Se·Pa·Sha · 14:00',
@@ -10839,7 +13406,7 @@ List<GroupInfo> _groupsFrom(
         entry.key,
         p.branch,
         p.level,
-        _kTeachers[h % _kTeachers.length],
+        studentTeacher(ss.first),
         _kSchedules[h % _kSchedules.length],
         ss.length,
         avg,
@@ -10865,6 +13432,20 @@ List<GroupInfo> _groupsFrom(
   }
   out.sort((a, b) => a.name.compareTo(b.name));
   return out;
+}
+
+/// One teacher-to-group relation for every active people page. Groups are
+/// derived from the same student assignment used by the CEO group list, so a
+/// staff profile can never show decorative, unrelated groups.
+List<GroupInfo> teacherGroupsFor(AppStore store, StaffMember member) {
+  final assignedNames = member.groups.toSet();
+  return _groupsFrom(store.students, store.extraGroups)
+      .where(
+        (group) =>
+            group.teacher == member.fullName ||
+            assignedNames.contains(group.name),
+      )
+      .toList(growable: false);
 }
 
 int _gseed(String s) {
@@ -10914,21 +13495,27 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final wantLevel = levels[levelSel];
     final wantTeacher = teachers[teacherSel];
     final q = query.trim().toLowerCase();
-    final list = groups.where((g) {
-      if (wantBranch != '__all' && g.branch != wantBranch) return false;
-      if (wantLevel != '__all' && g.level != wantLevel) return false;
-      if (wantTeacher != '__all' && g.teacher != wantTeacher) return false;
-      if (statusSel == 1 && g.status != 'active') return false;
-      if (statusSel == 2 && g.status != 'paused') return false;
-      if (statusSel == 3 && g.status != 'closed') return false;
-      if (statusSel == 4 && g.count < 2) return false;
-      if (q.isNotEmpty &&
-          !g.name.toLowerCase().contains(q) &&
-          !g.teacher.toLowerCase().contains(q)) {
-        return false;
-      }
-      return true;
-    }).toList();
+    final list =
+        groups.where((g) {
+          if (wantBranch != '__all' && g.branch != wantBranch) return false;
+          if (wantLevel != '__all' && g.level != wantLevel) return false;
+          if (wantTeacher != '__all' && g.teacher != wantTeacher) return false;
+          if (statusSel == 1 && g.status != 'active') return false;
+          if (statusSel == 2 && g.status != 'paused') return false;
+          if (statusSel == 3 && g.status != 'closed') return false;
+          if (statusSel == 4 && g.count < 2) return false;
+          if (q.isNotEmpty &&
+              !g.name.toLowerCase().contains(q) &&
+              !g.teacher.toLowerCase().contains(q)) {
+            return false;
+          }
+          return true;
+        }).toList()..sort((a, b) {
+          final aPinned = store.pinnedGroups.contains(a.name);
+          final bPinned = store.pinnedGroups.contains(b.name);
+          if (aPinned != bPinned) return aPinned ? -1 : 1;
+          return a.name.compareTo(b.name);
+        });
     final branchF = [
       for (final b in branches)
         b == '__all' ? tr(context, 'f_all_branches') : b,
@@ -10961,6 +13548,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
               const SizedBox(height: 10),
               _GroupStatusSummary(
                 groups: groups,
+                selected: statusSel,
                 onSelect: (index) => setState(() => statusSel = index),
               ),
               const SizedBox(height: 10),
@@ -11077,6 +13665,7 @@ class _GroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = colors;
+    final pinned = AppScope.of(context).pinnedGroups.contains(g.name);
     final attColor = g.avgAtt >= 92
         ? c.success
         : g.avgAtt >= 85
@@ -11150,6 +13739,10 @@ class _GroupCard extends StatelessWidget {
                       ? PillTone.warn
                       : PillTone.danger,
                 ),
+                if (pinned) ...[
+                  const SizedBox(width: 5),
+                  Icon(Icons.star_rounded, size: 16, color: c.accent),
+                ],
               ],
             ),
             const SizedBox(height: 11),
@@ -11259,22 +13852,315 @@ class _GroupCard extends StatelessWidget {
   }
 }
 
-/// Group detail — header stats + the students belonging to the group.
-class GroupDetailScreen extends StatelessWidget {
+/// CEO group workspace. It exposes the operational history behind a group,
+/// rather than sending the user from one oversized summary card to a dead end.
+class GroupDetailScreen extends StatefulWidget {
   final GroupInfo group;
   final SfColors colors;
+  final bool showStudentsInitially;
   const GroupDetailScreen({
     super.key,
     required this.group,
     required this.colors,
+    this.showStudentsInitially = false,
   });
+
+  @override
+  State<GroupDetailScreen> createState() => _GroupDetailScreenState();
+}
+
+enum _GroupDetailTab {
+  overview,
+  students,
+  attendance,
+  payments,
+  exams,
+  history,
+}
+
+class _GroupDetailScreenState extends State<GroupDetailScreen> {
+  late _GroupDetailTab _tab;
+  bool _exporting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = widget.showStudentsInitially
+        ? _GroupDetailTab.students
+        : _GroupDetailTab.overview;
+  }
+
+  Future<void> _pickRange(AppStore store) async {
+    final range = await showDateRangePicker(
+      context: context,
+      initialDateRange: store.selectedRange,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2032),
+      builder: (context, child) => SfTheme(
+        colors: widget.colors,
+        child: Theme(
+          data: sfMaterialTheme(
+            widget.colors,
+            dark: Theme.of(context).brightness == Brightness.dark,
+          ),
+          child: child!,
+        ),
+      ),
+    );
+    if (range != null && mounted) store.setDateRange(range);
+  }
+
+  void _setRangePreset(AppStore store, int days) {
+    final end = DateTime.now();
+    store.setDateRange(
+      DateTimeRange(
+        start: DateTime(
+          end.year,
+          end.month,
+          end.day,
+        ).subtract(Duration(days: days - 1)),
+        end: end,
+      ),
+    );
+    _snack(context, 'Davr: oxirgi $days kun');
+  }
+
+  Future<void> _copySummary(AppStore store) async {
+    final group = widget.group;
+    final analytics = store.analyticsForGroup(
+      group.name,
+      range: store.selectedRange,
+    );
+    final text =
+        '${group.name}\n'
+        '${group.branch} · ${group.level}\n'
+        'O‘qituvchi: ${group.teacher}\n'
+        'O‘quvchilar: ${analytics.studentCount}\n'
+        'Davomat: ${analytics.averageAttendance}%\n'
+        'Qarzdorlar: ${analytics.debtorCount}\n'
+        'Qarzdorlik: ${fmtMoney(analytics.debt)}\n'
+        'Davr: ${store.selectedRange.start.day}.${store.selectedRange.start.month}.${store.selectedRange.start.year}'
+        ' — ${store.selectedRange.end.day}.${store.selectedRange.end.month}.${store.selectedRange.end.year}';
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) _snack(context, 'Guruh xulosasi nusxalandi');
+  }
+
+  Future<void> _addNote(AppStore store) async {
+    final controller = TextEditingController();
+    final note = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Guruhga izoh'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            hintText: 'Masalan: ota-onalar yig‘ilishi rejalashtirildi',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Bekor qilish'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Saqlash'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || note == null || note.trim().isEmpty) return;
+    store.addGroupNote(widget.group.name, note);
+    setState(() => _tab = _GroupDetailTab.history);
+    _snack(context, 'Izoh tarixga saqlandi', bg: widget.colors.success);
+  }
+
+  Future<void> _addExam(AppStore store) async {
+    final controller = TextEditingController(text: 'Oraliq imtihon');
+    final title = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Imtihon qo‘shish'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Imtihon nomi'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Bekor qilish'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Keyingi'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || title == null || title.trim().isEmpty) return;
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: now.add(const Duration(days: 7)),
+      firstDate: now,
+      lastDate: DateTime(now.year + 2),
+    );
+    if (!mounted || date == null) return;
+    store.addGroupExam(widget.group.name, title, date);
+    setState(() => _tab = _GroupDetailTab.exams);
+    _snack(context, 'Imtihon rejasiga qo‘shildi', bg: widget.colors.success);
+  }
+
+  Future<void> _saveDebtReminder(AppStore store, int debtors) async {
+    if (debtors == 0) {
+      _snack(context, 'Bu guruhda qarzdor o‘quvchi yo‘q');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Qarzdorlik eslatmasi'),
+        content: Text(
+          '$debtors ta qarzdor uchun kuzatuv vazifasi yaratiladi. '
+          'Backend xabar yuborish endpointi ulanguncha eslatma lokal saqlanadi.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Bekor qilish'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Saqlash'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    store.saveGroupDebtReminder(widget.group.name);
+    _snack(
+      context,
+      'Eslatma vazifasi saqlandi · yuborish uchun API kerak',
+      bg: widget.colors.success,
+    );
+  }
+
+  Future<void> _exportGroupReport(AppStore store, String format) async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    final group = widget.group;
+    final analytics = store.analyticsForGroup(
+      group.name,
+      range: store.selectedRange,
+    );
+    final members = store.studentsForGroup(group.name);
+    final generated = DateTime.now();
+    final rows = <List<String>>[
+      ['Guruh', group.name],
+      ['Filial', group.branch],
+      ['Daraja', group.level],
+      ['O‘qituvchi', group.teacher],
+      ['Jadval', group.schedule],
+      ['O‘quvchilar', '${analytics.studentCount}'],
+      ['Davomat', '${analytics.averageAttendance}%'],
+      ['Qarzdorlar', '${analytics.debtorCount}'],
+      ['Qarzdorlik', '${analytics.debt}'],
+      ['Davr boshi', store.selectedRange.start.toIso8601String()],
+      ['Davr oxiri', store.selectedRange.end.toIso8601String()],
+      ['Yaratildi', generated.toIso8601String()],
+    ];
+    String csvCell(String value) => '"${value.replaceAll('"', '""')}"';
+    String htmlCell(String value) => value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    final content = format == 'csv'
+        ? '\uFEFF${[
+            'Ko‘rsatkich,Qiymat',
+            ...rows.map((row) => row.map(csvCell).join(',')),
+            '',
+            'O‘quvchi,Guruh,Davomat,Qarzdorlik',
+            ...members.map((student) => [student.name, student.group, '${student.attendance}%', '${student.debt}'].map(csvCell).join(',')),
+          ].join('\n')}'
+        : '<!doctype html><html><head><meta charset="utf-8">'
+              '<title>${htmlCell(group.name)}</title></head><body>'
+              '<h1>${htmlCell(group.name)}</h1>'
+              '<table border="1" cellspacing="0" cellpadding="6">'
+              '${rows.map((row) => '<tr><th>${htmlCell(row[0])}</th><td>${htmlCell(row[1])}</td></tr>').join()}'
+              '</table><h2>O‘quvchilar</h2>'
+              '<table border="1" cellspacing="0" cellpadding="6">'
+              '<tr><th>O‘quvchi</th><th>Davomat</th><th>Qarzdorlik</th></tr>'
+              '${members.map((student) => '<tr><td>${htmlCell(student.name)}</td><td>${student.attendance}%</td><td>${student.debt}</td></tr>').join()}'
+              '</table></body></html>';
+    final safeName = group.name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    final fileName =
+        'group_${safeName.isEmpty ? 'report' : safeName}_${generated.millisecondsSinceEpoch}.$format';
+    try {
+      final path = await FilePicker.saveFile(
+        dialogTitle: 'Guruh hisobotini saqlash',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: [format],
+        bytes: Uint8List.fromList(utf8.encode(content)),
+      );
+      if (!mounted) return;
+      if (path == null) {
+        _snack(context, 'Hisobot saqlash bekor qilindi');
+      } else {
+        _snack(
+          context,
+          'Hisobot saqlandi: ${path.split(RegExp(r'[/\\]')).last}',
+          bg: widget.colors.success,
+        );
+      }
+    } catch (_) {
+      if (!kIsWeb) {
+        try {
+          final dir = await getApplicationDocumentsDirectory();
+          final file = File('${dir.path}/$fileName');
+          await file.writeAsString(content);
+          if (mounted) {
+            _snack(
+              context,
+              'Hisobot ilova papkasiga saqlandi: $fileName',
+              bg: widget.colors.success,
+            );
+          }
+          return;
+        } catch (_) {
+          // The final message below accurately reports both save attempts.
+        }
+      }
+      if (mounted) _snack(context, 'Hisobotni saqlab bo‘lmadi');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final c = colors;
-    final g = group;
-    final members = AppScope.of(
-      context,
-    ).students.where((s) => s.group == g.name).toList();
+    final c = widget.colors;
+    final g = widget.group;
+    final store = AppScope.of(context);
+    final members = store.students.where((s) => s.group == g.name).toList();
+    final teacherMatches = store.staff
+        .where((member) => member.fullName == g.teacher)
+        .toList(growable: false);
+    final StaffMember? teacher = teacherMatches.isEmpty
+        ? null
+        : teacherMatches.first;
+    final outstanding = members.where((student) => student.debt > 0).length;
+    final range = store.selectedRange;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -11295,12 +14181,142 @@ class GroupDetailScreen extends StatelessWidget {
               color: c.ink,
             ),
           ),
+          actions: [
+            PopupMenuButton<String>(
+              key: const ValueKey('group-report-export'),
+              enabled: !_exporting,
+              tooltip: 'Guruh hisobotini yuklab olish',
+              icon: _exporting
+                  ? SizedBox(
+                      width: 19,
+                      height: 19,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: c.primary,
+                      ),
+                    )
+                  : Icon(Icons.download_rounded, color: c.primary),
+              onSelected: (format) => _exportGroupReport(store, format),
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'csv',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.table_view_outlined),
+                    title: Text('CSV hisobot'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'html',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.language_rounded),
+                    title: Text('HTML hisobot'),
+                  ),
+                ),
+              ],
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'Guruh amallari',
+              icon: Icon(Icons.more_vert_rounded, color: c.ink2),
+              onSelected: (action) {
+                switch (action) {
+                  case 'pin':
+                    store.togglePinnedGroup(g.name);
+                    _snack(
+                      context,
+                      store.pinnedGroups.contains(g.name)
+                          ? 'Guruh tezkor ro‘yxatga qo‘shildi'
+                          : 'Guruh tezkor ro‘yxatdan olindi',
+                    );
+                    break;
+                  case 'copy':
+                    _copySummary(store);
+                    break;
+                  case 'reminder':
+                    _saveDebtReminder(store, outstanding);
+                    break;
+                  case 'note':
+                    _addNote(store);
+                    break;
+                  case 'exam':
+                    _addExam(store);
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'pin',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      store.pinnedGroups.contains(g.name)
+                          ? Icons.star_rounded
+                          : Icons.star_outline_rounded,
+                    ),
+                    title: Text(
+                      store.pinnedGroups.contains(g.name)
+                          ? 'Tezkorlardan olish'
+                          : 'Tezkorlarga qo‘shish',
+                    ),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'copy',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.copy_all_outlined),
+                    title: Text('Xulosani nusxalash'),
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'reminder',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      store.groupDebtReminders.containsKey(g.name)
+                          ? Icons.notifications_active_rounded
+                          : Icons.notifications_none_rounded,
+                    ),
+                    title: Text(
+                      store.groupDebtReminders.containsKey(g.name)
+                          ? 'Eslatma saqlangan'
+                          : 'Qarzdorlarga eslatma',
+                    ),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'note',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.note_add_outlined),
+                    title: Text('Izoh qo‘shish'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'exam',
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.event_available_outlined),
+                    title: Text('Imtihon rejalash'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [c.primary, c.primaryHover],
@@ -11312,64 +14328,739 @@ class GroupDetailScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    g.name,
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          g.name,
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: c.surface,
+                          ),
+                        ),
+                      ),
+                      Pill(
+                        g.status == 'paused' ? 'Pauzada' : 'Faol',
+                        tone: g.status == 'paused'
+                            ? PillTone.warn
+                            : PillTone.success,
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 3),
                   Text(
                     '${g.branch} · ${g.level} · ${g.schedule}',
                     style: TextStyle(
                       fontFamily: SfType.ui,
-                      fontSize: 12,
-                      color: Colors.white70,
+                      fontSize: 11,
+                      color: c.surface.withValues(alpha: .72),
                     ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            _setSec(c, tr(context, 'anom_details')),
-            SfCard(
-              child: Column(
-                children: [
-                  _InfoRow(tr(context, 'group_teacher'), g.teacher),
-                  _InfoRow(tr(context, 'stu_branch'), g.branch),
-                  _InfoRow(tr(context, 'stu_level'), g.level),
-                  _InfoRow(
-                    tr(context, 'group_avg'),
-                    '${g.avgAtt}%',
-                    mono: true,
-                  ),
-                  _InfoRow(
-                    tr(context, 'f_debtor'),
-                    '${g.debtors}',
-                    mono: true,
-                    last: true,
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      _GroupHeroStat(
+                        value: '${members.length}',
+                        label: 'O‘QUVCHI',
+                      ),
+                      const SizedBox(width: 20),
+                      _GroupHeroStat(value: '${g.avgAtt}%', label: 'DAVOMAT'),
+                      const SizedBox(width: 20),
+                      _GroupHeroStat(value: '$outstanding', label: 'QARZDOR'),
+                    ],
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 4),
-            _setSec(c, '${members.length} ${tr(context, 'unit_student')}'),
-            SfCard(
-              child: Column(
-                children: [
-                  for (int i = 0; i < members.length; i++)
-                    _StudentRow(s: members[i], last: i == members.length - 1),
-                ],
-              ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.info_outline_rounded, size: 14, color: c.muted),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Локальный режим: история и аналитика ниже содержат демонстрационные и сохранённые на устройстве данные.',
+                    style: RefType.ui(size: 9.5, color: c.muted),
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pickRange(store),
+                    icon: const Icon(Icons.date_range_rounded, size: 16),
+                    label: Text(
+                      '${range.start.day.toString().padLeft(2, '0')}.${range.start.month.toString().padLeft(2, '0')} — ${range.end.day.toString().padLeft(2, '0')}.${range.end.month.toString().padLeft(2, '0')}',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                PopupMenuButton<int>(
+                  tooltip: 'Tezkor davr',
+                  icon: Icon(Icons.bolt_rounded, color: c.primary),
+                  onSelected: (days) => _setRangePreset(store, days),
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 7, child: Text('Oxirgi 7 kun')),
+                    PopupMenuItem(value: 30, child: Text('Oxirgi 30 kun')),
+                    PopupMenuItem(value: 90, child: Text('Oxirgi 90 kun')),
+                  ],
+                ),
+                IconButton(
+                  tooltip: 'Filtrni tiklash',
+                  onPressed: store.resetReportFilters,
+                  icon: Icon(Icons.restart_alt_rounded, color: c.primary),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            RefSegmentedControl<_GroupDetailTab>(
+              values: _GroupDetailTab.values,
+              selected: _tab,
+              labelOf: (tab) => switch (tab) {
+                _GroupDetailTab.overview => 'Umumiy',
+                _GroupDetailTab.students => 'O‘quvchi',
+                _GroupDetailTab.attendance => 'Davomat',
+                _GroupDetailTab.payments => 'To‘lov',
+                _GroupDetailTab.exams => 'Imtihon',
+                _GroupDetailTab.history => 'Tarix',
+              },
+              onChanged: (tab) => setState(() => _tab = tab),
+            ),
+            const SizedBox(height: 16),
+            switch (_tab) {
+              _GroupDetailTab.overview => _GroupOverview(
+                group: g,
+                teacher: teacher,
+                members: members,
+                outstanding: outstanding,
+                colors: c,
+                range: range,
+                onOpenTab: (tab) => setState(() => _tab = tab),
+              ),
+              _GroupDetailTab.students => _GroupStudents(members: members),
+              _GroupDetailTab.attendance => _GroupAttendance(
+                group: g,
+                members: members,
+                colors: c,
+                range: range,
+              ),
+              _GroupDetailTab.payments => _GroupPayments(
+                members: members,
+                colors: c,
+                range: range,
+              ),
+              _GroupDetailTab.exams => _GroupExams(
+                group: g,
+                colors: c,
+                range: range,
+              ),
+              _GroupDetailTab.history => _GroupHistory(
+                group: g,
+                colors: c,
+                range: range,
+              ),
+            },
           ],
         ),
       ),
     );
   }
 }
+
+class _GroupHeroStat extends StatelessWidget {
+  const _GroupHeroStat({required this.value, required this.label});
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          value,
+          style: RefType.mono(
+            size: 16,
+            weight: FontWeight.w800,
+            color: c.surface,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: RefType.eyebrow(
+            size: 7.5,
+            color: c.surface.withValues(alpha: .68),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GroupOverview extends StatelessWidget {
+  const _GroupOverview({
+    required this.group,
+    required this.teacher,
+    required this.members,
+    required this.outstanding,
+    required this.colors,
+    required this.range,
+    required this.onOpenTab,
+  });
+  final GroupInfo group;
+  final StaffMember? teacher;
+  final List<Student> members;
+  final int outstanding;
+  final SfColors colors;
+  final DateTimeRange range;
+  final ValueChanged<_GroupDetailTab> onOpenTab;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final monthlyPlan = members.length * 600000;
+    final periodPaid = [
+      for (var index = 0; index < members.length; index++)
+        if (members[index].pay == 'paid' &&
+            _groupDateInRange(
+              '${(22 - (index % 12)).toString().padLeft(2, '0')}.07.2026',
+              range,
+            ))
+          members[index],
+    ].length;
+    final received = periodPaid * 600000;
+    final debt = members.fold<num>(0, (total, student) => total + student.debt);
+    final occupancy = group.count == 0
+        ? 0
+        : ((members.length / group.count) * 100).clamp(0, 100).round();
+    final examAverage = (group.avgAtt * .91).round().clamp(0, 100);
+    final reminderAt = AppScope.of(context).groupDebtReminders[group.name];
+    final nextTab = outstanding > 0
+        ? _GroupDetailTab.payments
+        : group.avgAtt < 90
+        ? _GroupDetailTab.attendance
+        : _GroupDetailTab.exams;
+    final nextTitle = outstanding > 0
+        ? '$outstanding ta qarzdor bilan ishlash'
+        : group.avgAtt < 90
+        ? 'Davomat pasayishini tekshirish'
+        : 'Keyingi imtihonni tayyorlash';
+    final nextSubtitle = outstanding > 0
+        ? 'To‘lovlar ro‘yxati va qarzdorlik tafsilotlarini oching'
+        : group.avgAtt < 90
+        ? '${group.avgAtt}% · qatnashmagan o‘quvchilarni ko‘ring'
+        : '${group.level} · baholash rejasini ko‘ring';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _setSec(c, 'GURUH MA’LUMOTLARI'),
+        const SizedBox(height: 6),
+        RefStatusTile(
+          icon: Icons.school_rounded,
+          title: group.teacher,
+          subtitle: teacher == null
+              ? 'O‘qituvchi profili topilmadi'
+              : '${teacher!.subject} · ${teacher!.department}',
+          tone: RefMetricTone.primary,
+          trailing: const Icon(Icons.arrow_forward_rounded),
+          onTap: teacher == null
+              ? null
+              : () => Navigator.of(context).push(
+                  sfPageRoute(StaffDetailScreen(member: teacher!, colors: c)),
+                ),
+        ),
+        const SizedBox(height: 8),
+        _setSec(c, 'CEO ANALITIKA'),
+        const SizedBox(height: 6),
+        RefAdaptiveGrid(
+          minCellWidth: 142,
+          spacing: 8,
+          children: [
+            RefMetricCard(
+              label: 'Guruh daromadi',
+              value: fmtMoneyShort(received),
+              icon: Icons.trending_up_rounded,
+              tone: RefMetricTone.success,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+            RefMetricCard(
+              label: 'Oylik reja',
+              value: fmtMoneyShort(monthlyPlan),
+              icon: Icons.account_balance_wallet_outlined,
+              tone: RefMetricTone.primary,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+            RefMetricCard(
+              label: 'Qarzdorlik',
+              value: fmtMoneyShort(debt),
+              icon: Icons.payments_outlined,
+              tone: RefMetricTone.warning,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+            RefMetricCard(
+              label: 'Davomat',
+              value: '${group.avgAtt}%',
+              icon: Icons.how_to_reg_rounded,
+              tone: RefMetricTone.primary,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+            RefMetricCard(
+              label: 'O‘zlashtirish',
+              value: '$examAverage%',
+              icon: Icons.workspace_premium_outlined,
+              tone: RefMetricTone.accent,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+            RefMetricCard(
+              label: 'To‘ldirilgan',
+              value: '$occupancy%',
+              icon: Icons.groups_2_outlined,
+              tone: RefMetricTone.neutral,
+              compact: true,
+              uppercaseLabel: false,
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _setSec(c, 'KEYINGI TAVSIYA ETILGAN QADAM'),
+        const SizedBox(height: 6),
+        RefStatusTile(
+          icon: outstanding > 0
+              ? Icons.notification_important_outlined
+              : group.avgAtt < 90
+              ? Icons.fact_check_outlined
+              : Icons.event_available_outlined,
+          title: nextTitle,
+          subtitle: nextSubtitle,
+          tone: outstanding > 0 ? RefMetricTone.warning : RefMetricTone.primary,
+          trailing: const Icon(Icons.arrow_forward_rounded),
+          onTap: () => onOpenTab(nextTab),
+        ),
+        if (reminderAt != null) ...[
+          const SizedBox(height: 7),
+          RefStatusTile(
+            icon: Icons.notifications_active_rounded,
+            title: 'Qarzdorlik eslatmasi saqlangan',
+            subtitle:
+                '${reminderAt.day.toString().padLeft(2, '0')}.${reminderAt.month.toString().padLeft(2, '0')}.${reminderAt.year} · lokal kuzatuv vazifasi',
+            tone: RefMetricTone.success,
+            onTap: () => onOpenTab(_GroupDetailTab.payments),
+          ),
+        ],
+        const SizedBox(height: 16),
+        _setSec(c, 'ENG SO‘NGGI HOLAT'),
+        const SizedBox(height: 6),
+        RefStatusTile(
+          icon: Icons.event_available_rounded,
+          title: 'Keyingi imtihon',
+          subtitle: '${group.level} · Yakuniy baholash',
+          tone: RefMetricTone.accent,
+          trailing: const Text('Juma'),
+        ),
+        const SizedBox(height: 7),
+        RefStatusTile(
+          icon: Icons.history_rounded,
+          title: 'Oxirgi yangilanish',
+          subtitle: '${group.schedule} jadvali tasdiqlandi',
+          tone: RefMetricTone.neutral,
+        ),
+      ],
+    );
+  }
+}
+
+class _GroupStudents extends StatelessWidget {
+  const _GroupStudents({required this.members});
+  final List<Student> members;
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return _EmptyState(
+        icon: Icons.groups_outlined,
+        title: 'O‘quvchilar yo‘q',
+        sub: 'Bu guruhga hali o‘quvchi biriktirilmagan.',
+      );
+    }
+    return RefSurfaceCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          for (var index = 0; index < members.length; index++)
+            _StudentRow(s: members[index], last: index == members.length - 1),
+        ],
+      ),
+    );
+  }
+}
+
+class _GroupAttendance extends StatelessWidget {
+  const _GroupAttendance({
+    required this.group,
+    required this.members,
+    required this.colors,
+    required this.range,
+  });
+
+  final GroupInfo group;
+  final List<Student> members;
+  final SfColors colors;
+  final DateTimeRange range;
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return _EmptyState(
+        icon: Icons.fact_check_outlined,
+        title: 'Davomat yozuvlari yo‘q',
+        sub: 'Guruhga o‘quvchilar biriktirilganda tarix shu yerda ko‘rinadi.',
+      );
+    }
+    const allDates = [
+      '22.07.2026',
+      '20.07.2026',
+      '17.07.2026',
+      '15.07.2026',
+      '13.07.2026',
+      '10.07.2026',
+    ];
+    final dates = allDates
+        .where((date) => _groupDateInRange(date, range))
+        .toList(growable: false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RefAdaptiveGrid(
+          minCellWidth: 140,
+          spacing: 8,
+          children: [
+            RefMetricCard(
+              label: 'O‘rtacha',
+              value: '${group.avgAtt}%',
+              icon: Icons.analytics_outlined,
+              tone: RefMetricTone.primary,
+              compact: true,
+            ),
+            RefMetricCard(
+              label: 'Darslar',
+              value: '${dates.length}',
+              icon: Icons.event_available_outlined,
+              tone: RefMetricTone.success,
+              compact: true,
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _setSec(colors, 'DAVOMAT TARIXI'),
+        const SizedBox(height: 6),
+        for (var index = 0; index < dates.length; index++) ...[
+          Builder(
+            builder: (context) {
+              final absent = ((members.length * (100 - group.avgAtt)) / 100)
+                  .round()
+                  .clamp(0, members.length);
+              final adjustedAbsent = (absent + (index.isOdd ? 1 : 0)).clamp(
+                0,
+                members.length,
+              );
+              final present = members.length - adjustedAbsent;
+              return RefStatusTile(
+                icon: adjustedAbsent == 0
+                    ? Icons.task_alt_rounded
+                    : Icons.fact_check_outlined,
+                title: dates[index],
+                subtitle:
+                    '$present qatnashdi · $adjustedAbsent kelmadi · ${group.schedule}',
+                tone: adjustedAbsent <= 1
+                    ? RefMetricTone.success
+                    : RefMetricTone.warning,
+                trailing: Text(
+                  '${((present / members.length) * 100).round()}%',
+                  style: RefType.mono(
+                    size: 10.5,
+                    weight: FontWeight.w800,
+                    color: adjustedAbsent <= 1 ? colors.success : colors.warn,
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 7),
+        ],
+      ],
+    );
+  }
+}
+
+class _GroupPayments extends StatelessWidget {
+  const _GroupPayments({
+    required this.members,
+    required this.colors,
+    required this.range,
+  });
+  final List<Student> members;
+  final SfColors colors;
+  final DateTimeRange range;
+
+  @override
+  Widget build(BuildContext context) {
+    if (members.isEmpty) {
+      return _EmptyState(
+        icon: Icons.payments_outlined,
+        title: 'To‘lov yozuvlari yo‘q',
+        sub: 'O‘quvchi qo‘shilgandan keyin to‘lov holati shu yerda ko‘rinadi.',
+      );
+    }
+    final rows = <({Student student, int index, String date})>[
+      for (var index = 0; index < members.length; index++)
+        (
+          student: members[index],
+          index: index,
+          date: '${(22 - (index % 12)).toString().padLeft(2, '0')}.07.2026',
+        ),
+    ].where((row) => _groupDateInRange(row.date, range)).toList();
+    if (rows.isEmpty) {
+      return _EmptyState(
+        icon: Icons.date_range_outlined,
+        title: 'Bu davrda to‘lov yo‘q',
+        sub: 'Yuqoridagi sana oralig‘ini kengaytirib ko‘ring.',
+      );
+    }
+    return Column(
+      children: [
+        for (final row in rows) ...[
+          Builder(
+            builder: (context) {
+              final student = row.student;
+              final payer = studentProfile(student).fatherName;
+              final method = const ['Payme', 'Click', 'Naqd'][row.index % 3];
+              return RefStatusTile(
+                icon: student.debt > 0
+                    ? Icons.error_outline_rounded
+                    : Icons.check_circle_outline_rounded,
+                title: student.name,
+                subtitle: student.debt > 0
+                    ? '$payer · qoldiq ${fmtMoney(student.debt)}'
+                    : '$payer · ${row.date} · $method · ${fmtMoney(600000)}',
+                tone: student.debt > 0
+                    ? RefMetricTone.warning
+                    : RefMetricTone.success,
+                trailing: Text(
+                  student.debt > 0 ? 'QARZ' : 'TO‘LANDI',
+                  style: RefType.eyebrow(
+                    size: 8,
+                    color: student.debt > 0 ? colors.warn : colors.success,
+                  ),
+                ),
+                onTap: () => Navigator.of(context).push(
+                  sfPageRoute(
+                    StudentDetailScreen(student: student, colors: colors),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 7),
+        ],
+      ],
+    );
+  }
+}
+
+class _GroupExams extends StatelessWidget {
+  const _GroupExams({
+    required this.group,
+    required this.colors,
+    required this.range,
+  });
+  final GroupInfo group;
+  final SfColors colors;
+  final DateTimeRange range;
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = AppScope.of(context).examsForGroup(group.name);
+    final exams =
+        <({String date, String title, String subtitle, String score})>[
+          for (final exam in saved)
+            (
+              date: _groupDateLabel(exam.scheduledAt),
+              title: exam.title,
+              subtitle: '${group.level} · rejalashtirilgan',
+              score: 'REJA',
+            ),
+          (
+            date: '19.07.2026',
+            title: 'Yakuniy imtihon',
+            subtitle: '${group.level} · 15:00 · ${group.count} o‘quvchi',
+            score: '${(group.avgAtt * .91).round()}%',
+          ),
+          (
+            date: '12.07.2026',
+            title: 'Oraliq test',
+            subtitle: '${group.level} · o‘tish ko‘rsatkichi',
+            score: '${(group.avgAtt * .88).round()}%',
+          ),
+        ].where((exam) => _groupDateInRange(exam.date, range)).toList();
+    if (exams.isEmpty) {
+      return _EmptyState(
+        icon: Icons.quiz_outlined,
+        title: 'Bu davrda imtihon yo‘q',
+        sub: 'Boshqa sana oralig‘ini tanlang.',
+      );
+    }
+    return Column(
+      children: [
+        for (final exam in exams) ...[
+          RefStatusTile(
+            icon: Icons.quiz_rounded,
+            title: exam.title,
+            subtitle: '${exam.date} · ${exam.subtitle}',
+            tone: RefMetricTone.primary,
+            trailing: Text(
+              exam.score,
+              style: RefType.mono(
+                size: 10.5,
+                weight: FontWeight.w800,
+                color: colors.success,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _GroupHistory extends StatelessWidget {
+  const _GroupHistory({
+    required this.group,
+    required this.colors,
+    required this.range,
+  });
+  final GroupInfo group;
+  final SfColors colors;
+  final DateTimeRange range;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = AppScope.of(context);
+    final notes = store.notesForGroup(group.name);
+    final reminderAt = store.groupDebtReminders[group.name];
+    final changes =
+        <
+              ({
+                String date,
+                IconData icon,
+                String title,
+                String detail,
+                RefMetricTone tone,
+              })
+            >[
+              for (final note in notes)
+                (
+                  date: _groupDateLabel(note.createdAt),
+                  icon: Icons.sticky_note_2_outlined,
+                  title: 'Izoh qo‘shildi',
+                  detail: note.text,
+                  tone: RefMetricTone.accent,
+                ),
+              if (reminderAt != null)
+                (
+                  date: _groupDateLabel(reminderAt),
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Qarzdorlik eslatmasi saqlandi',
+                  detail:
+                      'Lokal kuzatuv vazifasi · yuborish endpointi kutilmoqda',
+                  tone: RefMetricTone.warning,
+                ),
+              (
+                date: '22.07.2026',
+                icon: Icons.schedule_rounded,
+                title: 'Jadval yangilandi',
+                detail: 'Administrator · ${group.schedule}',
+                tone: RefMetricTone.primary,
+              ),
+              (
+                date: '01.07.2026',
+                icon: Icons.person_add_alt_1_rounded,
+                title: 'O‘quvchi qo‘shildi',
+                detail: 'Qabul bo‘limi · guruh tarkibi yangilandi',
+                tone: RefMetricTone.success,
+              ),
+              (
+                date: '01.06.2026',
+                icon: Icons.groups_rounded,
+                title: 'Guruh shakllantirildi',
+                detail: '${group.branch} · ${group.level}',
+                tone: RefMetricTone.accent,
+              ),
+            ]
+            .where((change) => _groupDateInRange(change.date, range))
+            .toList();
+    if (changes.isEmpty) {
+      return _EmptyState(
+        icon: Icons.history_toggle_off_outlined,
+        title: 'Bu davrda o‘zgarish yo‘q',
+        sub: 'Boshqa sana oralig‘ini tanlang.',
+      );
+    }
+    return Column(
+      children: [
+        for (final change in changes) ...[
+          RefStatusTile(
+            icon: change.icon,
+            title: change.title,
+            subtitle: change.detail,
+            tone: change.tone,
+            trailing: Text(
+              change.date,
+              style: RefType.mono(size: 9, color: colors.muted),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+bool _groupDateInRange(String value, DateTimeRange range) {
+  final parts = value.split('.');
+  if (parts.length != 3) return true;
+  final date = DateTime(
+    int.tryParse(parts[2]) ?? 0,
+    int.tryParse(parts[1]) ?? 1,
+    int.tryParse(parts[0]) ?? 1,
+  );
+  final start = DateTime(range.start.year, range.start.month, range.start.day);
+  final end = DateTime(
+    range.end.year,
+    range.end.month,
+    range.end.day,
+    23,
+    59,
+    59,
+  );
+  return !date.isBefore(start) && !date.isAfter(end);
+}
+
+String _groupDateLabel(DateTime value) =>
+    '${value.day.toString().padLeft(2, '0')}.'
+    '${value.month.toString().padLeft(2, '0')}.${value.year}';
 
 /// Compact circular action used in list toolbars.
 class _RoundAction extends StatelessWidget {
@@ -11395,7 +15086,7 @@ class _RoundAction extends StatelessWidget {
           child: SizedBox(
             width: 44,
             height: 44,
-            child: Icon(icon, color: Colors.white, size: 20),
+            child: Icon(icon, color: c.surface, size: 20),
           ),
         ),
       ),
@@ -11407,8 +15098,13 @@ class _RoundAction extends StatelessWidget {
 /// in the group list, so the summary is useful rather than decorative.
 class _GroupStatusSummary extends StatelessWidget {
   final List<GroupInfo> groups;
+  final int selected;
   final ValueChanged<int> onSelect;
-  const _GroupStatusSummary({required this.groups, required this.onSelect});
+  const _GroupStatusSummary({
+    required this.groups,
+    required this.selected,
+    required this.onSelect,
+  });
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
@@ -11416,6 +15112,7 @@ class _GroupStatusSummary extends StatelessWidget {
     final paused = groups.where((g) => g.status == 'paused').length;
     final closed = groups.where((g) => g.status == 'closed').length;
     final entries = [
+      ('Jami', groups.length, c.primary, 0),
       ('Faol', active, c.success, 1),
       ('Pauzada', paused, c.warn, 2),
       ('Yopilgan', closed, c.danger, 3),
@@ -11424,37 +15121,48 @@ class _GroupStatusSummary extends StatelessWidget {
       children: [
         for (int i = 0; i < entries.length; i++) ...[
           Expanded(
-            child: InkWell(
-              onTap: () => onSelect(entries[i].$4),
-              borderRadius: BorderRadius.circular(11),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                decoration: BoxDecoration(
-                  color: c.surface,
-                  border: Border.all(color: c.border),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      '${entries[i].$2}',
-                      style: TextStyle(
-                        fontFamily: SfType.mono,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: entries[i].$3,
-                      ),
+            child: Semantics(
+              button: true,
+              selected: selected == entries[i].$4,
+              label: '${entries[i].$1}: ${entries[i].$2}',
+              child: InkWell(
+                onTap: () => onSelect(entries[i].$4),
+                borderRadius: BorderRadius.circular(11),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(
+                    color: selected == entries[i].$4
+                        ? entries[i].$3.withValues(alpha: .08)
+                        : c.surface,
+                    border: Border.all(
+                      color: selected == entries[i].$4
+                          ? entries[i].$3.withValues(alpha: .55)
+                          : c.border,
                     ),
-                    Text(
-                      entries[i].$1,
-                      style: TextStyle(
-                        fontFamily: SfType.ui,
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w600,
-                        color: c.muted,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '${entries[i].$2}',
+                        style: TextStyle(
+                          fontFamily: SfType.mono,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: entries[i].$3,
+                        ),
                       ),
-                    ),
-                  ],
+                      Text(
+                        entries[i].$1,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w600,
+                          color: c.muted,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -11777,7 +15485,7 @@ class _GroupCreateScreenState extends State<GroupCreateScreen> {
   final _name = TextEditingController();
   final _schedule = TextEditingController(text: 'Du · Cho · Ju · 16:00');
   String _branch = 'Yunusobod';
-  String _teacher = _kTeachers.first;
+  String _teacher = 'Nigora Karimova';
   String _level = 'Intermediate';
   String _status = 'active';
 
@@ -11808,6 +15516,13 @@ class _GroupCreateScreenState extends State<GroupCreateScreen> {
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
+    final teachers = store.staff
+        .where((member) => member.subject.toLowerCase() != 'operations')
+        .map((member) => member.fullName)
+        .toList(growable: false);
+    if (teachers.isNotEmpty && !teachers.contains(_teacher)) {
+      _teacher = teachers.first;
+    }
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -11845,7 +15560,7 @@ class _GroupCreateScreenState extends State<GroupCreateScreen> {
               _ManagedSelect(
                 label: 'O‘qituvchi',
                 value: _teacher,
-                items: _kTeachers,
+                items: teachers,
                 onChanged: (v) => setState(() => _teacher = v),
               ),
               const SizedBox(height: 11),
@@ -12537,9 +16252,10 @@ class _DateInput extends StatelessWidget {
                     ? 'Majburiy maydon'
                     : null
               : null,
-          decoration: _managedInputDecoration(c, label).copyWith(
-            suffixIcon: Icon(icon, color: c.primary),
-          ),
+          decoration: _managedInputDecoration(
+            c,
+            label,
+          ).copyWith(suffixIcon: Icon(icon, color: c.primary)),
         ),
       ),
     );
@@ -12557,6 +16273,16 @@ class StaffDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = colors;
+    final groups = teacherGroupsFor(AppScope.of(context), member);
+    final groupStudents = groups.fold<int>(
+      0,
+      (sum, group) => sum + group.count,
+    );
+    final attendance = groups.isEmpty
+        ? 0
+        : (groups.fold<int>(0, (sum, group) => sum + group.avgAtt) /
+                  groups.length)
+              .round();
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -12577,26 +16303,33 @@ class StaffDetailScreen extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            Center(
-              child: SfAvatar(
-                name: member.fullName,
-                size: 78,
-                color: c.primary,
-              ),
-            ),
-            const SizedBox(height: 9),
-            Center(
-              child: Text(
-                member.fullName,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w800,
-                  color: c.ink,
+            Row(
+              children: [
+                SfAvatar(name: member.fullName, size: 58, color: c.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        member.fullName,
+                        style: RefType.ui(
+                          size: 18,
+                          weight: FontWeight.w800,
+                          color: c.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${member.subject} · ${member.branch}',
+                        style: RefType.ui(size: 11.5, color: c.muted),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
             SfCard(
               child: Column(
                 children: [
@@ -12608,6 +16341,7 @@ class StaffDetailScreen extends StatelessWidget {
                   _InfoRow('Department', member.department),
                   _InfoRow('Subject', member.subject),
                   _InfoRow('Qualifications', member.qualification),
+                  _InfoRow('Hire date', member.hireDate),
                   _InfoRow(
                     'Salary',
                     '${member.salaryType} · ${member.rate}',
@@ -12616,43 +16350,62 @@ class StaffDetailScreen extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
-                Expanded(child: SfStatTile('Guruhlar', '2', c.primary)),
+                Expanded(
+                  child: SfStatTile('Guruhlar', '${groups.length}', c.primary),
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: SfStatTile('O‘quvchilar', '34', c.success)),
+                Expanded(
+                  child: SfStatTile('O‘quvchilar', '$groupStudents', c.success),
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: SfStatTile('Davomat', '93%', c.warn)),
+                Expanded(
+                  child: SfStatTile(
+                    'Davomat',
+                    attendance == 0 ? '—' : '$attendance%',
+                    c.warn,
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
-            SfCard(
-              child: Column(
-                children: [
-                  const SfCardHeader('Guruhlar va ko‘rsatkichlar'),
-                  _InfoRow(
-                    '1-guruh',
-                    '${member.subject} · Dushanba / Chorshanba',
+            const SizedBox(height: 18),
+            _setSec(c, 'GURUHLARI · ${groups.length}'),
+            const SizedBox(height: 6),
+            if (groups.isEmpty)
+              _EmptyState(
+                icon: Icons.workspaces_outlined,
+                title: 'Biriktirilgan guruh yo‘q',
+                sub: 'Guruh biriktirilganda u shu yerda ko‘rinadi.',
+              )
+            else
+              for (final group in groups) ...[
+                RefStatusTile(
+                  icon: Icons.workspaces_rounded,
+                  title: group.name,
+                  subtitle: '${group.count} o‘quvchi · ${group.schedule}',
+                  tone: RefMetricTone.primary,
+                  trailing: Text(
+                    '${group.avgAtt}%',
+                    style: RefType.mono(
+                      size: 11.5,
+                      weight: FontWeight.w800,
+                      color: c.success,
+                    ),
                   ),
-                  _InfoRow(
-                    '2-guruh',
-                    '${member.subject} · Seshanba / Payshanba',
+                  onTap: () => Navigator.of(context).push(
+                    sfPageRoute(
+                      GroupDetailScreen(
+                        group: group,
+                        colors: c,
+                        showStudentsInitially: true,
+                      ),
+                    ),
                   ),
-                  _InfoRow('Reyting', '★ 4.9 · yuqori natija', last: true),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            SfButton(
-              icon: Icons.password_rounded,
-              label: 'Parolni o‘zgartirish',
-              primary: false,
-              onTap: () => _snack(
-                context,
-                'Parolni o‘zgartirish sahifasi API bilan faollashadi',
-              ),
-            ),
+                ),
+                const SizedBox(height: 7),
+              ],
           ],
         ),
       ),
@@ -12671,6 +16424,8 @@ class TeachersWorkspaceScreen extends StatefulWidget {
 class _TeachersWorkspaceScreenState extends State<TeachersWorkspaceScreen> {
   String query = '';
   int filter = 0;
+  int page = 1;
+  int pageSize = 5;
   final TextEditingController _referenceSearch = TextEditingController();
 
   void _update(VoidCallback change) => setState(change);
@@ -12787,6 +16542,14 @@ class _ReferenceTeachersPage extends StatelessWidget {
     final teachingCount = AppScope.of(context).staff
         .where((member) => member.subject.toLowerCase() != 'operations')
         .length;
+    final pageCount = teachers.isEmpty
+        ? 1
+        : ((teachers.length + state.pageSize - 1) ~/ state.pageSize);
+    final currentPage = state.page.clamp(1, pageCount).toInt();
+    final pageTeachers = teachers
+        .skip((currentPage - 1) * state.pageSize)
+        .take(state.pageSize)
+        .toList(growable: false);
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -12816,8 +16579,10 @@ class _ReferenceTeachersPage extends StatelessWidget {
                   RefSearchField(
                     controller: state._referenceSearch,
                     hint: 'O‘qituvchi qidirish',
-                    onChanged: (value) =>
-                        state._update(() => state.query = value),
+                    onChanged: (value) => state._update(() {
+                      state.query = value;
+                      state.page = 1;
+                    }),
                     suffix: state.query.isEmpty
                         ? null
                         : IconButton(
@@ -12825,6 +16590,7 @@ class _ReferenceTeachersPage extends StatelessWidget {
                             onPressed: () => state._update(() {
                               state._referenceSearch.clear();
                               state.query = '';
+                              state.page = 1;
                             }),
                             icon: Icon(Icons.close_rounded, color: c.muted),
                           ),
@@ -12835,32 +16601,30 @@ class _ReferenceTeachersPage extends StatelessWidget {
                     selected: state.filter,
                     labelOf: (value) =>
                         const ['Hammasi', 'O‘qituvchi', 'Oylik'][value],
-                    onChanged: (value) =>
-                        state._update(() => state.filter = value),
+                    onChanged: (value) => state._update(() {
+                      state.filter = value;
+                      state.page = 1;
+                    }),
                   ),
                   const SizedBox(height: 16),
                   RefAdaptiveGrid(
-                    minCellWidth: 152,
+                    minCellWidth: 170,
                     children: [
                       RefMetricCard(
                         label: 'Jami',
                         value: '${teachers.length}',
                         icon: Icons.groups_rounded,
                         tone: RefMetricTone.primary,
+                        compact: true,
                       ),
                       RefMetricCard(
-                        label: 'Reyting',
-                        value: '4.8',
-                        icon: Icons.star_rounded,
-                        tone: RefMetricTone.accent,
-                        detail: 'Jamoa o‘rtachasi',
-                      ),
-                      RefMetricCard(
-                        label: 'Oylik',
+                        label: 'Faol guruhlar',
                         value:
-                            '${teachers.where((member) => member.salaryType == 'Monthly').length}',
-                        icon: Icons.payments_outlined,
+                            '${teachers.fold<int>(0, (sum, member) => sum + teacherGroupsFor(AppScope.of(context), member).length)}',
+                        icon: Icons.workspaces_rounded,
                         tone: RefMetricTone.success,
+                        compact: true,
+                        uppercaseLabel: false,
                       ),
                     ],
                   ),
@@ -12873,41 +16637,39 @@ class _ReferenceTeachersPage extends StatelessWidget {
                   if (teachers.isEmpty)
                     _ReferenceStudentEmpty(hasQuery: state.query.isNotEmpty)
                   else
-                    for (var index = 0; index < teachers.length; index++) ...[
+                    for (
+                      var index = 0;
+                      index < pageTeachers.length;
+                      index++
+                    ) ...[
                       RefStaggeredReveal(
                         order: index,
                         child: _ReferenceTeacherCard(
-                          member: teachers[index],
+                          member: pageTeachers[index],
                           colors: c,
-                          rank: index + 1,
                         ),
                       ),
                       const SizedBox(height: 9),
                     ],
+                  if (teachers.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    RefPaginationBar(
+                      page: currentPage,
+                      pages: pageCount,
+                      total: teachers.length,
+                      pageSize: state.pageSize,
+                      onPageChanged: (value) =>
+                          state._update(() => state.page = value),
+                      onPageSizeChanged: (value) => state._update(() {
+                        state.pageSize = value;
+                        state.page = 1;
+                      }),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
-        ),
-        bottomNavigationBar: DecoratedBox(
-          decoration: BoxDecoration(
-            color: c.surface,
-            border: Border(top: BorderSide(color: c.border)),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
-              child: RefButton(
-                label: 'O‘qituvchi qo‘shish',
-                block: true,
-                leading: Icons.person_add_alt_1_rounded,
-                onPressed: () => Navigator.of(
-                  context,
-                ).push(sfPageRoute(StaffCreateScreen(colors: c))),
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -12915,19 +16677,20 @@ class _ReferenceTeachersPage extends StatelessWidget {
 }
 
 class _ReferenceTeacherCard extends StatelessWidget {
-  const _ReferenceTeacherCard({
-    required this.member,
-    required this.colors,
-    required this.rank,
-  });
+  const _ReferenceTeacherCard({required this.member, required this.colors});
 
   final StaffMember member;
   final SfColors colors;
-  final int rank;
 
   @override
   Widget build(BuildContext context) {
-    final rating = (4.9 - (rank - 1) * .12).clamp(4.2, 4.9);
+    final groups = teacherGroupsFor(AppScope.of(context), member);
+    final groupNames = groups.isEmpty
+        ? 'Guruh biriktirilmagan'
+        : [
+            ...groups.take(2).map((group) => group.name),
+            if (groups.length > 2) '+${groups.length - 2}',
+          ].join(' · ');
     return RefPressable(
       onPressed: () => Navigator.of(
         context,
@@ -12935,116 +16698,43 @@ class _ReferenceTeacherCard extends StatelessWidget {
       borderRadius: RefRadius.lg,
       semanticLabel: 'O‘qituvchi ${member.fullName}',
       child: RefSurfaceCard(
-        padding: const EdgeInsets.all(14),
-        elevated: true,
-        child: Column(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+        child: Row(
           children: [
-            Row(
-              children: [
-                SfAvatar(name: member.fullName, size: 48),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        member.fullName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: RefType.ui(
-                          size: 15,
-                          weight: FontWeight.w800,
-                          color: colors.ink,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${member.subject} · ${member.branch}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: RefType.ui(size: 11, color: colors.muted),
-                      ),
-                    ],
+            SfAvatar(name: member.fullName, size: 44),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    member.fullName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.ui(
+                      size: 14,
+                      weight: FontWeight.w800,
+                      color: colors.ink,
+                    ),
                   ),
-                ),
-                RefPill(
-                  label: '#$rank',
-                  tone: rank == 1 ? RefPillTone.accent : RefPillTone.neutral,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            RefAdaptiveGrid(
-              minCellWidth: 94,
-              spacing: 7,
-              children: [
-                _ReferenceTeacherMetric(
-                  label: 'REYTING',
-                  value: rating.toStringAsFixed(1),
-                  color: colors.accentInk,
-                  icon: Icons.star_rounded,
-                ),
-                _ReferenceTeacherMetric(
-                  label: 'DAVOMAT',
-                  value: '${99 - rank}%',
-                  color: colors.success,
-                  icon: Icons.how_to_reg_rounded,
-                ),
-                _ReferenceTeacherMetric(
-                  label: 'STATUS',
-                  value: member.salaryType,
-                  color: colors.primary,
-                  icon: Icons.verified_user_outlined,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReferenceTeacherMetric extends StatelessWidget {
-  const _ReferenceTeacherMetric({
-    required this.label,
-    required this.value,
-    required this.color,
-    required this.icon,
-  });
-
-  final String label;
-  final String value;
-  final Color color;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .09),
-        borderRadius: RefRadius.md,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 15, color: color),
-            const SizedBox(height: 7),
-            Text(
-              value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: RefType.mono(
-                size: 12.5,
-                weight: FontWeight.w800,
-                color: color,
+                  const SizedBox(height: 2),
+                  Text(
+                    '${member.subject} · ${member.branch}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.ui(size: 10.5, color: colors.muted),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    groupNames,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.eyebrow(size: 8.5, color: colors.primary),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 3),
-            Text(label, style: RefType.eyebrow(size: 7.5, color: c.muted)),
+            Icon(Icons.chevron_right_rounded, color: colors.muted),
           ],
         ),
       ),
@@ -13097,12 +16787,6 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
         '${(first.students / 31).round()}',
         '${(second.students / 31).round()}',
         Icons.badge_rounded,
-      ),
-      (
-        'Teacher rating',
-        first.attendance >= 92 ? '4.9' : '4.6',
-        second.attendance >= 92 ? '4.9' : '4.5',
-        Icons.star_rounded,
       ),
     ];
     return SfTheme(
@@ -13519,6 +17203,16 @@ class ParentsWorkspaceScreen extends StatefulWidget {
 
 class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
   String query = '';
+  int page = 1;
+  int pageSize = 5;
+  final TextEditingController _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
@@ -13535,43 +17229,124 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
           entry.key.toLowerCase().contains(q) ||
           entry.value.any((s) => s.name.toLowerCase().contains(q));
     }).toList();
+    final allChildren = entries.expand((entry) => entry.value).toList();
+    final attentionCount = entries.where((entry) {
+      final lastCall = entry.value
+          .map(studentCallDays)
+          .reduce((a, b) => a < b ? a : b);
+      return lastCall > 7;
+    }).length;
+    final debtCount = allChildren.where((child) => child.debt > 0).length;
+    final pageCount = entries.isEmpty
+        ? 1
+        : ((entries.length + pageSize - 1) ~/ pageSize);
+    final currentPage = page.clamp(1, pageCount).toInt();
+    final pageEntries = entries
+        .skip((currentPage - 1) * pageSize)
+        .take(pageSize)
+        .toList(growable: false);
     return SfTheme(
       colors: c,
       child: Scaffold(
         backgroundColor: c.bg,
-        appBar: AppBar(
-          backgroundColor: c.surface,
-          surfaceTintColor: Colors.transparent,
-          iconTheme: IconThemeData(color: c.ink),
-          title: Text(
-            'Ota-onalar',
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontWeight: FontWeight.w800,
-              color: c.ink,
-            ),
-          ),
-        ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        body: Column(
           children: [
-            _CeoContextFilter(showBranches: false),
-            const SizedBox(height: 12),
-            _SearchField(
-              hint: 'Ota-ona yoki farzand qidirish',
-              onChanged: (v) => setState(() => query = v),
+            RefLargeHeader(
+              eyebrow: '${entries.length} OILA',
+              title: 'Ota-onalar',
+              subtitle: 'Aloqa, farzandlar va ta’lim holati',
             ),
-            const SizedBox(height: 12),
-            SfCard(
-              child: Column(
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
                 children: [
-                  for (int i = 0; i < entries.length; i++)
-                    _ParentRow(
-                      name: entries[i].key,
-                      children: entries[i].value,
-                      last: i == entries.length - 1,
-                      colors: c,
+                  _ReferenceDashboardContext(showBranches: false),
+                  const SizedBox(height: 12),
+                  RefSearchField(
+                    controller: _search,
+                    hint: 'Ota-ona yoki farzand qidirish',
+                    onChanged: (value) => setState(() {
+                      query = value;
+                      page = 1;
+                    }),
+                    suffix: query.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Tozalash',
+                            onPressed: () => setState(() {
+                              _search.clear();
+                              query = '';
+                              page = 1;
+                            }),
+                            icon: Icon(Icons.close_rounded, color: c.muted),
+                          ),
+                  ),
+                  const SizedBox(height: 12),
+                  RefAdaptiveGrid(
+                    minCellWidth: 145,
+                    spacing: 8,
+                    children: [
+                      RefMetricCard(
+                        label: 'Ota-onalar',
+                        value: '${entries.length}',
+                        icon: Icons.family_restroom_rounded,
+                        tone: RefMetricTone.primary,
+                        compact: true,
+                      ),
+                      RefMetricCard(
+                        label: 'Aloqa kerak',
+                        value: '$attentionCount',
+                        icon: Icons.phone_callback_outlined,
+                        tone: RefMetricTone.warning,
+                        compact: true,
+                      ),
+                      RefMetricCard(
+                        label: 'Qarzdor farzand',
+                        value: '$debtCount',
+                        icon: Icons.account_balance_wallet_outlined,
+                        tone: RefMetricTone.danger,
+                        compact: true,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  RefSectionHeader(
+                    title: 'Oilalar',
+                    subtitle: '${entries.length} ta mos natija',
+                  ),
+                  const SizedBox(height: 8),
+                  if (entries.isEmpty)
+                    const _EmptyState(
+                      icon: Icons.family_restroom_outlined,
+                      title: 'Ota-ona topilmadi',
+                      sub: 'Qidiruv so‘rovini o‘zgartirib ko‘ring.',
+                    )
+                  else
+                    for (int i = 0; i < pageEntries.length; i++) ...[
+                      RefStaggeredReveal(
+                        order: i,
+                        child: _ParentRow(
+                          name: pageEntries[i].key,
+                          children: pageEntries[i].value,
+                          colors: c,
+                        ),
+                      ),
+                      if (i < pageEntries.length - 1) const SizedBox(height: 8),
+                    ],
+                  if (entries.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    RefPaginationBar(
+                      page: currentPage,
+                      pages: pageCount,
+                      total: entries.length,
+                      pageSize: pageSize,
+                      onPageChanged: (value) => setState(() => page = value),
+                      onPageSizeChanged: (value) => setState(() {
+                        pageSize = value;
+                        page = 1;
+                      }),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -13585,59 +17360,96 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
 class _ParentRow extends StatelessWidget {
   final String name;
   final List<Student> children;
-  final bool last;
   final SfColors colors;
   const _ParentRow({
     required this.name,
     required this.children,
-    required this.last,
     required this.colors,
   });
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    return InkWell(
-      onTap: () => Navigator.of(context).push(
+    final child = children.first;
+    final profile = studentProfile(child);
+    final lastCall = children
+        .map(studentCallDays)
+        .reduce((a, b) => a < b ? a : b);
+    return RefPressable(
+      onPressed: () => Navigator.of(context).push(
         sfPageRoute(
           ParentDetailScreen(name: name, children: children, colors: c),
         ),
       ),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(13, 12, 13, 12),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: last ? BorderSide.none : BorderSide(color: c.border),
-          ),
-        ),
-        child: Row(
+      borderRadius: RefRadius.lg,
+      semanticLabel: '$name ota-ona profili',
+      child: RefSurfaceCard(
+        padding: const EdgeInsets.fromLTRB(12, 10, 10, 8),
+        child: Column(
           children: [
-            SfAvatar(name: name, size: 34, color: c.accent),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: c.ink,
-                    ),
+            Row(
+              children: [
+                SfAvatar(name: name, size: 38, color: c.accent),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RefType.ui(
+                          size: 13.5,
+                          weight: FontWeight.w800,
+                          color: c.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${children.length} farzand · ${profile.fatherPhone}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RefType.ui(size: 10.5, color: c.muted),
+                      ),
+                    ],
                   ),
-                  Text(
-                    '${children.length} farzand · ${studentProfile(children.first).phone}',
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 10.5,
-                      color: c.muted,
-                    ),
+                ),
+                RefPill(
+                  label: _callAgo(context, lastCall),
+                  tone: lastCall <= 3
+                      ? RefPillTone.success
+                      : RefPillTone.warning,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 5,
+              children: [
+                _ParentChildFact(
+                  icon: Icons.person_outline_rounded,
+                  label: studentTeacher(child),
+                ),
+                _ParentChildFact(
+                  icon: Icons.school_outlined,
+                  label: 'Boshlagan: ${profile.enrolled}',
+                ),
+              ],
+            ),
+            const SizedBox(height: 3),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  sfPageRoute(
+                    StudentDetailScreen(student: child, colors: colors),
                   ),
-                ],
+                ),
+                icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                label: const Text('Подробнее'),
               ),
             ),
-            Icon(Icons.chevron_right_rounded, color: c.muted),
           ],
         ),
       ),
@@ -13679,28 +17491,153 @@ class ParentDetailScreen extends StatelessWidget {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            SfCard(
-              child: Column(
+            RefSurfaceCard(
+              padding: const EdgeInsets.all(14),
+              child: Row(
                 children: [
-                  _InfoRow('Full name', name),
-                  _InfoRow('Phone', profile.fatherPhone),
-                  _InfoRow('Branch', profile.branch, last: true),
+                  SfAvatar(name: name, size: 52, color: c.accent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: RefType.ui(
+                            size: 16,
+                            weight: FontWeight.w800,
+                            color: c.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          profile.fatherPhone,
+                          style: RefType.ui(size: 11.5, color: c.muted),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${children.length} farzand · ${profile.branch}',
+                          style: RefType.eyebrow(size: 9, color: c.primary),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 14),
             _setSec(c, 'FARZANDLARI · ${children.length}'),
-            SfCard(
-              child: Column(
-                children: [
-                  for (int i = 0; i < children.length; i++)
-                    _StudentRow(s: children[i], last: i == children.length - 1),
-                ],
-              ),
-            ),
+            const SizedBox(height: 6),
+            for (final child in children) ...[
+              _ParentChildCard(student: child, colors: c),
+              const SizedBox(height: 8),
+            ],
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ParentChildCard extends StatelessWidget {
+  const _ParentChildCard({required this.student, required this.colors});
+  final Student student;
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final profile = studentProfile(student);
+    final lastCall = studentCallDays(student);
+    return RefSurfaceCard(
+      padding: const EdgeInsets.all(13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              SfAvatar(name: student.name, size: 40),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      student.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: RefType.ui(
+                        size: 13.5,
+                        weight: FontWeight.w800,
+                        color: c.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${student.group} · ${studentTeacher(student)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: RefType.ui(size: 10, color: c.muted),
+                    ),
+                  ],
+                ),
+              ),
+              Pill(
+                student.pay == 'paid'
+                    ? 'To‘langan'
+                    : student.pay == 'partial'
+                    ? 'Qisman'
+                    : 'Qarz',
+                tone: student.debt > 0 ? PillTone.danger : PillTone.success,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 12,
+            runSpacing: 5,
+            children: [
+              _ParentChildFact(
+                icon: Icons.school_outlined,
+                label: 'Boshlagan: ${profile.enrolled}',
+              ),
+              _ParentChildFact(
+                icon: Icons.call_outlined,
+                label: 'Aloqa: ${_callAgo(context, lastCall)}',
+              ),
+            ],
+          ),
+          const SizedBox(height: 11),
+          RefButton(
+            label: 'Bola haqida to‘liq ma’lumot',
+            leading: Icons.arrow_forward_rounded,
+            kind: RefButtonKind.soft,
+            block: true,
+            onPressed: () => Navigator.of(context).push(
+              sfPageRoute(StudentDetailScreen(student: student, colors: c)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ParentChildFact extends StatelessWidget {
+  const _ParentChildFact({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: c.primary),
+        const SizedBox(width: 4),
+        Text(label, style: RefType.ui(size: 9.5, color: c.muted)),
+      ],
     );
   }
 }
@@ -13774,62 +17711,93 @@ class _DepartmentsWorkspaceScreenState
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
-    final list = store.departments
+    final ranked = store.departmentRanking;
+    final list = ranked
         .where(
           (d) =>
               d.name.toLowerCase().contains(query.toLowerCase()) ||
               d.manager.toLowerCase().contains(query.toLowerCase()),
         )
         .toList();
+    final averageRating = ranked.isEmpty
+        ? 0.0
+        : ranked.fold<double>(
+                0,
+                (total, department) => total + department.rating,
+              ) /
+              ranked.length;
     return SfTheme(
       colors: c,
       child: Scaffold(
         backgroundColor: c.bg,
-        appBar: AppBar(
-          backgroundColor: c.surface,
-          surfaceTintColor: Colors.transparent,
-          iconTheme: IconThemeData(color: c.ink),
-          title: Text(
-            'Departments',
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontWeight: FontWeight.w800,
-              color: c.ink,
-            ),
-          ),
-          actions: [
-            IconButton(
-              icon: Icon(Icons.add_rounded, color: c.primary),
-              onPressed: _create,
-            ),
-          ],
-        ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        body: Column(
           children: [
-            _SearchField(
-              hint: 'Department yoki manager qidirish',
-              onChanged: (v) => setState(() => query = v),
+            RefLargeHeader(
+              eyebrow: '${ranked.length} DEPARTAMENT',
+              title: 'Departamentlar',
+              subtitle: 'Jamoa, rahbarlar va natijalar reytingi',
+              actions: [
+                RefIconAction(
+                  icon: Icons.add_rounded,
+                  tooltip: 'Departament qo‘shish',
+                  onPressed: _create,
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            for (final department in list)
-              _DepartmentCard(
-                department: department,
-                staffCount: store.staffForDepartment(department).length,
-                onDelete: () => _delete(department),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+                children: [
+                  RefAdaptiveGrid(
+                    minCellWidth: 145,
+                    spacing: 8,
+                    children: [
+                      RefMetricCard(
+                        label: 'Faol bo‘limlar',
+                        value:
+                            '${ranked.where((item) => item.status == 'active').length}',
+                        icon: Icons.domain_verification_outlined,
+                        tone: RefMetricTone.success,
+                        compact: true,
+                      ),
+                      RefMetricCard(
+                        label: 'O‘rtacha reyting',
+                        value: averageRating.toStringAsFixed(1),
+                        icon: Icons.star_rounded,
+                        tone: RefMetricTone.accent,
+                        compact: true,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _SearchField(
+                    hint: 'Departament yoki rahbar qidirish',
+                    onChanged: (value) => setState(() => query = value),
+                  ),
+                  const SizedBox(height: 14),
+                  RefSectionHeader(
+                    title: 'Departamentlar reytingi',
+                    subtitle: '${list.length} ta mos natija',
+                  ),
+                  const SizedBox(height: 8),
+                  if (list.isEmpty)
+                    const _EmptyState(
+                      icon: Icons.domain_outlined,
+                      title: 'Departament topilmadi',
+                      sub: 'Qidiruv so‘rovini o‘zgartirib ko‘ring.',
+                    )
+                  else
+                    for (final department in list)
+                      _DepartmentCard(
+                        department: department,
+                        rank: ranked.indexOf(department) + 1,
+                        staffCount: store.staffForDepartment(department).length,
+                        onDelete: () => _delete(department),
+                      ),
+                ],
               ),
-          ],
-        ),
-        bottomNavigationBar: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: SfButton(
-              icon: Icons.add_rounded,
-              label: 'New department',
-              primary: true,
-              onTap: _create,
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -13838,10 +17806,12 @@ class _DepartmentsWorkspaceScreenState
 
 class _DepartmentCard extends StatelessWidget {
   final DepartmentRecord department;
+  final int rank;
   final int staffCount;
   final VoidCallback onDelete;
   const _DepartmentCard({
     required this.department,
+    required this.rank,
     required this.staffCount,
     required this.onDelete,
   });
@@ -13863,7 +17833,7 @@ class _DepartmentCard extends StatelessWidget {
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
           child: Row(
             children: [
               Container(
@@ -13873,7 +17843,15 @@ class _DepartmentCard extends StatelessWidget {
                   color: c.primarySoft,
                   borderRadius: BorderRadius.circular(11),
                 ),
-                child: Icon(Icons.folder_rounded, color: c.primary),
+                alignment: Alignment.center,
+                child: Text(
+                  '#$rank',
+                  style: RefType.mono(
+                    size: 12,
+                    weight: FontWeight.w800,
+                    color: c.primary,
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -13890,23 +17868,61 @@ class _DepartmentCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '${department.manager} · $staffCount xodim',
+                      '${department.manager} · $staffCount xodim · ${department.branch}',
                       style: TextStyle(
                         fontFamily: SfType.ui,
                         fontSize: 10.5,
                         color: c.muted,
                       ),
                     ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(Icons.star_rounded, size: 13, color: c.accent),
+                        const SizedBox(width: 3),
+                        Text(
+                          department.rating == 0
+                              ? 'Yangi'
+                              : department.rating.toStringAsFixed(1),
+                          style: RefType.mono(
+                            size: 9.5,
+                            weight: FontWeight.w800,
+                            color: c.ink,
+                          ),
+                        ),
+                        const SizedBox(width: 7),
+                        Text(
+                          department.status == 'active' ? 'Faol' : 'Nofaol',
+                          style: RefType.eyebrow(
+                            size: 8,
+                            color: department.status == 'active'
+                                ? c.success
+                                : c.muted,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              IconButton(
-                icon: Icon(
-                  Icons.delete_outline_rounded,
-                  size: 19,
-                  color: c.danger,
-                ),
-                onPressed: onDelete,
+              PopupMenuButton<String>(
+                tooltip: 'Amallar',
+                icon: Icon(Icons.more_vert_rounded, color: c.muted),
+                onSelected: (value) {
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline_rounded),
+                        SizedBox(width: 8),
+                        Text('O‘chirish'),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -13926,19 +17942,60 @@ class DepartmentCreateScreen extends StatefulWidget {
 class _DepartmentCreateScreenState extends State<DepartmentCreateScreen> {
   final form = GlobalKey<FormState>();
   final name = TextEditingController();
-  final manager = TextEditingController();
   final description = TextEditingController();
+  late final TextEditingController createdAt;
+  String _branch = '';
+  String _status = 'active';
+  String _manager = '__none';
+  String _responsible = '__none';
+  final Set<String> _staffUsernames = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    createdAt = TextEditingController(
+      text:
+          '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year}',
+    );
+  }
+
   @override
   void dispose() {
     name.dispose();
-    manager.dispose();
     description.dispose();
+    createdAt.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickCreatedAt() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+    );
+    if (date != null && mounted) {
+      setState(() {
+        createdAt.text =
+            '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}';
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
+    final store = AppScope.of(context);
+    final branches = store.branches.map((branch) => branch.name).toList();
+    if (_branch.isEmpty && branches.isNotEmpty) _branch = branches.first;
+    final staff = store.staff;
+    final managerNames = <String>[
+      '__none',
+      ...staff.map((member) => member.fullName),
+    ];
+    if (!managerNames.contains(_manager)) _manager = '__none';
+    if (!managerNames.contains(_responsible)) _responsible = '__none';
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -13963,18 +18020,75 @@ class _DepartmentCreateScreenState extends State<DepartmentCreateScreen> {
             children: [
               _ManagedTextField(
                 controller: name,
-                label: 'Department name',
+                label: 'Название департамента',
                 requiredField: true,
               ),
-              _ManagedTextField(
-                controller: manager,
-                label: 'Manager',
+              _ManagedSelect<String>(
+                label: 'Filial',
+                value: _branch,
+                items: branches,
+                onChanged: (value) => setState(() => _branch = value),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect<String>(
+                label: 'Статус',
+                value: _status,
+                items: const ['active', 'inactive'],
+                display: (value) => value == 'active' ? 'Faol' : 'Nofaol',
+                onChanged: (value) => setState(() => _status = value),
+              ),
+              const SizedBox(height: 11),
+              _ManagedSelect<String>(
+                label: 'Руководитель',
+                value: _manager,
+                items: managerNames,
+                display: (value) => value == '__none' ? 'Tayinlanmagan' : value,
+                onChanged: (value) => setState(() => _manager = value),
+              ),
+              const SizedBox(height: 16),
+              _ManagedSelect<String>(
+                label: 'Ответственный',
+                value: _responsible,
+                items: managerNames,
+                display: (value) => value == '__none' ? 'Не назначен' : value,
+                onChanged: (value) => setState(() => _responsible = value),
+              ),
+              const SizedBox(height: 11),
+              _DateInput(
+                label: 'Дата создания',
+                controller: createdAt,
+                onTap: _pickCreatedAt,
                 requiredField: true,
               ),
+              const SizedBox(height: 16),
+              _setSec(c, 'BIRIKTIRILADIGAN XODIMLAR'),
+              const SizedBox(height: 7),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final member in staff)
+                    FilterChip(
+                      avatar: SfAvatar(name: member.fullName, size: 24),
+                      label: Text(
+                        member.fullName,
+                        style: TextStyle(fontFamily: SfType.ui, fontSize: 10.5),
+                      ),
+                      selected: _staffUsernames.contains(member.username),
+                      onSelected: (selected) => setState(() {
+                        selected
+                            ? _staffUsernames.add(member.username)
+                            : _staffUsernames.remove(member.username);
+                      }),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
               _ManagedTextField(
                 controller: description,
-                label: 'Description',
+                label: 'Описание',
                 requiredField: true,
+                maxLines: 3,
               ),
             ],
           ),
@@ -13988,11 +18102,25 @@ class _DepartmentCreateScreenState extends State<DepartmentCreateScreen> {
               primary: true,
               onTap: () {
                 if (form.currentState!.validate()) {
+                  if (_manager == '__none' || _responsible == '__none') {
+                    _snack(
+                      context,
+                      'Руководитель и ответственный обязательны',
+                      bg: c.danger,
+                    );
+                    return;
+                  }
                   Navigator.of(context).pop(
                     DepartmentRecord(
                       name: name.text.trim(),
-                      manager: manager.text.trim(),
+                      manager: _manager,
                       description: description.text.trim(),
+                      branch: _branch,
+                      status: _status,
+                      responsible: _responsible,
+                      createdAt: createdAt.text.trim(),
+                      rating: 0,
+                      initialStaffUsernames: _staffUsernames.toList(),
                     ),
                   );
                 }
@@ -14171,23 +18299,6 @@ class _DepartmentDetailScreenState extends State<DepartmentDetailScreen> {
     }).length;
   }
 
-  double _ratingForDepartment(AppStore store) {
-    final students = _studentsForDepartment(store);
-    if (students == 0) return 4.7;
-    final relevant = store.students.where((student) {
-      final group = student.group.toLowerCase();
-      return widget.department.name == 'English'
-          ? group.contains('ingliz') || group.contains('ielts')
-          : widget.department.name == 'Reception'
-          ? false
-          : !group.contains('ingliz') && !group.contains('ielts');
-    });
-    final average =
-        relevant.fold<int>(0, (sum, student) => sum + student.attendance) /
-        students;
-    return (4 + (average - 80) / 100).clamp(4.0, 5.0).toDouble();
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
@@ -14241,30 +18352,67 @@ class _DepartmentDetailScreenState extends State<DepartmentDetailScreen> {
             SfCard(
               child: Column(
                 children: [
-                  _InfoRow('Manager', widget.department.manager),
+                  _InfoRow('Rahbar', widget.department.manager),
+                  _InfoRow('Filial', widget.department.branch),
+                  _InfoRow('Mas’ul', widget.department.responsible),
+                  _InfoRow('Yaratilgan sana', widget.department.createdAt),
                   _InfoRow(
-                    'Description',
-                    widget.department.description,
-                    last: true,
+                    'Holat',
+                    widget.department.status == 'active' ? 'Faol' : 'Nofaol',
+                  ),
+                  _InfoRow('Tavsif', widget.department.description, last: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _setSec(c, 'DEPARTAMENT REYTINGI'),
+            const SizedBox(height: 6),
+            RefSurfaceCard(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: c.accentSoft,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.star_rounded, color: c.accent),
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${widget.department.rating.toStringAsFixed(1)} / 5.0',
+                          style: RefType.mono(
+                            size: 18,
+                            weight: FontWeight.w800,
+                            color: c.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Davomat, o‘zlashtirish, to‘lov intizomi va saqlab qolish bo‘yicha umumiy baho',
+                          style: RefType.ui(size: 10.5, color: c.muted),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 14),
-            _setSec(c, 'DEPARTMENT STATISTICS'),
+            _setSec(c, 'DEPARTAMENT STATISTIKASI'),
             Row(
               children: [
                 Expanded(
                   child: _DetailStat('Xodimlar', '${staff.length}', c.primary),
                 ),
                 const SizedBox(width: 8),
-                Expanded(
-                  child: _DetailStat(
-                    'O‘rtacha reyting',
-                    '★ ${_ratingForDepartment(store).toStringAsFixed(1)}',
-                    c.accent,
-                  ),
-                ),
+                Expanded(child: _DetailStat('Guruhlar', '$groups', c.accent)),
               ],
             ),
             const SizedBox(height: 8),
@@ -14273,7 +18421,11 @@ class _DepartmentDetailScreenState extends State<DepartmentDetailScreen> {
                 children: [
                   _InfoRow('O‘quvchilar', '$students'),
                   _InfoRow('O‘qituvchilar', '$teacherCount'),
-                  _InfoRow('Guruhlar', '$groups', last: true),
+                  _InfoRow(
+                    'Status',
+                    widget.department.status == 'active' ? 'Faol' : 'Nofaol',
+                    last: true,
+                  ),
                 ],
               ),
             ),
@@ -14603,11 +18755,7 @@ class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
       'Sotuv va marketing · 5',
       'Iyul voronkasi, konversiya va yangi kanallar.',
       confirmedParticipants: 4,
-      agenda: [
-        'Lidlar manbasi',
-        'Konversiya rejasi',
-        'Avgust kampaniyasi',
-      ],
+      agenda: ['Lidlar manbasi', 'Konversiya rejasi', 'Avgust kampaniyasi'],
       owner: 'Gulnora Saidova',
       durationMinutes: 45,
     ),
@@ -14633,13 +18781,18 @@ class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
   int _filter = 0;
 
   List<MeetingDraft> get _visibleMeetings => switch (_filter) {
-    1 => meetings.where((meeting) => meeting.status == MeetingStatus.today).toList(),
-    2 => meetings
-        .where((meeting) => meeting.status != MeetingStatus.completed)
-        .toList(),
-    3 => meetings
-        .where((meeting) => meeting.status == MeetingStatus.completed)
-        .toList(),
+    1 =>
+      meetings
+          .where((meeting) => meeting.status == MeetingStatus.today)
+          .toList(),
+    2 =>
+      meetings
+          .where((meeting) => meeting.status != MeetingStatus.completed)
+          .toList(),
+    3 =>
+      meetings
+          .where((meeting) => meeting.status == MeetingStatus.completed)
+          .toList(),
     _ => meetings,
   };
 
@@ -14870,7 +19023,8 @@ class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
               const _EmptyState(
                 icon: Icons.event_busy_rounded,
                 title: 'Bu ko‘rinishda yig‘ilish yo‘q',
-                sub: 'Yangi uchrashuvni rejalashtiring yoki boshqa filtrni tanlang.',
+                sub:
+                    'Yangi uchrashuvni rejalashtiring yoki boshqa filtrni tanlang.',
               )
             else
               for (final meeting in visible)
@@ -15124,11 +19278,74 @@ class MeetingDetailScreen extends StatefulWidget {
 class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
   late bool _reminderSent = widget.reminderSent;
 
+  Future<void> _prepareReminderDraft(int recipients) async {
+    if (_reminderSent) return;
+    final controller = TextEditingController(
+      text:
+          '${widget.meeting.title}: ${widget.meeting.date} kuni soat ${widget.meeting.time} da ${widget.meeting.location} manzilida yig‘ilish bo‘ladi.',
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => SfTheme(
+        colors: widget.colors,
+        child: AlertDialog(
+          backgroundColor: widget.colors.surface,
+          title: const Text('Eslatma qoralamasi'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$recipients получателей · отправка не выполняется автоматически',
+                style: RefType.ui(size: 11.5, color: widget.colors.muted),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('meeting-reminder-draft'),
+                controller: controller,
+                minLines: 4,
+                maxLines: 7,
+                decoration: const InputDecoration(
+                  labelText: 'Текст напоминания',
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.drafts_rounded),
+              label: const Text('Сохранить черновик'),
+              onPressed: () => Navigator.of(
+                dialogContext,
+              ).pop(controller.text.trim().isNotEmpty),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    if (saved != true || !mounted) return;
+    setState(() => _reminderSent = true);
+    widget.onReminderSent();
+    AppScope.of(context).logActivity(
+      icon: Icons.drafts_outlined,
+      title: 'Yig‘ilish eslatmasi tayyorlandi',
+      detail: '${widget.meeting.title} · $recipients ta lokal qoralama',
+      kind: 'meeting',
+    );
+  }
+
   void _copyInvite() {
     final meeting = widget.meeting;
     Clipboard.setData(
       ClipboardData(
-        text: '${meeting.title}\n${meeting.date} · ${meeting.time}\n${meeting.location}\n${meeting.participants}',
+        text:
+            '${meeting.title}\n${meeting.date} · ${meeting.time}\n${meeting.location}\n${meeting.participants}',
       ),
     );
     _snack(context, 'Taklifnoma buferga nusxalandi');
@@ -15144,20 +19361,38 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
           backgroundColor: c.surface,
           title: Text(
             'Yig‘ilishni bekor qilasizmi?',
-            style: TextStyle(fontFamily: SfType.ui, fontWeight: FontWeight.w800, color: c.ink),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
           ),
           content: Text(
             'Qatnashuvchilarga alohida xabar yuborish kerak bo‘ladi.',
-            style: TextStyle(fontFamily: SfType.ui, fontSize: 13, color: c.ink2),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 13,
+              color: c.ink2,
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text('Yo‘q', style: TextStyle(fontFamily: SfType.ui, color: c.muted)),
+              child: Text(
+                'Yo‘q',
+                style: TextStyle(fontFamily: SfType.ui, color: c.muted),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: Text('Bekor qilish', style: TextStyle(fontFamily: SfType.ui, fontWeight: FontWeight.w800, color: c.danger)),
+              child: Text(
+                'Bekor qilish',
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontWeight: FontWeight.w800,
+                  color: c.danger,
+                ),
+              ),
             ),
           ],
         ),
@@ -15178,7 +19413,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
     final progress = total == 0
         ? 0.0
         : (meeting.confirmedParticipants / total).clamp(0, 1).toDouble();
-    final agenda = meeting.agenda.isEmpty ? [meeting.description] : meeting.agenda;
+    final agenda = meeting.agenda.isEmpty
+        ? [meeting.description]
+        : meeting.agenda;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -15189,7 +19426,11 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
           iconTheme: IconThemeData(color: c.ink),
           title: Text(
             'Yig‘ilish tafsilotlari',
-            style: TextStyle(fontFamily: SfType.ui, fontWeight: FontWeight.w800, color: c.ink),
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
           ),
           actions: [
             PopupMenuButton<String>(
@@ -15212,7 +19453,10 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                     value: 'cancel',
                     child: ListTile(
                       dense: true,
-                      leading: Icon(Icons.event_busy_rounded, color: Colors.red),
+                      leading: Icon(
+                        Icons.event_busy_rounded,
+                        color: Colors.red,
+                      ),
                       title: Text('Yig‘ilishni bekor qilish'),
                     ),
                   ),
@@ -15238,32 +19482,62 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                       Container(
                         width: 42,
                         height: 42,
-                        decoration: BoxDecoration(color: c.primary, borderRadius: BorderRadius.circular(13)),
-                        child: Icon(_meetingStatusIcon(meeting.status), color: Colors.white),
+                        decoration: BoxDecoration(
+                          color: c.primary,
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: Icon(
+                          _meetingStatusIcon(meeting.status),
+                          color: Colors.white,
+                        ),
                       ),
                       const SizedBox(width: 11),
                       Expanded(
                         child: Text(
                           meeting.title,
-                          style: TextStyle(fontFamily: SfType.ui, fontSize: 17, fontWeight: FontWeight.w800, color: c.ink),
+                          style: TextStyle(
+                            fontFamily: SfType.ui,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: c.ink,
+                          ),
                         ),
                       ),
-                      Pill(_meetingStatusLabel(meeting.status), tone: _meetingStatusTone(meeting.status)),
+                      Pill(
+                        _meetingStatusLabel(meeting.status),
+                        tone: _meetingStatusTone(meeting.status),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 14),
                   Text(
                     meeting.description,
-                    style: TextStyle(fontFamily: SfType.ui, fontSize: 12, height: 1.4, color: c.ink2),
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 12,
+                      height: 1.4,
+                      color: c.ink2,
+                    ),
                   ),
                   const SizedBox(height: 13),
                   Wrap(
                     spacing: 7,
                     runSpacing: 7,
                     children: [
-                      _MeetingInfoChip(icon: Icons.calendar_today_rounded, label: '${meeting.date} · ${meeting.time}'),
-                      _MeetingInfoChip(icon: meeting.format == 'Onlayn' ? Icons.videocam_rounded : Icons.location_on_rounded, label: meeting.location),
-                      _MeetingInfoChip(icon: Icons.timer_outlined, label: '${meeting.durationMinutes} daqiqa'),
+                      _MeetingInfoChip(
+                        icon: Icons.calendar_today_rounded,
+                        label: '${meeting.date} · ${meeting.time}',
+                      ),
+                      _MeetingInfoChip(
+                        icon: meeting.format == 'Onlayn'
+                            ? Icons.videocam_rounded
+                            : Icons.location_on_rounded,
+                        label: meeting.location,
+                      ),
+                      _MeetingInfoChip(
+                        icon: Icons.timer_outlined,
+                        label: '${meeting.durationMinutes} daqiqa',
+                      ),
                     ],
                   ),
                 ],
@@ -15279,19 +19553,46 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                   children: [
                     Row(
                       children: [
-                        Expanded(child: Text(meeting.participants, style: TextStyle(fontFamily: SfType.ui, fontSize: 13, fontWeight: FontWeight.w800, color: c.ink))),
-                        Text('${meeting.confirmedParticipants}/$total', style: TextStyle(fontFamily: SfType.mono, fontSize: 13, fontWeight: FontWeight.w800, color: c.success)),
+                        Expanded(
+                          child: Text(
+                            meeting.participants,
+                            style: TextStyle(
+                              fontFamily: SfType.ui,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: c.ink,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${meeting.confirmedParticipants}/$total',
+                          style: TextStyle(
+                            fontFamily: SfType.mono,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: c.success,
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(999),
-                      child: LinearProgressIndicator(value: progress, minHeight: 7, color: c.success, backgroundColor: c.surface2),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 7,
+                        color: c.success,
+                        backgroundColor: c.surface2,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Text(
                       '${(progress * 100).round()}% qatnashuv tasdiqlangan · mas’ul: ${meeting.owner}',
-                      style: TextStyle(fontFamily: SfType.ui, fontSize: 10.5, color: c.muted),
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 10.5,
+                        color: c.muted,
+                      ),
                     ),
                   ],
                 ),
@@ -15320,7 +19621,9 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
                   _InfoRow('Format', meeting.format),
                   _InfoRow(
                     'Eslatma',
-                    _reminderSent ? 'Yuborildi' : 'Hali yuborilmagan',
+                    _reminderSent
+                        ? 'Локальный черновик готов'
+                        : 'Черновик не создан',
                     last: true,
                   ),
                 ],
@@ -15336,15 +19639,14 @@ class _MeetingDetailScreenState extends State<MeetingDetailScreen> {
               children: [
                 Expanded(
                   child: SfButton(
-                    icon: _reminderSent ? Icons.check_rounded : Icons.notifications_active_rounded,
-                    label: _reminderSent ? 'Eslatma yuborildi' : 'Eslatma yuborish',
+                    icon: _reminderSent
+                        ? Icons.check_rounded
+                        : Icons.notifications_active_rounded,
+                    label: _reminderSent
+                        ? 'Черновик готов'
+                        : 'Подготовить напоминание',
                     primary: true,
-                    onTap: () {
-                      if (_reminderSent) return;
-                      setState(() => _reminderSent = true);
-                      widget.onReminderSent();
-                      _snack(context, '$total qatnashuvchiga eslatma yuborildi', bg: c.success);
-                    },
+                    onTap: () => _prepareReminderDraft(total),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -15376,13 +19678,24 @@ class _MeetingInfoChip extends StatelessWidget {
     final c = SfTheme.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(color: c.surface.withValues(alpha: .7), borderRadius: BorderRadius.circular(999)),
+      decoration: BoxDecoration(
+        color: c.surface.withValues(alpha: .7),
+        borderRadius: BorderRadius.circular(999),
+      ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 13, color: c.primary),
           const SizedBox(width: 4),
-          Text(label, style: TextStyle(fontFamily: SfType.ui, fontSize: 10.5, fontWeight: FontWeight.w700, color: c.ink2)),
+          Text(
+            label,
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: c.ink2,
+            ),
+          ),
         ],
       ),
     );
@@ -15393,14 +19706,22 @@ class _MeetingAgendaRow extends StatelessWidget {
   final int index;
   final String text;
   final bool last;
-  const _MeetingAgendaRow({required this.index, required this.text, required this.last});
+  const _MeetingAgendaRow({
+    required this.index,
+    required this.text,
+    required this.last,
+  });
 
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
-      decoration: BoxDecoration(border: Border(bottom: last ? BorderSide.none : BorderSide(color: c.border))),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -15408,11 +19729,32 @@ class _MeetingAgendaRow extends StatelessWidget {
             width: 23,
             height: 23,
             alignment: Alignment.center,
-            decoration: BoxDecoration(color: c.primarySoft, borderRadius: BorderRadius.circular(8)),
-            child: Text('$index', style: TextStyle(fontFamily: SfType.mono, fontSize: 10.5, fontWeight: FontWeight.w800, color: c.primary)),
+            decoration: BoxDecoration(
+              color: c.primarySoft,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '$index',
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                color: c.primary,
+              ),
+            ),
           ),
           const SizedBox(width: 9),
-          Expanded(child: Text(text, style: TextStyle(fontFamily: SfType.ui, fontSize: 12, fontWeight: FontWeight.w600, color: c.ink2))),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: c.ink2,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -15502,12 +19844,25 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
             children: [
               Container(
                 padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: c.primarySoft, borderRadius: BorderRadius.circular(16)),
+                decoration: BoxDecoration(
+                  color: c.primarySoft,
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 child: Row(
                   children: [
                     Icon(Icons.tips_and_updates_rounded, color: c.primary),
                     const SizedBox(width: 9),
-                    Expanded(child: Text('Aniq kun tartibi va eslatma qatnashuvni sezilarli oshiradi.', style: TextStyle(fontFamily: SfType.ui, fontSize: 11.5, fontWeight: FontWeight.w600, color: c.primaryInk))),
+                    Expanded(
+                      child: Text(
+                        'Aniq kun tartibi va eslatma qatnashuvni sezilarli oshiradi.',
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: c.primaryInk,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -15518,9 +19873,20 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
                 label: 'Yig‘ilish nomi',
                 requiredField: true,
               ),
-              _DateInput(label: 'Sana', controller: date, onTap: pickDate, requiredField: true),
+              _DateInput(
+                label: 'Sana',
+                controller: date,
+                onTap: pickDate,
+                requiredField: true,
+              ),
               const SizedBox(height: 11),
-              _DateInput(label: 'Vaqt', controller: time, onTap: pickTime, requiredField: true, icon: Icons.schedule_rounded),
+              _DateInput(
+                label: 'Vaqt',
+                controller: time,
+                onTap: pickTime,
+                requiredField: true,
+                icon: Icons.schedule_rounded,
+              ),
               const SizedBox(height: 11),
               _ManagedSelect<String>(
                 label: 'Format',
@@ -15531,7 +19897,9 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
               const SizedBox(height: 11),
               _ManagedTextField(
                 controller: location,
-                label: format == 'Onlayn' ? 'Platforma yoki havola' : 'Xona yoki manzil',
+                label: format == 'Onlayn'
+                    ? 'Platforma yoki havola'
+                    : 'Xona yoki manzil',
                 requiredField: true,
               ),
               _ManagedSelect<int>(
@@ -15543,7 +19911,14 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
               ),
               const SizedBox(height: 18),
               _setSec(c, 'QATNASHUVCHILAR'),
-              Text('Tayyor auditoriyani tanlang yoki ro‘yxatni o‘zingiz kiriting.', style: TextStyle(fontFamily: SfType.ui, fontSize: 11.5, color: c.muted)),
+              Text(
+                'Tayyor auditoriyani tanlang yoki ro‘yxatni o‘zingiz kiriting.',
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 11.5,
+                  color: c.muted,
+                ),
+              ),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 7,
@@ -15553,10 +19928,18 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
                     ChoiceChip(
                       label: Text(audience),
                       selected: participants.text == audience,
-                      onSelected: (_) => setState(() => participants.text = audience),
+                      onSelected: (_) =>
+                          setState(() => participants.text = audience),
                       showCheckmark: false,
                       selectedColor: c.primarySoft,
-                      labelStyle: TextStyle(fontFamily: SfType.ui, fontSize: 10.5, fontWeight: FontWeight.w700, color: participants.text == audience ? c.primaryInk : c.ink2),
+                      labelStyle: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: participants.text == audience
+                            ? c.primaryInk
+                            : c.ink2,
+                      ),
                     ),
                 ],
               ),
@@ -15578,8 +19961,23 @@ class _MeetingCreateScreenState extends State<MeetingCreateScreen> {
                 value: notify,
                 contentPadding: EdgeInsets.zero,
                 activeThumbColor: c.primary,
-                title: Text('Qatnashuvchilarga eslatma yuborish', style: TextStyle(fontFamily: SfType.ui, fontSize: 12.5, fontWeight: FontWeight.w700, color: c.ink)),
-                subtitle: Text('Yig‘ilish yaratilganda xabar jo‘natiladi', style: TextStyle(fontFamily: SfType.ui, fontSize: 10.5, color: c.muted)),
+                title: Text(
+                  'Qatnashuvchilarga eslatma yuborish',
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: c.ink,
+                  ),
+                ),
+                subtitle: Text(
+                  'Yig‘ilish yaratilganda xabar jo‘natiladi',
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10.5,
+                    color: c.muted,
+                  ),
+                ),
                 onChanged: (value) => setState(() => notify = value),
               ),
             ],
@@ -15678,98 +20076,73 @@ class _PaymentLedgerRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+    return InkWell(
+      onTap: () => Navigator.of(
+        context,
+      ).push(sfPageRoute(LedgerEntryScreen(entry: entry, colors: c))),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: last ? BorderSide.none : BorderSide(color: c.border),
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: (entry.inflow ? c.success : c.danger).withValues(
-                alpha: 0.13,
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: (entry.inflow ? c.success : c.danger).withValues(
+                  alpha: 0.13,
+                ),
+                borderRadius: BorderRadius.circular(10),
               ),
-              borderRadius: BorderRadius.circular(10),
+              child: Icon(
+                entry.inflow
+                    ? Icons.south_west_rounded
+                    : Icons.north_east_rounded,
+                size: 17,
+                color: entry.inflow ? c.success : c.danger,
+              ),
             ),
-            child: Icon(
-              entry.inflow
-                  ? Icons.south_west_rounded
-                  : Icons.north_east_rounded,
-              size: 17,
-              color: entry.inflow ? c.success : c.danger,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  entry.title,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: c.ink,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    entry.title,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: c.ink,
+                    ),
                   ),
-                ),
-                Text(
-                  '${entry.who} · ${entry.time}',
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 10.5,
-                    color: c.muted,
+                  Text(
+                    '${entry.who} · ${entry.time}',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10.5,
+                      color: c.muted,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Text(
-            '${entry.inflow ? '+' : '-'}${fmtMoneyShort(entry.amount)}',
-            style: TextStyle(
-              fontFamily: SfType.mono,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w800,
-              color: entry.inflow ? c.success : c.danger,
+            Text(
+              '${entry.inflow ? '+' : '-'}${fmtMoneyShort(entry.amount)}',
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                color: entry.inflow ? c.success : c.danger,
+              ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Pushed wrapper so Messages can open as its own page from the top bar.
-class _MessagesPage extends StatelessWidget {
-  const _MessagesPage();
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Scaffold(
-      backgroundColor: c.bg,
-      appBar: AppBar(
-        backgroundColor: c.surface,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        iconTheme: IconThemeData(color: c.ink),
-        shape: Border(bottom: BorderSide(color: c.border)),
-        title: Text(
-          tr(context, 'messages_title'),
-          style: TextStyle(
-            fontFamily: SfType.ui,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            color: c.ink,
-          ),
+          ],
         ),
       ),
-      body: const SafeArea(top: false, child: MessagesScreen()),
     );
   }
 }
@@ -16158,7 +20531,7 @@ class ChatScreen extends StatefulWidget {
 
 /// Telegram-style contact / group card opened by tapping a chat header. It is
 /// deliberately a separate route, so Back always returns to the conversation.
-class ChatCabinetScreen extends StatelessWidget {
+class ChatCabinetScreen extends StatefulWidget {
   final Thread? thread;
   final Student? student;
   final int? threadIdx;
@@ -16170,6 +20543,14 @@ class ChatCabinetScreen extends StatelessWidget {
     this.threadIdx,
     required this.colors,
   }) : assert(thread != null || student != null);
+
+  @override
+  State<ChatCabinetScreen> createState() => _ChatCabinetScreenState();
+}
+
+class _ChatCabinetScreenState extends State<ChatCabinetScreen> {
+  bool _notificationsEnabled = true;
+  bool _blocked = false;
 
   String _phoneFor(String name) {
     var seed = 0;
@@ -16185,9 +20566,9 @@ class ChatCabinetScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Respect the currently selected app theme in contact and group profiles.
-    final c = colors;
-    final t = thread;
-    final s = student;
+    final c = widget.colors;
+    final t = widget.thread;
+    final s = widget.student;
     final isGroup = t?.isGroup ?? false;
     final name = t?.name ?? s!.name;
     final detail = t?.group ?? s!.group;
@@ -16207,9 +20588,9 @@ class ChatCabinetScreen extends StatelessWidget {
         : (profile.firstName.endsWith('a') || profile.lastName.endsWith('a')
               ? 'Ayol'
               : 'Erkak');
-    final media = threadIdx == null
+    final media = widget.threadIdx == null
         ? const <ChatMsg>[]
-        : AppScope.of(context).threads[threadIdx!].messages
+        : AppScope.of(context).threads[widget.threadIdx!].messages
               .where(
                 (m) =>
                     m.kind == ChatMessageKind.image ||
@@ -16231,9 +20612,16 @@ class ChatCabinetScreen extends StatelessWidget {
           iconTheme: IconThemeData(color: c.ink),
           actions: [
             IconButton(
-              tooltip: 'More',
+              tooltip: 'Действия',
               icon: Icon(Icons.more_vert_rounded, color: c.ink2),
-              onPressed: () => _snack(context, 'Qidirish · ovozsiz · bloklash'),
+              onPressed: () => _showProfileMenu(
+                name: name,
+                phone: phone,
+                username: username,
+                messages: widget.threadIdx == null
+                    ? const <ChatMsg>[]
+                    : AppScope.of(context).threads[widget.threadIdx!].messages,
+              ),
             ),
           ],
         ),
@@ -16242,7 +20630,7 @@ class ChatCabinetScreen extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 32),
           children: [
             Container(
-              height: 246,
+              height: 170,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(22),
                 gradient: LinearGradient(
@@ -16282,11 +20670,11 @@ class ChatCabinetScreen extends StatelessWidget {
                   Center(
                     child: isGroup
                         ? Container(
-                            width: 122,
-                            height: 122,
+                            width: 88,
+                            height: 88,
                             decoration: BoxDecoration(
                               color: c.primary,
-                              borderRadius: BorderRadius.circular(37),
+                              borderRadius: BorderRadius.circular(27),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withValues(alpha: 0.3),
@@ -16296,10 +20684,10 @@ class ChatCabinetScreen extends StatelessWidget {
                               ],
                             ),
                             child: const Center(
-                              child: SfStar(size: 52, color: Colors.white),
+                              child: SfStar(size: 38, color: Colors.white),
                             ),
                           )
-                        : SfAvatar(name: name, size: 122),
+                        : SfAvatar(name: name, size: 88),
                   ),
                 ],
               ),
@@ -16331,17 +20719,25 @@ class ChatCabinetScreen extends StatelessWidget {
             Row(
               children: [
                 _ChatProfileAction(
-                  icon: Icons.chat_bubble_rounded,
-                  label: 'Chat',
-                  color: c.primary,
-                  onTap: () => Navigator.of(context).maybePop(),
+                  icon: _blocked
+                      ? Icons.lock_open_rounded
+                      : Icons.chat_bubble_rounded,
+                  label: _blocked ? 'Разблокировать' : 'Написать',
+                  color: _blocked ? c.warn : c.primary,
+                  onTap: _blocked
+                      ? () => setState(() => _blocked = false)
+                      : () => Navigator.of(context).maybePop(),
                 ),
                 const SizedBox(width: 8),
                 _ChatProfileAction(
-                  icon: Icons.notifications_rounded,
-                  label: 'Sound',
+                  icon: _notificationsEnabled
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_off_rounded,
+                  label: _notificationsEnabled ? 'Уведомления' : 'Без звука',
                   color: c.primary,
-                  onTap: () => _snack(context, '🔔 Bildirishnomalar (demo)'),
+                  onTap: () => setState(
+                    () => _notificationsEnabled = !_notificationsEnabled,
+                  ),
                 ),
               ],
             ),
@@ -16402,8 +20798,59 @@ class ChatCabinetScreen extends StatelessWidget {
                       label: 'Department',
                       leading: Icons.corporate_fare_outlined,
                     ),
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: profile == null
+                          ? 'Сотрудник учебного центра'
+                          : 'Ученик · ${profile.level}',
+                      label: 'Должность',
+                      leading: Icons.work_outline_rounded,
+                    ),
+                    Divider(height: 1, color: c.border),
+                    _TelegramInfoLine(
+                      value: profile?.enrolled ?? '12.09.2023',
+                      label: 'Дата регистрации',
+                      leading: Icons.event_available_outlined,
+                    ),
                   ],
                 ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            _TelegramPanel(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 13, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Статистика',
+                      style: RefType.ui(
+                        size: 14,
+                        weight: FontWeight.w800,
+                        color: c.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 11),
+                    Row(
+                      children: [
+                        _ChatProfileStat(
+                          value:
+                              '${widget.threadIdx == null ? 2 : AppScope.of(context).threads[widget.threadIdx!].messages.length}',
+                          label: 'Сообщения',
+                        ),
+                        _ChatProfileStat(
+                          value: '${media.length}',
+                          label: 'Медиа',
+                        ),
+                        _ChatProfileStat(
+                          value: online ? 'Сейчас' : 'Недавно',
+                          label: 'Активность',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -16458,12 +20905,252 @@ class ChatCabinetScreen extends StatelessWidget {
                   label: 'Manage participants',
                   leading: Icons.group_add_rounded,
                   trailing: Icons.chevron_right_rounded,
-                  onTap: () =>
-                      _snack(context, 'Ishtirokchilar ro‘yxati (demo)'),
+                  onTap: () => _showParticipants(detail),
                 ),
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showProfileMenu({
+    required String name,
+    required String phone,
+    required String username,
+    required List<ChatMsg> messages,
+  }) {
+    final c = widget.colors;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SfTheme(
+        colors: c,
+        child: SafeArea(
+          top: false,
+          child: StatefulBuilder(
+            builder: (sheetContext, setSheetState) => Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+              decoration: BoxDecoration(
+                color: c.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: c.borderStrong,
+                      borderRadius: RefRadius.pill,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (messages.isNotEmpty)
+                    ListTile(
+                      leading: Icon(Icons.search_rounded, color: c.primary),
+                      title: const Text('Поиск по сообщениям'),
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          backgroundColor: Colors.transparent,
+                          builder: (_) => SfTheme(
+                            colors: c,
+                            child: _ChatSearchSheet(messages: messages),
+                          ),
+                        );
+                      },
+                    ),
+                  ListTile(
+                    leading: Icon(
+                      _notificationsEnabled
+                          ? Icons.notifications_off_outlined
+                          : Icons.notifications_active_outlined,
+                      color: c.ink2,
+                    ),
+                    title: Text(
+                      _notificationsEnabled
+                          ? 'Отключить уведомления'
+                          : 'Включить уведомления',
+                    ),
+                    trailing: Switch(
+                      value: _notificationsEnabled,
+                      onChanged: (value) {
+                        setState(() => _notificationsEnabled = value);
+                        setSheetState(() {});
+                      },
+                    ),
+                    onTap: () {
+                      setState(
+                        () => _notificationsEnabled = !_notificationsEnabled,
+                      );
+                      setSheetState(() {});
+                    },
+                  ),
+                  ListTile(
+                    leading: Icon(Icons.copy_all_rounded, color: c.ink2),
+                    title: const Text('Скопировать контакт'),
+                    subtitle: Text(phone),
+                    onTap: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: '$name\n$username\n$phone'),
+                      );
+                      if (sheetContext.mounted) {
+                        Navigator.of(sheetContext).pop();
+                      }
+                    },
+                  ),
+                  if (!(widget.thread?.isGroup ?? false))
+                    ListTile(
+                      leading: Icon(
+                        _blocked
+                            ? Icons.lock_open_rounded
+                            : Icons.block_rounded,
+                        color: _blocked ? c.success : c.danger,
+                      ),
+                      title: Text(
+                        _blocked
+                            ? 'Разблокировать контакт'
+                            : 'Заблокировать контакт',
+                      ),
+                      subtitle: Text(
+                        _blocked
+                            ? 'Отправка сообщений сейчас ограничена'
+                            : 'Можно отменить в этом же меню',
+                      ),
+                      onTap: () {
+                        setState(() => _blocked = !_blocked);
+                        setSheetState(() {});
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showParticipants(String groupDetail) {
+    final c = widget.colors;
+    final store = AppScope.of(context);
+    final normalized = groupDetail
+        .split('·')
+        .map((part) => part.trim().toLowerCase())
+        .where((part) => part.isNotEmpty)
+        .toSet();
+    final participants = store.students
+        .where(
+          (student) =>
+              normalized.contains(student.group.trim().toLowerCase()) ||
+              groupDetail.toLowerCase().contains(
+                student.group.trim().toLowerCase(),
+              ),
+        )
+        .toList();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SfTheme(
+        colors: c,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * .78,
+            ),
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: c.borderStrong,
+                      borderRadius: RefRadius.pill,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Участники · ${participants.length}',
+                  style: RefType.ui(
+                    size: 17,
+                    weight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  groupDetail,
+                  style: RefType.ui(size: 11.5, color: c.muted),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: participants.isEmpty
+                      ? RefStatusTile(
+                          icon: Icons.group_off_outlined,
+                          title: 'Участники не найдены',
+                          subtitle:
+                              'В текущем локальном наборе нет учеников этой группы',
+                          tone: RefMetricTone.neutral,
+                        )
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: participants.length,
+                          separatorBuilder: (_, _) =>
+                              Divider(height: 1, color: c.border),
+                          itemBuilder: (_, index) {
+                            final student = participants[index];
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: SfAvatar(name: student.name, size: 38),
+                              title: Text(student.name),
+                              subtitle: Text(
+                                '${student.group} · ${student.attendance}%',
+                              ),
+                              trailing: Icon(
+                                Icons.chevron_right_rounded,
+                                color: c.muted,
+                              ),
+                              onTap: () {
+                                Navigator.of(sheetContext).pop();
+                                Navigator.of(context).push(
+                                  sfPageRoute(
+                                    SfTheme(
+                                      colors: c,
+                                      child: StudentDetailScreen(
+                                        student: student,
+                                        colors: c,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -16513,6 +21200,36 @@ class _ChatProfileAction extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ChatProfileStat extends StatelessWidget {
+  const _ChatProfileStat({required this.value, required this.label});
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: RefType.ui(size: 13, weight: FontWeight.w800, color: c.ink),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: RefType.ui(size: 9.5, color: c.muted),
+          ),
+        ],
       ),
     );
   }
@@ -16621,27 +21338,154 @@ class _CabinetMediaPreview extends StatelessWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static final Map<int, String> _drafts = <int, String>{};
+
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scroll = ScrollController();
+  final FocusNode _composerFocus = FocusNode();
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _recorder = AudioRecorder();
+  final List<_PendingChatUpload> _pendingUploads = <_PendingChatUpload>[];
+  final Map<String, Timer> _uploadTimers = <String, Timer>{};
   bool _recording = false;
   bool _voiceLocked = false;
+  bool _recordGestureActive = false;
+  bool _emojiOpen = false;
+  bool _notificationsEnabled = true;
+  int? _editingIndex;
+  ChatMsg? _replyingTo;
+  final Set<ChatMsg> _editedMessages = <ChatMsg>{};
+  final Map<ChatMsg, ChatMsg> _replyTargets = <ChatMsg, ChatMsg>{};
   DateTime? _recordStartedAt;
+  Duration _recordElapsed = Duration.zero;
+  Timer? _recordTicker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.text = _drafts[widget.threadIdx] ?? '';
+  }
 
   @override
   void dispose() {
+    _drafts[widget.threadIdx] = _ctrl.text;
+    _recordTicker?.cancel();
+    for (final timer in _uploadTimers.values) {
+      timer.cancel();
+    }
     _recorder.dispose();
     _ctrl.dispose();
     _scroll.dispose();
+    _composerFocus.dispose();
     super.dispose();
   }
 
   void _send(AppStore store) {
     if (_ctrl.text.trim().isEmpty) return;
-    store.sendMessage(widget.threadIdx, _ctrl.text);
+    final text = _ctrl.text.trim();
+    final messages = store.threads[widget.threadIdx].messages;
+    final editingIndex = _editingIndex;
+    if (editingIndex != null &&
+        editingIndex >= 0 &&
+        editingIndex < messages.length) {
+      final previous = messages[editingIndex];
+      final edited = ChatMsg(text, mine: true);
+      messages[editingIndex] = edited;
+      final reaction = store.messageReactions.remove(previous);
+      if (reaction != null) store.messageReactions[edited] = reaction;
+      _editedMessages
+        ..remove(previous)
+        ..add(edited);
+      final replyTarget = _replyTargets.remove(previous);
+      if (replyTarget != null) _replyTargets[edited] = replyTarget;
+    } else {
+      store.sendMessage(widget.threadIdx, text);
+      if (_replyingTo case final target?) {
+        _replyTargets[messages.last] = target;
+      }
+    }
     _ctrl.clear();
+    _drafts.remove(widget.threadIdx);
+    setState(() {
+      _editingIndex = null;
+      _replyingTo = null;
+      _emojiOpen = false;
+    });
     _scrollToEnd();
+  }
+
+  void _insertEmoji(String emoji) {
+    final value = _ctrl.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    final start = selection.start.clamp(0, value.text.length).toInt();
+    final end = selection.end.clamp(start, value.text.length).toInt();
+    final text = value.text.replaceRange(start, end, emoji);
+    _ctrl.value = value.copyWith(
+      text: text,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+      composing: TextRange.empty,
+    );
+    _drafts[widget.threadIdx] = _ctrl.text;
+    setState(() {});
+    _composerFocus.requestFocus();
+  }
+
+  void _beginReply(ChatMsg message) {
+    setState(() {
+      _editingIndex = null;
+      _replyingTo = message;
+      _emojiOpen = false;
+    });
+    _composerFocus.requestFocus();
+  }
+
+  void _beginEdit(ChatMsg message, int index) {
+    setState(() {
+      _editingIndex = index;
+      _replyingTo = null;
+      _emojiOpen = false;
+      _ctrl
+        ..text = message.text
+        ..selection = TextSelection.collapsed(offset: message.text.length);
+      _drafts[widget.threadIdx] = message.text;
+    });
+    _composerFocus.requestFocus();
+  }
+
+  void _cancelComposerContext() {
+    setState(() {
+      _editingIndex = null;
+      _replyingTo = null;
+      _ctrl.clear();
+      _drafts.remove(widget.threadIdx);
+    });
+    _composerFocus.requestFocus();
+  }
+
+  void _toggleEmoji() {
+    setState(() => _emojiOpen = !_emojiOpen);
+    if (_emojiOpen) {
+      _composerFocus.unfocus();
+    } else {
+      _composerFocus.requestFocus();
+    }
+  }
+
+  void _startRecordTicker() {
+    _recordTicker?.cancel();
+    _recordTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final started = _recordStartedAt;
+      if (!mounted || !_recording || started == null) return;
+      setState(() => _recordElapsed = DateTime.now().difference(started));
+    });
+  }
+
+  void _finishRecordTicker() {
+    _recordTicker?.cancel();
+    _recordTicker = null;
+    _recordElapsed = Duration.zero;
   }
 
   void _scrollToEnd() {
@@ -16657,94 +21501,71 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _attach(AppStore store) async {
-    final kind = await showModalBottomSheet<_AttachmentChoice>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => SfTheme(
-        colors: widget.colors,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
-          decoration: BoxDecoration(
-            color: widget.colors.surface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: widget.colors.muted2,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _AttachmentOption(
-                  icon: Icons.photo_library_rounded,
-                  color: const Color(0xFF7B9CFF),
-                  title: 'Photo from gallery',
-                  onTap: () =>
-                      Navigator.of(context).pop(_AttachmentChoice.galleryImage),
-                ),
-                _AttachmentOption(
-                  icon: Icons.camera_alt_rounded,
-                  color: const Color(0xFF52C875),
-                  title: 'Take a photo',
-                  onTap: () =>
-                      Navigator.of(context).pop(_AttachmentChoice.cameraImage),
-                ),
-                _AttachmentOption(
-                  icon: Icons.video_library_rounded,
-                  color: const Color(0xFFE47C72),
-                  title: 'Video from gallery',
-                  onTap: () =>
-                      Navigator.of(context).pop(_AttachmentChoice.galleryVideo),
-                ),
-                _AttachmentOption(
-                  icon: Icons.videocam_rounded,
-                  color: const Color(0xFFF2B84B),
-                  title: 'Record a video',
-                  onTap: () =>
-                      Navigator.of(context).pop(_AttachmentChoice.cameraVideo),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (kind == null || !mounted) return;
-    final isVideo =
-        kind == _AttachmentChoice.galleryVideo ||
-        kind == _AttachmentChoice.cameraVideo;
-    final source =
-        kind == _AttachmentChoice.cameraImage ||
-            kind == _AttachmentChoice.cameraVideo
-        ? ImageSource.camera
-        : ImageSource.gallery;
     try {
-      final XFile? file = isVideo
-          ? await _picker.pickVideo(source: source)
-          : await _picker.pickImage(source: source, imageQuality: 90);
-      if (file == null || !mounted) return;
-      final localPath = await _saveAttachment(
-        file.path,
-        isVideo ? 'video' : 'image',
+      final attachment = await _pickChatAttachment(
+        context: context,
+        colors: widget.colors,
+        picker: _picker,
       );
+      if (attachment == null || !mounted) return;
+      var prepared = attachment;
+      if (attachment.messageKind != null) {
+        final localPath = await _saveAttachment(
+          attachment.path,
+          attachment.messageKind == ChatMessageKind.video ? 'video' : 'image',
+        );
+        prepared = attachment.copyWith(path: localPath);
+      }
       if (!mounted) return;
-      store.sendAttachment(
-        widget.threadIdx,
-        kind: isVideo ? ChatMessageKind.video : ChatMessageKind.image,
-        path: localPath,
-        label: _fileName(file.path),
-      );
-      _scrollToEnd();
+      _queueUpload(prepared, (uploaded) {
+        if (!mounted) return;
+        if (uploaded.messageKind != null) {
+          store.sendAttachment(
+            widget.threadIdx,
+            kind: uploaded.messageKind!,
+            path: uploaded.path,
+            label: uploaded.name,
+          );
+        } else {
+          store.sendMessage(widget.threadIdx, '📎 ${uploaded.name}');
+        }
+        _scrollToEnd();
+      });
     } catch (_) {
       if (mounted) _snack(context, 'Faylni biriktirib bo‘lmadi');
     }
+  }
+
+  void _queueUpload(
+    _PreparedChatAttachment attachment,
+    ValueChanged<_PreparedChatAttachment> onComplete,
+  ) {
+    final upload = _PendingChatUpload(attachment);
+    setState(() => _pendingUploads.add(upload));
+    _uploadTimers[upload.id] = Timer.periodic(
+      const Duration(milliseconds: 150),
+      (timer) {
+        if (!mounted || !_pendingUploads.contains(upload)) {
+          timer.cancel();
+          return;
+        }
+        upload.progress = (upload.progress + .09).clamp(0, 1).toDouble();
+        if (upload.progress >= 1) {
+          timer.cancel();
+          _uploadTimers.remove(upload.id);
+          setState(() => _pendingUploads.remove(upload));
+          onComplete(upload.attachment);
+        } else {
+          setState(() {});
+        }
+      },
+    );
+  }
+
+  void _cancelUpload(_PendingChatUpload upload) {
+    _uploadTimers.remove(upload.id)?.cancel();
+    setState(() => _pendingUploads.remove(upload));
+    _snack(context, 'Подготовка вложения отменена');
   }
 
   Future<void> _toggleVoice(AppStore store) async {
@@ -16758,6 +21579,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _recording = false;
         _voiceLocked = false;
         _recordStartedAt = null;
+        _finishRecordTicker();
       });
       if (path != null) {
         store.sendAttachment(
@@ -16778,9 +21600,9 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     try {
-      final dir = await _mediaDirectory();
-      final path =
-          '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final path = kIsWeb
+          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a'
+          : '${(await _mediaDirectory()).path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _recorder.start(
         const RecordConfig(encoder: AudioEncoder.aacLc),
         path: path,
@@ -16789,8 +21611,14 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _recording = true;
         _voiceLocked = false;
+        _emojiOpen = false;
         _recordStartedAt = DateTime.now();
+        _recordElapsed = Duration.zero;
       });
+      _startRecordTicker();
+      if (!_recordGestureActive && !_voiceLocked) {
+        await _toggleVoice(store);
+      }
     } catch (_) {
       if (mounted) _snack(context, 'Ovozli xabarni yozib bo‘lmadi');
     }
@@ -16799,7 +21627,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _cancelVoice() async {
     if (!_recording) return;
     final path = await _recorder.stop();
-    if (path != null) {
+    if (!kIsWeb && path != null) {
       final file = File(path);
       if (await file.exists()) await file.delete();
     }
@@ -16807,9 +21635,25 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _recording = false;
       _voiceLocked = false;
+      _recordGestureActive = false;
       _recordStartedAt = null;
+      _finishRecordTicker();
     });
     _snack(context, 'Ovozli xabar bekor qilindi');
+  }
+
+  Future<void> _activateVoiceButton(AppStore store) async {
+    if (_recording) {
+      _recordGestureActive = false;
+      await _toggleVoice(store);
+      return;
+    }
+    _recordGestureActive = true;
+    await _toggleVoice(store);
+    _recordGestureActive = false;
+    if (mounted && _recording && !_voiceLocked) {
+      setState(() => _voiceLocked = true);
+    }
   }
 
   Future<Directory> _mediaDirectory() async {
@@ -16822,6 +21666,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<String> _saveAttachment(String sourcePath, String type) async {
+    if (kIsWeb) return sourcePath;
     final directory = await _mediaDirectory();
     final dot = sourcePath.lastIndexOf('.');
     final extension = dot == -1 ? '' : sourcePath.substring(dot);
@@ -16830,11 +21675,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     await File(sourcePath).copy(target.path);
     return target.path;
-  }
-
-  String _fileName(String path) {
-    final slash = path.lastIndexOf(Platform.pathSeparator);
-    return slash == -1 ? path : path.substring(slash + 1);
   }
 
   void _openCabinet(Thread thread, SfColors colors) {
@@ -16925,22 +21765,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 7),
+                _TelegramReactionPicker(
+                  selected: store.reactionFor(message),
+                  onSelected: (reaction) {
+                    store.setMessageReaction(message, reaction);
+                    Navigator.of(sheet).pop();
+                  },
+                ),
+                const SizedBox(height: 7),
                 action(Icons.reply_rounded, 'Reply', () {
                   Navigator.of(sheet).pop();
-                  setState(() {
-                    _ctrl.text = '↩ ${message.text} ';
-                  });
+                  _beginReply(message);
                 }),
-                action(Icons.forward_rounded, 'Forward', () {
-                  Navigator.of(sheet).pop();
-                  _snack(context, 'Forward uchun suhbatni tanlang');
-                }),
-                action(Icons.copy_rounded, 'Copy', () async {
-                  await Clipboard.setData(ClipboardData(text: message.text));
-                  if (!mounted) return;
-                  if (sheet.mounted) Navigator.of(sheet).pop();
-                  _snack(context, 'Xabar nusxalandi');
-                }),
+                if (message.kind == ChatMessageKind.text)
+                  action(Icons.copy_rounded, 'Copy', () async {
+                    await Clipboard.setData(ClipboardData(text: message.text));
+                    if (!mounted) return;
+                    if (sheet.mounted) Navigator.of(sheet).pop();
+                    _snack(context, 'Xabar nusxalandi');
+                  }),
+                if (message.mine &&
+                    message.kind == ChatMessageKind.text &&
+                    !message.text.startsWith('📎 '))
+                  action(Icons.edit_outlined, 'Изменить', () {
+                    Navigator.of(sheet).pop();
+                    _beginEdit(message, index);
+                  }),
                 action(
                   pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
                   pinned ? 'Unpin message' : 'Pin message',
@@ -16950,9 +21800,126 @@ class _ChatScreenState extends State<ChatScreen> {
                   },
                 ),
                 action(Icons.delete_outline_rounded, 'Delete', () {
+                  _editedMessages.remove(message);
+                  _replyTargets.remove(message);
+                  if (_editingIndex == index) {
+                    _editingIndex = null;
+                    _replyingTo = null;
+                    _ctrl.clear();
+                    _drafts.remove(widget.threadIdx);
+                  }
                   store.deleteMessage(widget.threadIdx, index);
                   Navigator.of(sheet).pop();
                 }, danger: true),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openChatCalendar() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2032),
+      builder: (context, child) => SfTheme(
+        colors: widget.colors,
+        child: Theme(
+          data: sfMaterialTheme(
+            widget.colors,
+            dark: Theme.of(context).brightness == Brightness.dark,
+          ),
+          child: child!,
+        ),
+      ),
+    );
+    if (date != null && mounted) {
+      _snack(
+        context,
+        'Kalendar: ${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}',
+      );
+    }
+  }
+
+  void _showMessageSearch(List<ChatMsg> messages) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => SfTheme(
+        colors: widget.colors,
+        child: _ChatSearchSheet(messages: messages),
+      ),
+    );
+  }
+
+  void _showChatMenu(Thread thread) {
+    final c = widget.colors;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheet) => SfTheme(
+        colors: c,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: c.borderStrong,
+                    borderRadius: RefRadius.pill,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(Icons.person_outline_rounded, color: c.primary),
+                  title: const Text('Открыть профиль'),
+                  onTap: () {
+                    Navigator.of(sheet).pop();
+                    _openCabinet(thread, c);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    _notificationsEnabled
+                        ? Icons.notifications_off_outlined
+                        : Icons.notifications_active_outlined,
+                    color: c.ink2,
+                  ),
+                  title: Text(
+                    _notificationsEnabled
+                        ? 'Отключить уведомления'
+                        : 'Включить уведомления',
+                  ),
+                  onTap: () {
+                    Navigator.of(sheet).pop();
+                    setState(
+                      () => _notificationsEnabled = !_notificationsEnabled,
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: Icon(Icons.calendar_month_outlined, color: c.ink2),
+                  title: const Text('Перейти к дате'),
+                  onTap: () {
+                    Navigator.of(sheet).pop();
+                    _openChatCalendar();
+                  },
+                ),
               ],
             ),
           ),
@@ -17261,24 +22228,34 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: c.bg,
         body: Column(
           children: [
-            RefNavHeader(
-              title: meta.name,
+            _ChatConversationBar(
+              name: meta.name,
               subtitle: meta.online ? tr(context, 'online') : meta.group,
+              group: meta.isGroup,
               onBack: () => Navigator.of(context).maybePop(),
-              actions: [
-                RefIconAction(
-                  key: const ValueKey('chat-profile-header'),
-                  icon: meta.isGroup
-                      ? Icons.groups_rounded
-                      : Icons.person_outline_rounded,
-                  tooltip: tr(
-                    context,
-                    meta.isGroup ? 'chat_group_info' : 'chat_profile',
-                  ),
-                  onPressed: () => _openCabinet(meta, c),
-                ),
-              ],
+              onOpenProfile: () => _openCabinet(meta, c),
+              onSearch: () => _showMessageSearch(thread.messages),
+              onCall: meta.isGroup
+                  ? null
+                  : () => _launchPhoneCall(context, _chatPhone(meta.name)),
+              onMenu: () => _showChatMenu(meta),
             ),
+            if (store.pinnedMessages[widget.threadIdx]?.isNotEmpty ?? false)
+              Builder(
+                builder: (context) {
+                  final indexes = store.pinnedMessages[widget.threadIdx]!.where(
+                    (index) => index >= 0 && index < thread.messages.length,
+                  );
+                  if (indexes.isEmpty) return const SizedBox.shrink();
+                  final index = indexes.last;
+                  return _PinnedChatBanner(
+                    message: thread.messages[index],
+                    onTap: () => _scrollToMessage(_scroll, index),
+                    onClose: () =>
+                        store.toggleMessagePin(widget.threadIdx, index),
+                  );
+                },
+              ),
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(color: c.bg),
@@ -17286,10 +22263,17 @@ class _ChatScreenState extends State<ChatScreen> {
                   controller: _scroll,
                   padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                   itemCount: thread.messages.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
+                  separatorBuilder: (_, index) => SizedBox(
+                    height: store.reactionFor(thread.messages[index]) == null
+                        ? 8
+                        : 18,
+                  ),
                   itemBuilder: (context, index) => _ReferenceConversationBubble(
                     message: thread.messages[index],
                     time: _messageTime(index),
+                    reaction: store.reactionFor(thread.messages[index]),
+                    edited: _editedMessages.contains(thread.messages[index]),
+                    replyText: _replyTargets[thread.messages[index]]?.text,
                     onLongPress: () =>
                         _messageActions(thread.messages[index], index),
                   ),
@@ -17300,50 +22284,16 @@ class _ChatScreenState extends State<ChatScreen> {
               child: AnimatedSize(
                 duration: RefMotion.resolve(context, RefMotion.quick),
                 curve: Curves.easeOutCubic,
-                child: _recording
-                    ? DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: c.surface2,
-                          border: Border(top: BorderSide(color: c.border)),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 10,
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.mic_rounded,
-                                size: 18,
-                                color: c.danger,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  _voiceLocked
-                                      ? 'Yozilmoqda · yuborish uchun tugmani bosing'
-                                      : 'Yozilmoqda · chapga suring — bekor qilish',
-                                  style: RefType.ui(
-                                    size: 11.5,
-                                    weight: FontWeight.w700,
-                                    color: c.danger,
-                                  ),
-                                ),
-                              ),
-                              if (_voiceLocked)
-                                Icon(
-                                  Icons.lock_rounded,
-                                  size: 16,
-                                  color: c.danger,
-                                ),
-                            ],
-                          ),
-                        ),
-                      )
+                child: _emojiOpen
+                    ? _EmojiTray(onSelect: _insertEmoji, onClose: _toggleEmoji)
                     : const SizedBox.shrink(),
               ),
             ),
+            if (_pendingUploads.isNotEmpty)
+              _ChatUploadQueue(
+                uploads: _pendingUploads,
+                onCancel: _cancelUpload,
+              ),
             _referenceComposer(context, store),
           ],
         ),
@@ -17363,92 +22313,109 @@ class _ChatScreenState extends State<ChatScreen> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-          child: Row(
+          padding: const EdgeInsets.fromLTRB(12, 5, 8, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: 'Attach photo or video',
-                onPressed: () => _attach(store),
-                icon: Icon(
-                  Icons.add_circle_outline_rounded,
-                  size: 23,
-                  color: c.primary,
+              if (_editingIndex != null || _replyingTo != null)
+                _ComposerContextBanner(
+                  editing: _editingIndex != null,
+                  text:
+                      (_editingIndex != null
+                              ? store
+                                    .threads[widget.threadIdx]
+                                    .messages[_editingIndex!]
+                              : _replyingTo!)
+                          .text,
+                  onCancel: _cancelComposerContext,
                 ),
-              ),
-              Expanded(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: c.surface2,
-                    borderRadius: const BorderRadius.all(Radius.circular(20)),
+              Row(
+                children: [
+                  IconButton(
+                    key: const ValueKey('chat-attachment'),
+                    tooltip: 'Attach photo or video',
+                    onPressed: () => _attach(store),
+                    icon: Icon(
+                      Icons.add_circle_outline_rounded,
+                      size: 23,
+                      color: c.primary,
+                    ),
                   ),
-                  child: TextField(
-                    controller: _ctrl,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _send(store),
-                    onChanged: (_) => setState(() {}),
-                    style: RefType.ui(size: 13, color: c.ink),
-                    decoration: InputDecoration(
-                      isCollapsed: true,
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 11,
-                      ),
+                  Expanded(
+                    child: _ChatComposerInput(
+                      controller: _ctrl,
+                      focusNode: _composerFocus,
+                      recording: _recording,
+                      locked: _voiceLocked,
+                      elapsed: _recordElapsed,
+                      colors: c,
+                      emojiOpen: _emojiOpen,
                       hintText: tr(context, 'msg_hint'),
-                      hintStyle: RefType.ui(size: 13, color: c.muted),
+                      onToggleEmoji: _toggleEmoji,
+                      onCancelRecording: _cancelVoice,
+                      onSubmitted: (_) => _send(store),
+                      onChanged: (value) {
+                        _drafts[widget.threadIdx] = value;
+                        setState(() {});
+                      },
                     ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              GestureDetector(
-                onTap: hasText ? () => _send(store) : () => _toggleVoice(store),
-                onLongPressStart: hasText
-                    ? null
-                    : (_) {
-                        if (!_recording) _toggleVoice(store);
-                      },
-                onLongPressMoveUpdate: hasText
-                    ? null
-                    : (details) {
-                        if (!_recording) return;
-                        if (details.offsetFromOrigin.dx < -64) {
-                          _cancelVoice();
-                        } else if (details.offsetFromOrigin.dy < -48 &&
-                            !_voiceLocked) {
-                          setState(() => _voiceLocked = true);
-                        }
-                      },
-                onLongPressEnd: hasText
-                    ? null
-                    : (_) {
-                        if (_recording && !_voiceLocked) _toggleVoice(store);
-                      },
-                child: RefPressable(
-                  onPressed: hasText
-                      ? () => _send(store)
-                      : () => _toggleVoice(store),
-                  borderRadius: const BorderRadius.all(Radius.circular(12)),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: _recording ? c.danger : c.primary,
-                      borderRadius: const BorderRadius.all(Radius.circular(12)),
-                    ),
-                    child: SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Icon(
-                        hasText
-                            ? Icons.send_rounded
-                            : _recording
-                            ? Icons.stop_rounded
-                            : Icons.mic_rounded,
-                        size: 19,
-                        color: Colors.white,
+                  const SizedBox(width: 6),
+                  Semantics(
+                    button: true,
+                    label: hasText
+                        ? 'Отправить сообщение'
+                        : _recording
+                        ? 'Остановить и отправить голосовое сообщение'
+                        : 'Записать голосовое сообщение',
+                    onTap: hasText
+                        ? () => _send(store)
+                        : () => _activateVoiceButton(store),
+                    child: Tooltip(
+                      message: hasText
+                          ? 'Отправить'
+                          : _recording
+                          ? 'Отправить голосовое'
+                          : 'Удерживайте для записи',
+                      child: GestureDetector(
+                        onTap: hasText
+                            ? () => _send(store)
+                            : () => _activateVoiceButton(store),
+                        onLongPressStart: hasText
+                            ? null
+                            : (_) {
+                                _recordGestureActive = true;
+                                if (!_recording) _toggleVoice(store);
+                              },
+                        onLongPressMoveUpdate: hasText
+                            ? null
+                            : (details) {
+                                if (!_recording) return;
+                                if (details.offsetFromOrigin.dx < -64) {
+                                  _recordGestureActive = false;
+                                  _cancelVoice();
+                                } else if (details.offsetFromOrigin.dy < -48 &&
+                                    !_voiceLocked) {
+                                  setState(() => _voiceLocked = true);
+                                }
+                              },
+                        onLongPressEnd: hasText
+                            ? null
+                            : (_) {
+                                _recordGestureActive = false;
+                                if (_recording && !_voiceLocked) {
+                                  _toggleVoice(store);
+                                }
+                              },
+                        child: _TelegramVoiceAction(
+                          hasText: hasText,
+                          recording: _recording,
+                          colors: c,
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -17515,7 +22482,7 @@ class _ChatScreenState extends State<ChatScreen> {
         key: ValueKey(
           'message-$index-${message.mine}-${message.path ?? message.text}',
         ),
-        duration: const Duration(milliseconds: 260),
+        duration: RefMotion.resolve(context, const Duration(milliseconds: 260)),
         curve: Curves.easeOutCubic,
         tween: Tween(begin: 0.0, end: 1.0),
         builder: (context, value, child) => Opacity(
@@ -17551,23 +22518,992 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
+String _chatPhone(String name) {
+  var seed = 0;
+  for (final unit in name.codeUnits) {
+    seed = (seed * 31 + unit) & 0x7fffffff;
+  }
+  final operator = 90 + seed % 10;
+  final number = (1000000 + (seed ~/ 10) % 9000000).toString();
+  return '+998 $operator ${number.substring(0, 3)} ${number.substring(3, 5)} ${number.substring(5)}';
+}
+
+/// Conversation chrome follows the requested action order: leave the chat,
+/// open the person/group profile, then search and calendar. The identity is a
+/// real button, not a decorative title.
+class _ChatConversationBar extends StatelessWidget {
+  const _ChatConversationBar({
+    required this.name,
+    required this.subtitle,
+    required this.group,
+    required this.onBack,
+    required this.onOpenProfile,
+    required this.onSearch,
+    required this.onCall,
+    required this.onMenu,
+    this.profileKey = const ValueKey('chat-profile-header'),
+  });
+
+  final String name;
+  final String subtitle;
+  final bool group;
+  final VoidCallback onBack;
+  final VoidCallback onOpenProfile;
+  final VoidCallback onSearch;
+  final VoidCallback? onCall;
+  final VoidCallback onMenu;
+  final Key profileKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border(bottom: BorderSide(color: c.border)),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: 62,
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: 'Chiqish',
+                onPressed: onBack,
+                icon: Icon(Icons.arrow_back_rounded, color: c.ink),
+              ),
+              Expanded(
+                child: Semantics(
+                  button: true,
+                  label: '$name profili',
+                  child: InkWell(
+                    key: profileKey,
+                    onTap: onOpenProfile,
+                    borderRadius: RefRadius.md,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        children: [
+                          group
+                              ? Container(
+                                  width: 38,
+                                  height: 38,
+                                  decoration: BoxDecoration(
+                                    color: c.primarySoft,
+                                    borderRadius: BorderRadius.circular(13),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Icon(
+                                    Icons.groups_rounded,
+                                    color: c.primary,
+                                    size: 20,
+                                  ),
+                                )
+                              : SfAvatar(name: name, size: 38, color: c.accent),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: RefType.ui(
+                                    size: 13.5,
+                                    weight: FontWeight.w800,
+                                    color: c.ink,
+                                  ),
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: RefType.ui(
+                                    size: 10.5,
+                                    weight: FontWeight.w600,
+                                    color: c.success,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Xabarlardan qidirish',
+                onPressed: onSearch,
+                icon: Icon(Icons.search_rounded, color: c.ink2),
+              ),
+              if (onCall != null)
+                IconButton(
+                  tooltip: 'Qo‘ng‘iroq',
+                  onPressed: onCall,
+                  icon: Icon(Icons.call_outlined, color: c.ink2),
+                ),
+              IconButton(
+                tooltip: 'Chat menyusi',
+                onPressed: onMenu,
+                icon: Icon(Icons.more_vert_rounded, color: c.ink2),
+              ),
+              const SizedBox(width: 2),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+void _scrollToMessage(ScrollController controller, int index) {
+  if (!controller.hasClients || index < 0) return;
+  final target = (index * 76.0).clamp(
+    controller.position.minScrollExtent,
+    controller.position.maxScrollExtent,
+  );
+  controller.animateTo(
+    target.toDouble(),
+    duration: const Duration(milliseconds: 260),
+    curve: Curves.easeOutCubic,
+  );
+}
+
+class _PinnedChatBanner extends StatelessWidget {
+  const _PinnedChatBanner({
+    required this.message,
+    required this.onTap,
+    required this.onClose,
+  });
+
+  final ChatMsg message;
+  final VoidCallback onTap;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final label = message.kind == ChatMessageKind.text
+        ? message.text
+        : message.kind == ChatMessageKind.voice
+        ? 'Голосовое сообщение'
+        : 'Медиа';
+    return Material(
+      color: c.surface,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 43),
+          padding: const EdgeInsets.only(left: 13),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: c.border)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 3,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: c.primary,
+                  borderRadius: RefRadius.pill,
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Закреплённое сообщение',
+                      style: RefType.ui(
+                        size: 10.5,
+                        weight: FontWeight.w800,
+                        color: c.primary,
+                      ),
+                    ),
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: RefType.ui(size: 10.5, color: c.muted),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Открепить',
+                onPressed: onClose,
+                icon: Icon(Icons.close_rounded, size: 18, color: c.muted),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerContextBanner extends StatelessWidget {
+  const _ComposerContextBanner({
+    required this.editing,
+    required this.text,
+    required this.onCancel,
+  });
+
+  final bool editing;
+  final String text;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(48, 0, 2, 4),
+      child: Row(
+        children: [
+          Icon(
+            editing ? Icons.edit_rounded : Icons.reply_rounded,
+            color: c.primary,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  editing ? 'Редактирование' : 'Ответ',
+                  style: RefType.ui(
+                    size: 10.5,
+                    weight: FontWeight.w800,
+                    color: c.primary,
+                  ),
+                ),
+                Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: RefType.ui(size: 10.5, color: c.muted),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Отменить',
+            visualDensity: VisualDensity.compact,
+            onPressed: onCancel,
+            icon: Icon(Icons.close_rounded, size: 18, color: c.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatComposerInput extends StatelessWidget {
+  const _ChatComposerInput({
+    required this.controller,
+    required this.focusNode,
+    required this.recording,
+    required this.locked,
+    required this.elapsed,
+    required this.colors,
+    required this.emojiOpen,
+    required this.hintText,
+    required this.onToggleEmoji,
+    required this.onCancelRecording,
+    required this.onSubmitted,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool recording;
+  final bool locked;
+  final Duration elapsed;
+  final SfColors colors;
+  final bool emojiOpen;
+  final String hintText;
+  final VoidCallback onToggleEmoji;
+  final Future<void> Function() onCancelRecording;
+  final ValueChanged<String> onSubmitted;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final duration = RefMotion.resolve(context, RefMotion.quick);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface2,
+        borderRadius: RefRadius.pill,
+      ),
+      child: ClipRRect(
+        borderRadius: RefRadius.pill,
+        child: AnimatedSwitcher(
+          duration: duration,
+          reverseDuration: duration,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) => SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.34, 0),
+              end: Offset.zero,
+            ).animate(animation),
+            child: FadeTransition(opacity: animation, child: child),
+          ),
+          child: recording
+              ? _VoiceComposerOverlay(
+                  key: const ValueKey('voice-composer-overlay'),
+                  elapsed: elapsed,
+                  locked: locked,
+                  colors: colors,
+                  onCancel: () => onCancelRecording(),
+                )
+              : Row(
+                  key: const ValueKey('editable-chat-input'),
+                  children: [
+                    IconButton(
+                      key: const ValueKey('chat-emoji-button'),
+                      tooltip: emojiOpen ? 'Закрыть эмодзи' : 'Эмодзи',
+                      onPressed: onToggleEmoji,
+                      icon: Icon(
+                        emojiOpen
+                            ? Icons.keyboard_rounded
+                            : Icons.emoji_emotions_outlined,
+                        size: 20,
+                        color: emojiOpen ? colors.primary : colors.muted,
+                      ),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        key: const ValueKey('editable-chat-text-field'),
+                        controller: controller,
+                        focusNode: focusNode,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: onSubmitted,
+                        onChanged: onChanged,
+                        style: RefType.ui(size: 13, color: colors.ink),
+                        decoration: InputDecoration(
+                          isCollapsed: true,
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 12,
+                          ),
+                          hintText: hintText,
+                          hintStyle: RefType.ui(size: 13, color: colors.muted),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceComposerOverlay extends StatelessWidget {
+  const _VoiceComposerOverlay({
+    super.key,
+    required this.elapsed,
+    required this.locked,
+    required this.colors,
+    required this.onCancel,
+  });
+
+  final Duration elapsed;
+  final bool locked;
+  final SfColors colors;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final mm = elapsed.inMinutes.toString().padLeft(2, '0');
+    final ss = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+    return Semantics(
+      label: locked
+          ? 'Запись заблокирована. Нажмите кнопку отправки для завершения.'
+          : 'Идёт запись. Свайп влево отменяет, свайп вверх блокирует.',
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            const SizedBox(width: 10),
+            _LiveVoiceMeter(color: colors.danger),
+            const SizedBox(width: 7),
+            Text(
+              '$mm:$ss',
+              style: RefType.mono(
+                size: 11,
+                weight: FontWeight.w800,
+                color: colors.danger,
+              ),
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                locked ? 'Запись закреплена' : '← отмена  ·  ↑ замок',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: RefType.ui(
+                  size: 9.5,
+                  weight: FontWeight.w700,
+                  color: colors.muted,
+                ),
+              ),
+            ),
+            if (locked)
+              Icon(Icons.lock_rounded, size: 15, color: colors.danger),
+            IconButton(
+              tooltip: 'Отменить запись',
+              onPressed: onCancel,
+              icon: Icon(
+                Icons.delete_outline_rounded,
+                size: 19,
+                color: colors.danger,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuotedMessageSnippet extends StatelessWidget {
+  const _QuotedMessageSnippet({required this.text, required this.mine});
+  final String text;
+  final bool mine;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 220),
+      padding: const EdgeInsets.fromLTRB(9, 5, 10, 5),
+      decoration: BoxDecoration(
+        color: mine ? c.primarySoft : c.surface2,
+        borderRadius: BorderRadius.circular(9),
+        border: Border(left: BorderSide(color: c.primary, width: 3)),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: RefType.ui(size: 10, color: c.ink2),
+      ),
+    );
+  }
+}
+
+class _EmojiTray extends StatelessWidget {
+  const _EmojiTray({required this.onSelect, required this.onClose});
+
+  final ValueChanged<String> onSelect;
+  final VoidCallback onClose;
+
+  static const _emojis = <String>[
+    '😀',
+    '😁',
+    '😂',
+    '🥹',
+    '😍',
+    '🤝',
+    '👍',
+    '👏',
+    '🔥',
+    '🎉',
+    '❤️',
+    '✅',
+    '🙏',
+    '🤔',
+    '😢',
+    '🚀',
+    '📚',
+    '💡',
+    '📌',
+    '💬',
+    '👀',
+    '⭐',
+    '💯',
+    '😎',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border(top: BorderSide(color: c.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 9, 10, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'EMOJI',
+                    style: RefType.eyebrow(color: c.primary, size: 9),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Emoji oynasini yopish',
+                    onPressed: onClose,
+                    icon: Icon(
+                      Icons.keyboard_rounded,
+                      color: c.muted,
+                      size: 20,
+                    ),
+                  ),
+                ],
+              ),
+              Wrap(
+                spacing: 4,
+                runSpacing: 3,
+                children: [
+                  for (final emoji in _emojis)
+                    Semantics(
+                      button: true,
+                      label: 'Emoji $emoji',
+                      child: InkWell(
+                        onTap: () => onSelect(emoji),
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: Center(
+                            child: Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 21),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TelegramReactionPicker extends StatelessWidget {
+  const _TelegramReactionPicker({required this.onSelected, this.selected});
+
+  final ValueChanged<String> onSelected;
+  final String? selected;
+  static const reactions = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: c.surface2,
+          borderRadius: RefRadius.pill,
+          border: Border.all(color: c.border),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+          child: Row(
+            children: [
+              for (final reaction in reactions)
+                Semantics(
+                  button: true,
+                  selected: selected == reaction,
+                  label: 'Реакция $reaction',
+                  child: Tooltip(
+                    message: 'Реакция $reaction',
+                    child: InkWell(
+                      onTap: () => onSelected(reaction),
+                      borderRadius: RefRadius.pill,
+                      child: AnimatedContainer(
+                        duration: RefMotion.resolve(
+                          context,
+                          const Duration(milliseconds: 140),
+                        ),
+                        width: 44,
+                        height: 44,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: selected == reaction ? c.primarySoft : null,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Text(
+                          reaction,
+                          style: const TextStyle(fontSize: 22),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageReactionBadge extends StatelessWidget {
+  const _MessageReactionBadge({required this.reaction});
+  final String reaction;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      height: 25,
+      constraints: const BoxConstraints(minWidth: 35),
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: RefRadius.pill,
+        border: Border.all(color: c.border),
+        boxShadow: RefShadows.soft,
+      ),
+      child: Text('$reaction 1', style: const TextStyle(fontSize: 13)),
+    );
+  }
+}
+
+class _TelegramVoiceAction extends StatefulWidget {
+  const _TelegramVoiceAction({
+    required this.hasText,
+    required this.recording,
+    required this.colors,
+  });
+
+  final bool hasText;
+  final bool recording;
+  final SfColors colors;
+
+  @override
+  State<_TelegramVoiceAction> createState() => _TelegramVoiceActionState();
+}
+
+class _TelegramVoiceActionState extends State<_TelegramVoiceAction>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+  }
+
+  void _syncPulse() {
+    final disabled = MediaQuery.disableAnimationsOf(context);
+    if (widget.recording && !disabled) {
+      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
+    } else {
+      _pulse
+        ..stop()
+        ..value = widget.recording ? .45 : 0;
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(_TelegramVoiceAction oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.recording != oldWidget.recording) _syncPulse();
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (widget.recording)
+            AnimatedBuilder(
+              animation: _pulse,
+              builder: (_, _) => Container(
+                width: 34 + _pulse.value * 12,
+                height: 34 + _pulse.value * 12,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: c.danger.withValues(alpha: .12 + _pulse.value * .16),
+                ),
+              ),
+            ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: widget.recording ? c.danger : c.primary,
+              borderRadius: const BorderRadius.all(Radius.circular(13)),
+              boxShadow: [
+                BoxShadow(
+                  color: (widget.recording ? c.danger : c.primary).withValues(
+                    alpha: .30,
+                  ),
+                  blurRadius: 12,
+                ),
+              ],
+            ),
+            child: SizedBox(
+              width: 42,
+              height: 42,
+              child: Icon(
+                widget.hasText
+                    ? Icons.send_rounded
+                    : widget.recording
+                    ? Icons.stop_rounded
+                    : Icons.mic_rounded,
+                size: 19,
+                color: c.surface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LiveVoiceMeter extends StatefulWidget {
+  const _LiveVoiceMeter({required this.color});
+  final Color color;
+
+  @override
+  State<_LiveVoiceMeter> createState() => _LiveVoiceMeterState();
+}
+
+class _LiveVoiceMeterState extends State<_LiveVoiceMeter>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _controller
+        ..stop()
+        ..value = .45;
+    } else if (!_controller.isAnimating) {
+      _controller.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    builder: (_, _) => SizedBox(
+      width: 34,
+      height: 22,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (var index = 0; index < 5; index++)
+            Container(
+              width: 3,
+              height: 6 + ((index.isEven ? 1 : .55) + _controller.value) * 7,
+              decoration: BoxDecoration(
+                color: widget.color,
+                borderRadius: BorderRadius.circular(99),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ChatSearchSheet extends StatefulWidget {
+  const _ChatSearchSheet({required this.messages});
+  final List<ChatMsg> messages;
+
+  @override
+  State<_ChatSearchSheet> createState() => _ChatSearchSheetState();
+}
+
+class _ChatSearchSheetState extends State<_ChatSearchSheet> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final matches = widget.messages.where((message) {
+      return message.text.toLowerCase().contains(_query.toLowerCase());
+    }).toList();
+    return SafeArea(
+      top: false,
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * .72,
+        ),
+        padding: const EdgeInsets.fromLTRB(18, 10, 18, 20),
+        decoration: BoxDecoration(
+          color: c.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: c.borderStrong,
+                borderRadius: RefRadius.pill,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _search,
+              autofocus: true,
+              onChanged: (value) => setState(() => _query = value),
+              style: RefType.ui(size: 14, color: c.ink),
+              decoration: InputDecoration(
+                hintText: 'Xabarlardan qidirish',
+                prefixIcon: Icon(Icons.search_rounded, color: c.primary),
+                filled: true,
+                fillColor: c.surface2,
+                border: OutlineInputBorder(
+                  borderRadius: RefRadius.md,
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: matches.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Mos xabar topilmadi',
+                        style: RefType.ui(size: 13, color: c.muted),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: matches.length,
+                      separatorBuilder: (_, _) =>
+                          Divider(height: 1, color: c.border),
+                      itemBuilder: (_, index) {
+                        final message = matches[index];
+                        final label = message.text.isEmpty
+                            ? switch (message.kind) {
+                                ChatMessageKind.image => 'Rasm',
+                                ChatMessageKind.video => 'Video',
+                                ChatMessageKind.voice => 'Ovozli xabar',
+                                ChatMessageKind.text => '',
+                              }
+                            : message.text;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            message.mine
+                                ? Icons.reply_rounded
+                                : Icons.chat_bubble_outline_rounded,
+                            color: message.mine ? c.primary : c.muted,
+                          ),
+                          title: Text(
+                            label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: RefType.ui(
+                              size: 12.5,
+                              weight: FontWeight.w600,
+                              color: c.ink,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ReferenceConversationBubble extends StatelessWidget {
   const _ReferenceConversationBubble({
     required this.message,
     required this.time,
     required this.onLongPress,
+    this.reaction,
+    this.edited = false,
+    this.replyText,
   });
 
   final ChatMsg message;
   final String time;
   final VoidCallback onLongPress;
+  final String? reaction;
+  final bool edited;
+  final String? replyText;
 
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final mine = message.mine;
-    final body = message.kind == ChatMessageKind.text
-        ? RefChatBubble(text: message.text, mine: mine, time: time)
+    final displayTime = edited ? '$time · изменено' : time;
+    final messageBody = message.kind == ChatMessageKind.text
+        ? (message.text.startsWith('📎 ')
+              ? _ChatFileMessageBody(
+                  label: message.text.substring(2).trim(),
+                  mine: mine,
+                  time: displayTime,
+                )
+              : RefChatBubble(
+                  text: message.text,
+                  mine: mine,
+                  time: displayTime,
+                ))
         : RefSurfaceCard(
             color: mine ? c.primary : c.surface,
             radius: BorderRadius.only(
@@ -17587,7 +23523,7 @@ class _ReferenceConversationBubble extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(10, 0, 11, 7),
                   child: Text(
-                    time,
+                    displayTime,
                     style: RefType.mono(
                       size: 8.5,
                       color: mine ? c.surface.withValues(alpha: .72) : c.muted,
@@ -17596,6 +23532,18 @@ class _ReferenceConversationBubble extends StatelessWidget {
                 ),
               ],
             ),
+          );
+    final body = replyText == null
+        ? messageBody
+        : Column(
+            crossAxisAlignment: mine
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
+            children: [
+              _QuotedMessageSnippet(text: replyText!, mine: mine),
+              const SizedBox(height: 3),
+              messageBody,
+            ],
           );
     return GestureDetector(
       onLongPress: onLongPress,
@@ -17607,7 +23555,19 @@ class _ReferenceConversationBubble extends StatelessWidget {
           constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * .76,
           ),
-          child: body,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              body,
+              if (reaction != null)
+                Positioned(
+                  right: mine ? 8 : null,
+                  left: mine ? null : 8,
+                  bottom: -13,
+                  child: _MessageReactionBadge(reaction: reaction!),
+                ),
+            ],
+          ),
         ),
         builder: (context, value, child) => Opacity(
           opacity: value,
@@ -17619,6 +23579,79 @@ class _ReferenceConversationBubble extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ChatFileMessageBody extends StatelessWidget {
+  const _ChatFileMessageBody({
+    required this.label,
+    required this.mine,
+    required this.time,
+  });
+
+  final String label;
+  final bool mine;
+  final String time;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final foreground = mine ? c.surface : c.ink;
+    return Container(
+      width: 238,
+      padding: const EdgeInsets.fromLTRB(9, 8, 10, 7),
+      decoration: BoxDecoration(
+        color: mine ? c.primary : c.surface,
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(15),
+          topRight: const Radius.circular(15),
+          bottomLeft: Radius.circular(mine ? 15 : 4),
+          bottomRight: Radius.circular(mine ? 4 : 15),
+        ),
+        border: mine ? null : Border.all(color: c.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: foreground.withValues(alpha: .14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: Icon(Icons.description_rounded, color: foreground, size: 20),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: RefType.ui(
+                    size: 11.5,
+                    weight: FontWeight.w700,
+                    color: foreground,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Файл · $time',
+                  style: RefType.mono(
+                    size: 8.5,
+                    color: foreground.withValues(alpha: .7),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.download_rounded, color: foreground, size: 19),
+        ],
       ),
     );
   }
@@ -17705,6 +23738,46 @@ class _ChatVisualStyle {
 }
 
 _ChatVisualStyle _chatVisualStyle(SfChatDesign design, SfColors fallback) {
+  final darkCanvas = fallback.bg.computeLuminance() < .12;
+  // Most chat skins were originally light-only mockups.  Respect the app
+  // theme first so selecting Telegram, WhatsApp, Glass, Gradient, Minimal or
+  // Nature can never punch a bright white conversation through dark mode.
+  if (darkCanvas &&
+      design != SfChatDesign.modernDark &&
+      design != SfChatDesign.neon) {
+    final isGradient = design == SfChatDesign.gradient;
+    return _ChatVisualStyle(
+      design: design,
+      canvas: fallback.bg,
+      appBar: isGradient ? Colors.transparent : fallback.surface,
+      appBarText: fallback.ink,
+      presence: fallback.success,
+      incoming: fallback.surface2,
+      outgoing: fallback.primary,
+      incomingText: fallback.ink,
+      outgoingText: fallback.surface,
+      composer: fallback.surface,
+      input: fallback.surface2,
+      inputText: fallback.ink,
+      icon: fallback.ink2,
+      muted: fallback.muted,
+      action: fallback.primary,
+      accent: fallback.accent,
+      danger: fallback.danger,
+      border: fallback.border,
+      incomingBorder: fallback.borderStrong,
+      outgoingBorder: fallback.primary.withValues(alpha: .55),
+      incomingTime: fallback.muted,
+      outgoingTime: fallback.surface.withValues(alpha: .76),
+      appBarGradient: isGradient
+          ? LinearGradient(colors: [fallback.primary, fallback.accent])
+          : null,
+      outgoingGradient: isGradient
+          ? LinearGradient(colors: [fallback.primary, fallback.accent])
+          : null,
+      glass: design == SfChatDesign.glass,
+    );
+  }
   const darkText = Color(0xFF1D2B35);
   return switch (design) {
     SfChatDesign.telegram => const _ChatVisualStyle(
@@ -17930,59 +24003,70 @@ class _ChatWallpaper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final background = switch (style) {
-      SfChatWallpaper.telegramClouds => const LinearGradient(
-        colors: [Color(0xFFEAF6FE), Color(0xFFD7ECFA)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.whatsappPattern => const LinearGradient(
-        colors: [Color(0xFFEAF5EE), Color(0xFFD7E9DA)],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ),
-      SfChatWallpaper.mountains => const LinearGradient(
-        colors: [Color(0xFFD9E9E9), Color(0xFFEDF4EF)],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ),
-      SfChatWallpaper.aurora => const LinearGradient(
-        colors: [Color(0xFF15233E), Color(0xFF29445E), Color(0xFF27334F)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.space => const LinearGradient(
-        colors: [Color(0xFF080C1C), Color(0xFF151337), Color(0xFF11162C)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.ocean => const LinearGradient(
-        colors: [Color(0xFFDDF5F2), Color(0xFFAEDFD9), Color(0xFFB4D9E9)],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ),
-      SfChatWallpaper.sakura => const LinearGradient(
-        colors: [Color(0xFFFFF2F5), Color(0xFFF8DCE7), Color(0xFFF4E6EE)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.abstract => const LinearGradient(
-        colors: [Color(0xFFE9E6FA), Color(0xFFF8ECF6), Color(0xFFE5F1FB)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.gradient => const LinearGradient(
-        colors: [Color(0xFF8574DF), Color(0xFFE885B5), Color(0xFFF9C976)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
-      SfChatWallpaper.blur => LinearGradient(
-        colors: [baseColor, Colors.white.withValues(alpha: 0.72)],
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-      ),
-      _ => null,
-    };
+    final darkCanvas = colors.bg.computeLuminance() < .12;
+    final background =
+        darkCanvas &&
+            style != SfChatWallpaper.aurora &&
+            style != SfChatWallpaper.space &&
+            style != SfChatWallpaper.gradient
+        ? LinearGradient(
+            colors: [baseColor, colors.surface2],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          )
+        : switch (style) {
+            SfChatWallpaper.telegramClouds => const LinearGradient(
+              colors: [Color(0xFFEAF6FE), Color(0xFFD7ECFA)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.whatsappPattern => const LinearGradient(
+              colors: [Color(0xFFEAF5EE), Color(0xFFD7E9DA)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            SfChatWallpaper.mountains => const LinearGradient(
+              colors: [Color(0xFFD9E9E9), Color(0xFFEDF4EF)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            SfChatWallpaper.aurora => const LinearGradient(
+              colors: [Color(0xFF15233E), Color(0xFF29445E), Color(0xFF27334F)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.space => const LinearGradient(
+              colors: [Color(0xFF080C1C), Color(0xFF151337), Color(0xFF11162C)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.ocean => const LinearGradient(
+              colors: [Color(0xFFDDF5F2), Color(0xFFAEDFD9), Color(0xFFB4D9E9)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            SfChatWallpaper.sakura => const LinearGradient(
+              colors: [Color(0xFFFFF2F5), Color(0xFFF8DCE7), Color(0xFFF4E6EE)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.abstract => const LinearGradient(
+              colors: [Color(0xFFE9E6FA), Color(0xFFF8ECF6), Color(0xFFE5F1FB)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.gradient => const LinearGradient(
+              colors: [Color(0xFF8574DF), Color(0xFFE885B5), Color(0xFFF9C976)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            SfChatWallpaper.blur => LinearGradient(
+              colors: [baseColor, Colors.white.withValues(alpha: 0.72)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            _ => null,
+          };
     return Container(
       decoration: BoxDecoration(
         color: baseColor,
@@ -18147,54 +24231,368 @@ class _ChatWallpaperPainter extends CustomPainter {
       old.style != style || old.color != color || old.accent != accent;
 }
 
-enum _AttachmentChoice { galleryImage, cameraImage, galleryVideo, cameraVideo }
+enum _AttachmentChoice {
+  galleryImage,
+  cameraImage,
+  galleryVideo,
+  cameraVideo,
+  document,
+  file,
+}
 
-class _AttachmentOption extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String title;
-  final VoidCallback onTap;
-  const _AttachmentOption({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.onTap,
+class _PreparedChatAttachment {
+  const _PreparedChatAttachment({
+    required this.path,
+    required this.name,
+    required this.choice,
+    this.messageKind,
   });
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          child: Row(
+
+  final String path;
+  final String name;
+  final _AttachmentChoice choice;
+  final ChatMessageKind? messageKind;
+
+  _PreparedChatAttachment copyWith({String? path}) => _PreparedChatAttachment(
+    path: path ?? this.path,
+    name: name,
+    choice: choice,
+    messageKind: messageKind,
+  );
+}
+
+class _PendingChatUpload {
+  _PendingChatUpload(this.attachment)
+    : id = '${DateTime.now().microsecondsSinceEpoch}-${attachment.name}';
+
+  final String id;
+  final _PreparedChatAttachment attachment;
+  double progress = 0;
+}
+
+Future<_PreparedChatAttachment?> _pickChatAttachment({
+  required BuildContext context,
+  required SfColors colors,
+  required ImagePicker picker,
+}) async {
+  final choice = await showModalBottomSheet<_AttachmentChoice>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (sheet) => SfTheme(
+      colors: colors,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: 38,
+                height: 4,
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(13),
+                  color: colors.muted2,
+                  borderRadius: RefRadius.pill,
                 ),
-                child: Icon(icon, color: color, size: 21),
               ),
-              const SizedBox(width: 13),
+              const SizedBox(height: 10),
               Text(
-                title,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: c.ink,
-                ),
+                'Вложения сохраняются в локальный чат на этом устройстве',
+                textAlign: TextAlign.center,
+                style: RefType.ui(size: 10.5, color: colors.muted),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.photo_library_rounded,
+                      color: const Color(0xFF668CF4),
+                      title: 'Фото',
+                      onTap: () => Navigator.of(
+                        sheet,
+                      ).pop(_AttachmentChoice.galleryImage),
+                    ),
+                  ),
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.camera_alt_rounded,
+                      color: const Color(0xFF43A96B),
+                      title: 'Камера',
+                      onTap: () => Navigator.of(
+                        sheet,
+                      ).pop(_AttachmentChoice.cameraImage),
+                    ),
+                  ),
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.video_library_rounded,
+                      color: const Color(0xFFE26D68),
+                      title: 'Видео',
+                      onTap: () => Navigator.of(
+                        sheet,
+                      ).pop(_AttachmentChoice.galleryVideo),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.videocam_rounded,
+                      color: const Color(0xFFE4A33B),
+                      title: 'Снять видео',
+                      onTap: () => Navigator.of(
+                        sheet,
+                      ).pop(_AttachmentChoice.cameraVideo),
+                    ),
+                  ),
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.description_rounded,
+                      color: const Color(0xFF8A67D5),
+                      title: 'Документ',
+                      onTap: () =>
+                          Navigator.of(sheet).pop(_AttachmentChoice.document),
+                    ),
+                  ),
+                  Expanded(
+                    child: _AttachmentGridOption(
+                      icon: Icons.folder_zip_rounded,
+                      color: const Color(0xFF4C8A9C),
+                      title: 'Файл',
+                      onTap: () =>
+                          Navigator.of(sheet).pop(_AttachmentChoice.file),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
         ),
       ),
+    ),
+  );
+  if (choice == null) return null;
+
+  final isVideo =
+      choice == _AttachmentChoice.galleryVideo ||
+      choice == _AttachmentChoice.cameraVideo;
+  final isMedia =
+      isVideo ||
+      choice == _AttachmentChoice.galleryImage ||
+      choice == _AttachmentChoice.cameraImage;
+  if (isMedia) {
+    final camera =
+        choice == _AttachmentChoice.cameraImage ||
+        choice == _AttachmentChoice.cameraVideo;
+    final source = camera ? ImageSource.camera : ImageSource.gallery;
+    final picked = isVideo
+        ? await picker.pickVideo(source: source)
+        : await picker.pickImage(source: source, imageQuality: 90);
+    if (picked == null) return null;
+    return _PreparedChatAttachment(
+      path: picked.path,
+      name: _portableFileName(picked.path),
+      choice: choice,
+      messageKind: isVideo ? ChatMessageKind.video : ChatMessageKind.image,
+    );
+  }
+
+  final result = await FilePicker.pickFiles(
+    type: choice == _AttachmentChoice.document ? FileType.custom : FileType.any,
+    allowedExtensions: choice == _AttachmentChoice.document
+        ? const ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt']
+        : null,
+    withData: kIsWeb,
+  );
+  if (result == null || result.files.isEmpty) return null;
+  final file = result.files.single;
+  return _PreparedChatAttachment(
+    path: file.xFile.path,
+    name: file.name,
+    choice: choice,
+  );
+}
+
+String _portableFileName(String path) {
+  final normalized = path.replaceAll('\\', '/');
+  final slash = normalized.lastIndexOf('/');
+  return slash == -1 ? normalized : normalized.substring(slash + 1);
+}
+
+class _AttachmentGridOption extends StatelessWidget {
+  const _AttachmentGridOption({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: RefRadius.md,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 3),
+        child: Column(
+          children: [
+            Container(
+              width: 45,
+              height: 45,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .14),
+                borderRadius: BorderRadius.circular(15),
+              ),
+              alignment: Alignment.center,
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: RefType.ui(
+                size: 10.5,
+                weight: FontWeight.w700,
+                color: c.ink2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatUploadQueue extends StatelessWidget {
+  const _ChatUploadQueue({required this.uploads, required this.onCancel});
+
+  final List<_PendingChatUpload> uploads;
+  final ValueChanged<_PendingChatUpload> onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      height: 82,
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border(top: BorderSide(color: c.border)),
+      ),
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        scrollDirection: Axis.horizontal,
+        itemCount: uploads.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (_, index) {
+          final upload = uploads[index];
+          return Container(
+            width: 222,
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: c.surface2,
+              borderRadius: RefRadius.md,
+              border: Border.all(color: c.border),
+            ),
+            child: Row(
+              children: [
+                _UploadThumbnail(attachment: upload.attachment),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        upload.attachment.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RefType.ui(
+                          size: 10.5,
+                          weight: FontWeight.w700,
+                          color: c.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      LinearProgressIndicator(
+                        value: upload.progress,
+                        minHeight: 3,
+                        borderRadius: RefRadius.pill,
+                        color: c.primary,
+                        backgroundColor: c.border,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Локальная подготовка · ${(upload.progress * 100).round()}%',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: RefType.mono(size: 8.5, color: c.muted),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Отменить подготовку вложения',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => onCancel(upload),
+                  icon: Icon(Icons.close_rounded, color: c.danger, size: 18),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _UploadThumbnail extends StatelessWidget {
+  const _UploadThumbnail({required this.attachment});
+  final _PreparedChatAttachment attachment;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    Widget fallback(IconData icon) => Container(
+      color: c.primarySoft,
+      alignment: Alignment.center,
+      child: Icon(icon, color: c.primary, size: 20),
+    );
+    final child = attachment.messageKind == ChatMessageKind.image
+        ? (kIsWeb
+              ? Image.network(
+                  attachment.path,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback(Icons.image_outlined),
+                )
+              : Image.file(
+                  File(attachment.path),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback(Icons.image_outlined),
+                ))
+        : fallback(
+            attachment.messageKind == ChatMessageKind.video
+                ? Icons.play_circle_outline_rounded
+                : attachment.choice == _AttachmentChoice.document
+                ? Icons.description_outlined
+                : Icons.insert_drive_file_outlined,
+          );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(width: 48, height: 48, child: child),
     );
   }
 }
@@ -18292,33 +24690,44 @@ class _ChatImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
+    final image = kIsWeb
+        ? Image.network(
+            path,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _imageError(c),
+          )
+        : Image.file(
+            File(path),
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => _imageError(c),
+          );
     return InkWell(
-      onTap: () => showDialog<void>(
-        context: context,
-        builder: (_) => Dialog(
-          backgroundColor: Colors.black,
-          insetPadding: const EdgeInsets.all(12),
-          child: InteractiveViewer(
-            child: Image.file(File(path), fit: BoxFit.contain),
-          ),
-        ),
-      ),
+      onTap: kIsWeb
+          ? null
+          : () => showDialog<void>(
+              context: context,
+              builder: (_) => Dialog(
+                backgroundColor: Colors.black,
+                insetPadding: const EdgeInsets.all(12),
+                child: InteractiveViewer(
+                  child: Image.file(File(path), fit: BoxFit.contain),
+                ),
+              ),
+            ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 244, maxHeight: 270),
-        child: Image.file(
-          File(path),
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => Container(
-            width: 218,
-            height: 140,
-            color: c.surface3,
-            alignment: Alignment.center,
-            child: Icon(Icons.broken_image_outlined, color: c.muted, size: 30),
-          ),
-        ),
+        child: image,
       ),
     );
   }
+
+  Widget _imageError(SfColors c) => Container(
+    width: 218,
+    height: 140,
+    color: c.surface3,
+    alignment: Alignment.center,
+    child: Icon(Icons.broken_image_outlined, color: c.muted, size: 30),
+  );
 }
 
 class _VideoMessage extends StatefulWidget {
@@ -18337,7 +24746,9 @@ class _VideoMessageState extends State<_VideoMessage> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.file(File(widget.path));
+    _controller = kIsWeb
+        ? VideoPlayerController.networkUrl(Uri.parse(widget.path))
+        : VideoPlayerController.file(File(widget.path));
     _controller
         .initialize()
         .then((_) {
@@ -18455,6 +24866,7 @@ class _VoiceMessageState extends State<_VoiceMessage> {
   late final AudioPlayer _player;
   bool _ready = false;
   bool _playing = false;
+  Duration _position = Duration.zero;
 
   @override
   void initState() {
@@ -18463,8 +24875,15 @@ class _VoiceMessageState extends State<_VoiceMessage> {
     _player.playerStateStream.listen((state) {
       if (mounted) setState(() => _playing = state.playing);
     });
+    _player.positionStream.listen((position) {
+      if (mounted) setState(() => _position = position);
+    });
     _player
-        .setFilePath(widget.path)
+        .setAudioSource(
+          kIsWeb
+              ? AudioSource.uri(Uri.parse(widget.path))
+              : AudioSource.file(widget.path),
+        )
         .then((_) {
           if (mounted) setState(() => _ready = true);
         })
@@ -18493,6 +24912,10 @@ class _VoiceMessageState extends State<_VoiceMessage> {
     final waveColor = widget.mine
         ? Colors.white.withValues(alpha: 0.68)
         : c.primary.withValues(alpha: 0.7);
+    final duration = widget.duration ?? _player.duration ?? Duration.zero;
+    final progress = duration.inMilliseconds == 0
+        ? 0.0
+        : (_position.inMilliseconds / duration.inMilliseconds).clamp(0, 1);
     return SizedBox(
       width: 214,
       child: Row(
@@ -18528,7 +24951,9 @@ class _VoiceMessageState extends State<_VoiceMessage> {
                         height: 5.0 + (i * 7 % 15),
                         margin: const EdgeInsets.only(right: 2),
                         decoration: BoxDecoration(
-                          color: waveColor,
+                          color: i / 18 <= progress
+                              ? iconColor
+                              : waveColor.withValues(alpha: .48),
                           borderRadius: BorderRadius.circular(3),
                         ),
                       ),
@@ -18536,7 +24961,9 @@ class _VoiceMessageState extends State<_VoiceMessage> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  _durationLabel(widget.duration),
+                  _position > Duration.zero
+                      ? _durationLabel(_position)
+                      : _durationLabel(duration),
                   style: TextStyle(
                     fontFamily: SfType.mono,
                     fontSize: 9.5,
@@ -18575,6 +25002,8 @@ class ProfileScreen extends StatelessWidget {
     final c = SfTheme.of(context);
     final store = AppScope.of(context);
     final settings = SettingsScope.of(context);
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final live = api?.authenticated == true;
     void openDesign() => showDesignPanel(context, cfg.role);
     void openEdit() => Navigator.of(context).push(
       sfPageRoute(
@@ -18584,6 +25013,17 @@ class ProfileScreen extends StatelessWidget {
         ),
       ),
     );
+    Future<void> logout() async {
+      try {
+        if (live) await api!.logout();
+      } catch (_) {
+        // ApiSession.logout clears tokens and private caches in its finally
+        // block. A failed server-side revoke must not trap the user in-app.
+      } finally {
+        onSwitchRole();
+      }
+    }
+
     final who = store.nameOverride ?? cfg.who;
     final title = store.titleOverride ?? cfg.roleTitle;
     // (label, value, onTap) — theme/lang/currency change inline, instantly.
@@ -18591,7 +25031,32 @@ class ProfileScreen extends StatelessWidget {
       (
         tr(context, 'set_role'),
         cfg.label,
-        () => _toast(context, '${cfg.roleTitle} · ${cfg.scope}'),
+        () {
+          final allowed = [
+            for (final group in menuFor(cfg.role))
+              for (final item in group.items) item.label,
+          ];
+          _showDetailsSheet(
+            context,
+            title: cfg.roleTitle,
+            subtitle: '${cfg.label} · ${cfg.scope}',
+            icon: Icons.admin_panel_settings_rounded,
+            fields: [
+              (icon: Icons.badge_outlined, label: 'Роль', value: cfg.label),
+              (icon: Icons.public_rounded, label: 'Область', value: cfg.scope),
+              (
+                icon: Icons.apps_rounded,
+                label: 'Доступных разделов',
+                value: '${allowed.length}',
+              ),
+              (
+                icon: Icons.verified_user_outlined,
+                label: 'Права',
+                value: allowed.join(', '),
+              ),
+            ],
+          );
+        },
       ),
       (
         tr(context, 'set_currency'),
@@ -18749,27 +25214,6 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
               ),
-              _ProfileLink(
-                icon: Icons.widgets_rounded,
-                title: tr(context, 'all_sections'),
-                sub: tr(context, 'all_sections_sub'),
-                onTap: () => Navigator.of(context).push(
-                  sfPageRoute(
-                    SfTheme(
-                      colors: c,
-                      child: MenuHub(colors: c, role: cfg.role),
-                    ),
-                  ),
-                ),
-              ),
-              _ProfileLink(
-                icon: Icons.auto_awesome_rounded,
-                title: tr(context, 'all_modules'),
-                sub: tr(context, 'all_modules_sub'),
-                onTap: () => Navigator.of(
-                  context,
-                ).push(sfPageRoute(ModulesHub(colors: c))),
-              ),
               SfCard(
                 child: Column(
                   children: [
@@ -18812,31 +25256,33 @@ class ProfileScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 2),
-              GestureDetector(
-                onTap: onSwitchRole,
-                child: Container(
-                  width: double.infinity,
-                  alignment: Alignment.center,
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  decoration: BoxDecoration(
-                    color: c.surface2,
-                    border: Border.all(color: c.border),
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Text(
-                    tr(context, 'btn_switch_role'),
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: c.ink2,
+              if (!live) ...[
+                GestureDetector(
+                  onTap: onSwitchRole,
+                  child: Container(
+                    width: double.infinity,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    decoration: BoxDecoration(
+                      color: c.surface2,
+                      border: Border.all(color: c.border),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Text(
+                      tr(context, 'btn_switch_role'),
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: c.ink2,
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 10),
+              ],
               GestureDetector(
-                onTap: onSwitchRole,
+                onTap: logout,
                 child: Container(
                   width: double.infinity,
                   alignment: Alignment.center,
@@ -18861,7 +25307,7 @@ class ProfileScreen extends StatelessWidget {
               // Build marker — lets a tester confirm at a glance which APK is running.
               Center(
                 child: Text(
-                  'StarForge EDU · v1.0.8',
+                  'StarForge EDU · v$kAppDisplayVersion',
                   style: TextStyle(
                     fontFamily: SfType.mono,
                     fontSize: 10.5,
@@ -18874,66 +25320,6 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// A bordered nav card used on the profile (modules / sections / …).
-class _ProfileLink extends StatelessWidget {
-  final IconData icon;
-  final String title, sub;
-  final VoidCallback onTap;
-  const _ProfileLink({
-    required this.icon,
-    required this.title,
-    required this.sub,
-    required this.onTap,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
-        decoration: BoxDecoration(
-          color: c.surface,
-          border: Border.all(color: c.border),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: c.primary),
-            const SizedBox(width: 11),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w800,
-                      color: c.ink,
-                    ),
-                  ),
-                  Text(
-                    sub,
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 11,
-                      color: c.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_forward_ios_rounded, size: 13, color: c.muted),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -19413,23 +25799,32 @@ class ReportScreen extends StatelessWidget {
         ),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            k,
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 12.5,
-              color: c.muted,
+          Expanded(
+            child: Text(
+              k,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12.5,
+                color: c.muted,
+              ),
             ),
           ),
-          Text(
-            v,
-            style: TextStyle(
-              fontFamily: SfType.mono,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: vColor ?? c.ink,
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              v,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: vColor ?? c.ink,
+              ),
             ),
           ),
         ],
@@ -19678,11 +26073,7 @@ class ReportScreen extends StatelessWidget {
                 mainAxisSize: MainAxisSize.max,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(
-                    Icons.download_rounded,
-                    size: 18,
-                    color: Colors.white,
-                  ),
+                  Icon(Icons.download_rounded, size: 18, color: c.surface),
                   const SizedBox(width: 8),
                   Text(
                     tr(context, 'report_export'),
@@ -19690,7 +26081,7 @@ class ReportScreen extends StatelessWidget {
                       fontFamily: SfType.ui,
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: Colors.white,
+                      color: c.surface,
                     ),
                   ),
                 ],
@@ -19731,8 +26122,6 @@ class ReportFormatScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = colors;
     const formats = [
-      ('word', 'Word document', 'DOCX', Icons.description_rounded),
-      ('excel', 'Excel spreadsheet', 'XLSX', Icons.table_chart_rounded),
       ('html', 'HTML page', 'HTML', Icons.code_rounded),
       ('csv', 'CSV data', 'CSV', Icons.grid_on_rounded),
     ];
@@ -19848,28 +26237,39 @@ Future<void> _exportReport(
     ('Generated', now.toIso8601String()),
   ];
   try {
-    final dir = await getApplicationDocumentsDirectory();
-    final ext = switch (format) {
-      'word' => 'docx',
-      'excel' => 'xlsx',
-      _ => format,
-    };
-    final file = File(
-      '${dir.path}/starforge_report_${now.millisecondsSinceEpoch}.$ext',
-    );
-    final csv = [
-      'Metric,Value',
-      ...rows.map((r) => '${r.$1},"${r.$2.replaceAll('"', '""')}"'),
-    ].join('\n');
+    String csvCell(String value) => '"${value.replaceAll('"', '""')}"';
+    String htmlCell(String value) => value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;');
+    final csv =
+        '\uFEFF${['Metric,Value', ...rows.map((row) => '${csvCell(row.$1)},${csvCell(row.$2)}')].join('\n')}';
     final html =
-        '<!doctype html><html><head><meta charset="utf-8"><title>StarForge report</title></head><body><h1>StarForge EDU</h1><table border="1">${rows.map((r) => '<tr><th>${r.$1}</th><td>${r.$2}</td></tr>').join()}</table></body></html>';
-    await file.writeAsString(format == 'csv' ? csv : html);
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>StarForge report</title></head><body><h1>StarForge EDU</h1>'
+        '<table border="1" cellspacing="0" cellpadding="6">'
+        '${rows.map((row) => '<tr><th>${htmlCell(row.$1)}</th><td>${htmlCell(row.$2)}</td></tr>').join()}'
+        '</table></body></html>';
+    final fileName = 'starforge_report_${now.millisecondsSinceEpoch}.$format';
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Hisobotni saqlash',
+      fileName: fileName,
+      type: FileType.custom,
+      allowedExtensions: [format],
+      bytes: Uint8List.fromList(utf8.encode(format == 'csv' ? csv : html)),
+    );
     if (context.mounted) {
-      _snack(
-        context,
-        '$label: ${file.path.split('/').last} tayyor',
-        bg: const Color(0xFF4F7B3B),
-      );
+      if (path == null) {
+        _snack(context, 'Hisobot saqlash bekor qilindi');
+      } else {
+        _snack(
+          context,
+          '$label: ${path.split(RegExp(r'[/\\]')).last} tayyor',
+          bg: const Color(0xFF4F7B3B),
+        );
+      }
     }
   } catch (_) {
     if (context.mounted) _snack(context, 'Hisobotni saqlab bo‘lmadi');
@@ -20053,6 +26453,35 @@ class _CreateSheetState extends State<_CreateSheet> {
                             setState(() => _err = 'create_need_name');
                             return;
                           }
+                          final store = AppScope.of(context);
+                          if (widget.titleKey == 'create_group') {
+                            store.addGroup(
+                              ManagedGroup(
+                                name: _name.text.trim(),
+                                branch: store.branches.isEmpty
+                                    ? kRoleConfigs[store.role]!.scope
+                                    : store.branches.first.name,
+                                teacher: _owner.text.trim().isEmpty
+                                    ? 'Tayinlanmagan'
+                                    : _owner.text.trim(),
+                                schedule: 'Belgilanmagan',
+                                level: _note.text.trim().isEmpty
+                                    ? 'General'
+                                    : _note.text.trim(),
+                              ),
+                            );
+                          } else if (widget.titleKey == 'create_case') {
+                            store.createAuditCase(_name.text.trim());
+                          } else {
+                            store.logActivity(
+                              icon: Icons.add_circle_outline_rounded,
+                              title: _name.text.trim(),
+                              detail: _note.text.trim().isEmpty
+                                  ? _owner.text.trim()
+                                  : _note.text.trim(),
+                              kind: 'create',
+                            );
+                          }
                           Navigator.of(context).pop();
                           _snack(
                             context,
@@ -20073,7 +26502,7 @@ class _CreateSheetState extends State<_CreateSheet> {
                               fontFamily: SfType.ui,
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: Colors.white,
+                              color: c.surface,
                             ),
                           ),
                         ),
@@ -20296,26 +26725,6 @@ List<Widget> _designControls(
             onTap: () => settings.setDark(true),
           ),
         ),
-      ],
-    ),
-    const SizedBox(height: 22),
-    _setSec(c, '${tr(context, 'tw_layout')} · 5'),
-    GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
-      // A fixed, generous height prevents the label + description from
-      // overflowing on smaller phone widths or with a larger system font.
-      mainAxisExtent: 96,
-      children: [
-        for (int i = 0; i < kLayouts.length; i++)
-          _LayCard(
-            lay: kLayouts[i],
-            selected: settings.layout == i,
-            onTap: () => settings.setLayout(i),
-          ),
       ],
     ),
     const SizedBox(height: 22),
@@ -20564,7 +26973,7 @@ class DesignPanel extends StatelessWidget {
                                   fontFamily: SfType.ui,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white,
+                                  color: c.surface,
                                 ),
                               ),
                             ),
@@ -20579,136 +26988,6 @@ class DesignPanel extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// A nav-layout preview card (mini chrome thumbnail + name + description).
-class _LayCard extends StatelessWidget {
-  final SfLayout lay;
-  final bool selected;
-  final VoidCallback onTap;
-  const _LayCard({
-    required this.lay,
-    required this.selected,
-    required this.onTap,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(9),
-        decoration: BoxDecoration(
-          color: selected ? c.primary.withValues(alpha: 0.08) : c.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected ? c.primary : c.border,
-            width: selected ? 1.8 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _LayMini(id: lay.id, c: c),
-            const SizedBox(height: 6),
-            Text(
-              tr(context, lay.nameKey),
-              style: TextStyle(
-                fontFamily: SfType.ui,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: c.ink,
-              ),
-            ),
-            Text(
-              tr(context, lay.descKey),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: SfType.ui,
-                fontSize: 9.5,
-                color: c.muted,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LayMini extends StatelessWidget {
-  final String id;
-  final SfColors c;
-  const _LayMini({required this.id, required this.c});
-  @override
-  Widget build(BuildContext context) {
-    final bar = c.primary.withValues(alpha: 0.55);
-    Widget content;
-    switch (id) {
-      case 'sidebar':
-        content = Align(
-          alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-            widthFactor: 0.24,
-            heightFactor: 1,
-            child: Container(color: bar),
-          ),
-        );
-        break;
-      case 'rail':
-        content = Align(
-          alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(
-            widthFactor: 0.12,
-            heightFactor: 1,
-            child: Container(color: bar),
-          ),
-        );
-        break;
-      case 'topbar':
-        content = Align(
-          alignment: Alignment.topCenter,
-          child: FractionallySizedBox(
-            widthFactor: 1,
-            heightFactor: 0.32,
-            child: Container(color: bar),
-          ),
-        );
-        break;
-      case 'dock':
-        content = Align(
-          alignment: Alignment.bottomCenter,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 3),
-            child: FractionallySizedBox(
-              widthFactor: 0.5,
-              heightFactor: 0.28,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: bar,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-          ),
-        );
-        break;
-      default: // zen
-        content = const SizedBox.shrink();
-    }
-    return Container(
-      height: 26,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: c.surface2,
-        borderRadius: BorderRadius.circular(5),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: content,
     );
   }
 }
@@ -20928,7 +27207,7 @@ class _ChatDesignMini extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = _chatVisualStyle(design, SfColors.light);
+    final p = _chatVisualStyle(design, SettingsScope.of(context).colors);
     final tiny = TextStyle(
       fontFamily: SfType.ui,
       fontSize: 5.8,
@@ -20982,8 +27261,8 @@ class _ChatDesignMini extends StatelessWidget {
         decoration: BoxDecoration(
           color: p.canvas,
           gradient: design == SfChatDesign.gradient
-              ? const LinearGradient(
-                  colors: [Color(0xFFF4E8FC), Color(0xFFFFE8F1)],
+              ? LinearGradient(
+                  colors: [p.canvas, p.accent.withValues(alpha: .26)],
                 )
               : null,
         ),
@@ -21416,8 +27695,171 @@ class AttendanceScreen extends StatefulWidget {
 class _AttendanceScreenState extends State<AttendanceScreen> {
   int gi = 0;
   final Set<String> absent = {}; // by student name
+  final Map<String, Set<String>> _savedAbsences = <String, Set<String>>{};
+  final Map<String, DateTime> _savedAt = <String, DateTime>{};
+  final Map<String, List<_AttendanceReminderDraft>> _reminderDrafts =
+      <String, List<_AttendanceReminderDraft>>{};
 
   void _update(VoidCallback change) => setState(change);
+
+  String _scopeKey(({String branch, String group}) scope) =>
+      '${scope.branch}::${scope.group}';
+
+  void _saveRoster(
+    ({String branch, String group}) scope,
+    List<Student> roster,
+  ) {
+    final key = _scopeKey(scope);
+    final names = roster.map((student) => student.name).toSet();
+    final saved = absent.where(names.contains).toSet();
+    setState(() {
+      _savedAbsences[key] = saved;
+      _savedAt[key] = DateTime.now();
+    });
+    AppScope.of(context).logActivity(
+      icon: Icons.fact_check_rounded,
+      title: 'Davomat saqlandi',
+      detail:
+          '${scope.branch} · ${scope.group} · ${roster.length - saved.length} bor · ${saved.length} yo‘q',
+      kind: 'attendance',
+    );
+  }
+
+  Future<void> _manualCheckIn(
+    ({String branch, String group}) scope,
+    List<Student> roster,
+  ) async {
+    final controller = TextEditingController();
+    String? error;
+    final selected = await showDialog<Student>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => SfTheme(
+          colors: widget.colors,
+          child: AlertDialog(
+            backgroundColor: widget.colors.surface,
+            title: const Text('QR / ID check-in'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${scope.branch} · ${scope.group}',
+                  style: RefType.ui(size: 11.5, color: widget.colors.muted),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('attendance-checkin-input'),
+                  controller: controller,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Student ID, username или имя',
+                    errorText: error,
+                    prefixIcon: const Icon(Icons.qr_code_scanner_rounded),
+                  ),
+                  onSubmitted: (_) {
+                    final value = controller.text.trim().toLowerCase();
+                    Student? found;
+                    for (final student in roster) {
+                      final profile = studentProfile(student);
+                      if (student.name.toLowerCase() == value ||
+                          (student.username ?? '').toLowerCase() == value ||
+                          profile.studentId.toLowerCase() == value) {
+                        found = student;
+                        break;
+                      }
+                    }
+                    if (found == null) {
+                      setDialogState(
+                        () => error = 'Ученик этой группы не найден',
+                      );
+                    } else {
+                      Navigator.of(dialogContext).pop(found);
+                    }
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Отмена'),
+              ),
+              FilledButton.icon(
+                icon: const Icon(Icons.login_rounded),
+                label: const Text('Отметить'),
+                onPressed: () {
+                  final value = controller.text.trim().toLowerCase();
+                  Student? found;
+                  for (final student in roster) {
+                    final profile = studentProfile(student);
+                    if (student.name.toLowerCase() == value ||
+                        (student.username ?? '').toLowerCase() == value ||
+                        profile.studentId.toLowerCase() == value) {
+                      found = student;
+                      break;
+                    }
+                  }
+                  if (found == null) {
+                    setDialogState(
+                      () => error = 'Ученик этой группы не найден',
+                    );
+                  } else {
+                    Navigator.of(dialogContext).pop(found);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    controller.dispose();
+    if (selected == null || !mounted) return;
+    setState(() => absent.remove(selected.name));
+    AppScope.of(context).logActivity(
+      icon: Icons.qr_code_scanner_rounded,
+      title: 'QR / ID check-in',
+      detail: '${selected.name} · ${scope.group}',
+      kind: 'attendance',
+    );
+  }
+
+  void _openReminderComposer(
+    ({String branch, String group}) scope,
+    List<Student> roster,
+  ) {
+    final missing = roster
+        .where((student) => absent.contains(student.name))
+        .toList();
+    Navigator.of(context).push(
+      sfPageRoute(
+        SfTheme(
+          colors: widget.colors,
+          child: _AttendanceReminderComposer(
+            scope: scope,
+            students: missing,
+            colors: widget.colors,
+            onSave: (drafts) {
+              final key = _scopeKey(scope);
+              setState(() {
+                final reminders = _reminderDrafts.putIfAbsent(
+                  key,
+                  () => <_AttendanceReminderDraft>[],
+                );
+                reminders.addAll(drafts);
+              });
+              AppScope.of(context).logActivity(
+                icon: Icons.drafts_outlined,
+                title: 'Davomat eslatmalari tayyorlandi',
+                detail: '${scope.group} · ${drafts.length} ta lokal qoralama',
+                kind: 'message',
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21436,6 +27878,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (gi >= groups.length) gi = 0;
     final group = groups[gi];
     final roster = students.where((s) => s.group == group).toList();
+    final scope = (
+      branch: roster.isEmpty ? '—' : studentProfile(roster.first).branch,
+      group: group,
+    );
     final present = roster.where((s) => !absent.contains(s.name)).length;
     final absentInGroup = roster.where((s) => absent.contains(s.name)).length;
     return SfTheme(
@@ -21467,12 +27913,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 color: c.ink,
               ),
               tooltip: canEdit ? 'QR check-in' : 'Hisobotni yuklash',
-              onPressed: () => _snack(
-                context,
-                canEdit
-                    ? '📷 QR check-in rejimi (demo)'
-                    : '✓ Davomat hisoboti tayyorlandi (demo)',
-              ),
+              onPressed: canEdit
+                  ? () => _manualCheckIn(scope, roster)
+                  : () => Navigator.of(context).push(
+                      sfPageRoute(
+                        SfTheme(
+                          colors: c,
+                          child: _AttendanceReportScreen(
+                            scope: scope,
+                            roster: roster,
+                            absentNames: absent,
+                            savedAt: _savedAt[_scopeKey(scope)],
+                            reminderDrafts:
+                                _reminderDrafts[_scopeKey(scope)]?.length ?? 0,
+                            colors: c,
+                          ),
+                        ),
+                      ),
+                    ),
             ),
           ],
         ),
@@ -21568,15 +28026,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         icon: Icons.notifications_active_rounded,
                         label: "Yo'qlarga xabar ($absentInGroup)",
                         primary: false,
-                        onTap: absentInGroup == 0
-                            ? () => _snack(
-                                context,
-                                "Bu guruhda yo'q o'quvchi yo'q",
-                              )
-                            : () => _snack(
-                                context,
-                                '🔔 $absentInGroup ota-onaga xabar yuborildi (demo)',
-                              ),
+                        onTap: () => _openReminderComposer(scope, roster),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -21585,11 +28035,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         icon: Icons.check_circle_rounded,
                         label: 'Saqlash',
                         primary: true,
-                        onTap: () => _snack(
-                          context,
-                          '✓ Davomat saqlandi · $present bor, $absentInGroup yo‘q',
-                          bg: const Color(0xFF4F7B3B),
-                        ),
+                        onTap: () => _saveRoster(scope, roster),
                       ),
                     ),
                   ],
@@ -21611,8 +28057,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   icon: Icons.insights_rounded,
                   label: 'Davomat hisoboti',
                   primary: true,
-                  onTap: () =>
-                      _snack(context, '✓ Analitik hisobot tayyorlandi (demo)'),
+                  onTap: () => Navigator.of(context).push(
+                    sfPageRoute(
+                      SfTheme(
+                        colors: c,
+                        child: _AttendanceReportScreen(
+                          scope: scope,
+                          roster: roster,
+                          absentNames: absent,
+                          savedAt: _savedAt[_scopeKey(scope)],
+                          reminderDrafts:
+                              _reminderDrafts[_scopeKey(scope)]?.length ?? 0,
+                          colors: c,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -21661,6 +28121,9 @@ class _ReferenceAttendancePage extends StatelessWidget {
         .where((student) => !state.absent.contains(student.name))
         .length;
     final absent = roster.length - present;
+    final scopeKey = state._scopeKey(selectedScope);
+    final savedAt = state._savedAt[scopeKey];
+    final drafts = state._reminderDrafts[scopeKey]?.length ?? 0;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -21679,12 +28142,23 @@ class _ReferenceAttendancePage extends StatelessWidget {
                       ? Icons.qr_code_scanner_rounded
                       : Icons.download_rounded,
                   tooltip: canEdit ? 'QR check-in' : 'Hisobotni yuklash',
-                  onPressed: () => _snack(
-                    context,
-                    canEdit
-                        ? '📷 QR check-in rejimi (demo)'
-                        : '✓ Davomat hisoboti tayyorlandi (demo)',
-                  ),
+                  onPressed: canEdit
+                      ? () => state._manualCheckIn(selectedScope, roster)
+                      : () => Navigator.of(context).push(
+                          sfPageRoute(
+                            SfTheme(
+                              colors: c,
+                              child: _AttendanceReportScreen(
+                                scope: selectedScope,
+                                roster: roster,
+                                absentNames: state.absent,
+                                savedAt: savedAt,
+                                reminderDrafts: drafts,
+                                colors: c,
+                              ),
+                            ),
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -21750,6 +28224,23 @@ class _ReferenceAttendancePage extends StatelessWidget {
                     absent: absent,
                     total: roster.length,
                   ),
+                  if (savedAt != null || drafts > 0) ...[
+                    const SizedBox(height: 8),
+                    RefStatusTile(
+                      icon: drafts > 0
+                          ? Icons.drafts_outlined
+                          : Icons.cloud_done_outlined,
+                      title: savedAt == null
+                          ? '$drafts ta eslatma qoralamasi'
+                          : 'Сохранено ${savedAt.hour.toString().padLeft(2, '0')}:${savedAt.minute.toString().padLeft(2, '0')}',
+                      subtitle: drafts > 0
+                          ? '$drafts локальных черновиков · отправка только после проверки'
+                          : 'Состояние группы зафиксировано в журнале сессии',
+                      tone: drafts > 0
+                          ? RefMetricTone.warning
+                          : RefMetricTone.success,
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   RefSectionHeader(
                     title: 'Ro‘yxat',
@@ -21806,14 +28297,14 @@ class _ReferenceAttendancePage extends StatelessWidget {
                               ),
                               const SizedBox(height: 3),
                               RefButton(
-                                label: "Yo'qlarga xabar ($absent)",
+                                label: absent == 0
+                                    ? 'Нет отсутствующих'
+                                    : "Черновики ($absent)",
                                 kind: RefButtonKind.soft,
-                                leading: Icons.notifications_active_rounded,
-                                onPressed: () => _snack(
-                                  context,
-                                  absent == 0
-                                      ? "Bu guruhda yo'q o'quvchi yo'q"
-                                      : '🔔 $absent ota-onaga xabar yuborildi (demo)',
+                                leading: Icons.edit_notifications_outlined,
+                                onPressed: () => state._openReminderComposer(
+                                  selectedScope,
+                                  roster,
                                 ),
                               ),
                             ],
@@ -21822,12 +28313,10 @@ class _ReferenceAttendancePage extends StatelessWidget {
                         const SizedBox(width: 8),
                         Expanded(
                           child: RefButton(
-                            label: 'Saqlash',
+                            label: savedAt == null ? 'Saqlash' : 'Yangilash',
                             leading: Icons.check_circle_rounded,
-                            onPressed: () => _snack(
-                              context,
-                              '✓ Davomat saqlandi · $present bor, $absent yo‘q',
-                            ),
+                            onPressed: () =>
+                                state._saveRoster(selectedScope, roster),
                           ),
                         ),
                       ],
@@ -21836,9 +28325,20 @@ class _ReferenceAttendancePage extends StatelessWidget {
                       label: 'Davomat hisoboti',
                       block: true,
                       leading: Icons.insights_rounded,
-                      onPressed: () => _snack(
-                        context,
-                        '✓ Analitik hisobot tayyorlandi (demo)',
+                      onPressed: () => Navigator.of(context).push(
+                        sfPageRoute(
+                          SfTheme(
+                            colors: c,
+                            child: _AttendanceReportScreen(
+                              scope: selectedScope,
+                              roster: roster,
+                              absentNames: state.absent,
+                              savedAt: savedAt,
+                              reminderDrafts: drafts,
+                              colors: c,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
             ),
@@ -21846,6 +28346,381 @@ class _ReferenceAttendancePage extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _AttendanceReminderDraft {
+  const _AttendanceReminderDraft({
+    required this.student,
+    required this.message,
+    required this.createdAt,
+  });
+
+  final Student student;
+  final String message;
+  final DateTime createdAt;
+}
+
+class _AttendanceReminderComposer extends StatefulWidget {
+  const _AttendanceReminderComposer({
+    required this.scope,
+    required this.students,
+    required this.colors,
+    required this.onSave,
+  });
+
+  final ({String branch, String group}) scope;
+  final List<Student> students;
+  final SfColors colors;
+  final ValueChanged<List<_AttendanceReminderDraft>> onSave;
+
+  @override
+  State<_AttendanceReminderComposer> createState() =>
+      _AttendanceReminderComposerState();
+}
+
+class _AttendanceReminderComposerState
+    extends State<_AttendanceReminderComposer> {
+  late final Set<Student> _selected = widget.students.toSet();
+  late final TextEditingController _message = TextEditingController(
+    text:
+        'Assalomu alaykum. Bugun o‘quvchi darsda qatnashmadi. Sababini aniqlashtirish uchun biz bilan bog‘lanishingizni so‘raymiz.',
+  );
+
+  @override
+  void dispose() {
+    _message.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final text = _message.text.trim();
+    if (_selected.isEmpty || text.isEmpty) return;
+    final now = DateTime.now();
+    widget.onSave([
+      for (final student in _selected)
+        _AttendanceReminderDraft(
+          student: student,
+          message: text,
+          createdAt: now,
+        ),
+    ]);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            'Черновики напоминаний',
+            style: RefType.ui(size: 16, weight: FontWeight.w800, color: c.ink),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          children: [
+            RefStatusTile(
+              icon: Icons.privacy_tip_outlined,
+              title: 'Ничего не отправляется автоматически',
+              subtitle:
+                  'Проверьте получателей и текст — будут сохранены локальные черновики',
+              tone: RefMetricTone.primary,
+            ),
+            const SizedBox(height: 12),
+            RefSectionHeader(
+              title: '${widget.scope.branch} · ${widget.scope.group}',
+              subtitle: '${widget.students.length} отсутствующих',
+            ),
+            const SizedBox(height: 8),
+            if (widget.students.isEmpty)
+              RefStatusTile(
+                icon: Icons.check_circle_outline_rounded,
+                title: 'Отсутствующих нет',
+                subtitle: 'Создавать напоминания не требуется',
+                tone: RefMetricTone.success,
+              )
+            else
+              RefSurfaceCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (var index = 0; index < widget.students.length; index++)
+                      CheckboxListTile(
+                        value: _selected.contains(widget.students[index]),
+                        onChanged: (selected) => setState(() {
+                          selected == true
+                              ? _selected.add(widget.students[index])
+                              : _selected.remove(widget.students[index]);
+                        }),
+                        secondary: SfAvatar(
+                          name: widget.students[index].name,
+                          size: 34,
+                        ),
+                        title: Text(widget.students[index].name),
+                        subtitle: Text(
+                          studentProfile(widget.students[index]).fatherPhone,
+                        ),
+                        controlAffinity: ListTileControlAffinity.trailing,
+                      ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const ValueKey('attendance-reminder-message'),
+              controller: _message,
+              minLines: 4,
+              maxLines: 7,
+              decoration: const InputDecoration(
+                labelText: 'Текст черновика',
+                alignLabelWithHint: true,
+                prefixIcon: Icon(Icons.edit_note_rounded),
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            child: RefButton(
+              label: widget.students.isEmpty
+                  ? 'Вернуться'
+                  : 'Сохранить черновики · ${_selected.length}',
+              leading: widget.students.isEmpty
+                  ? Icons.arrow_back_rounded
+                  : Icons.drafts_rounded,
+              block: true,
+              onPressed: widget.students.isEmpty
+                  ? () => Navigator.of(context).pop()
+                  : _save,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AttendanceReportScreen extends StatelessWidget {
+  const _AttendanceReportScreen({
+    required this.scope,
+    required this.roster,
+    required this.absentNames,
+    required this.savedAt,
+    required this.reminderDrafts,
+    required this.colors,
+  });
+
+  final ({String branch, String group}) scope;
+  final List<Student> roster;
+  final Set<String> absentNames;
+  final DateTime? savedAt;
+  final int reminderDrafts;
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final absent = roster
+        .where((student) => absentNames.contains(student.name))
+        .length;
+    final present = roster.length - absent;
+    final rate = roster.isEmpty ? 0 : (present / roster.length * 100).round();
+    return SfTheme(
+      colors: colors,
+      child: Scaffold(
+        backgroundColor: colors.bg,
+        appBar: AppBar(
+          backgroundColor: colors.surface,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: colors.ink),
+          title: Text(
+            'Отчёт по посещаемости',
+            style: RefType.ui(
+              size: 16,
+              weight: FontWeight.w800,
+              color: colors.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          children: [
+            RefSectionHeader(
+              title: scope.group,
+              subtitle:
+                  '${scope.branch} · ${DateTime.now().day}.${DateTime.now().month}.${DateTime.now().year}',
+            ),
+            const SizedBox(height: 10),
+            RefAdaptiveGrid(
+              minCellWidth: 118,
+              spacing: 8,
+              children: [
+                RefMetricCard(
+                  label: 'Посещаемость',
+                  value: '$rate%',
+                  icon: Icons.insights_rounded,
+                  tone: rate >= 90
+                      ? RefMetricTone.success
+                      : RefMetricTone.warning,
+                ),
+                RefMetricCard(
+                  label: 'Присутствуют',
+                  value: '$present',
+                  icon: Icons.check_circle_outline_rounded,
+                  tone: RefMetricTone.success,
+                ),
+                RefMetricCard(
+                  label: 'Отсутствуют',
+                  value: '$absent',
+                  icon: Icons.cancel_outlined,
+                  tone: absent == 0
+                      ? RefMetricTone.success
+                      : RefMetricTone.danger,
+                ),
+                RefMetricCard(
+                  label: 'Черновики',
+                  value: '$reminderDrafts',
+                  icon: Icons.drafts_outlined,
+                  tone: reminderDrafts == 0
+                      ? RefMetricTone.neutral
+                      : RefMetricTone.warning,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            RefSectionHeader(
+              title: 'Список',
+              subtitle: savedAt == null
+                  ? 'Текущие несохранённые отметки'
+                  : 'Сохранено ${savedAt!.hour.toString().padLeft(2, '0')}:${savedAt!.minute.toString().padLeft(2, '0')}',
+            ),
+            const SizedBox(height: 8),
+            RefSurfaceCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (var index = 0; index < roster.length; index++)
+                    ListTile(
+                      leading: SfAvatar(name: roster[index].name, size: 34),
+                      title: Text(roster[index].name),
+                      subtitle: Text(roster[index].group),
+                      trailing: RefPill(
+                        label: absentNames.contains(roster[index].name)
+                            ? 'ОТСУТСТВУЕТ'
+                            : 'ПРИСУТСТВУЕТ',
+                        tone: absentNames.contains(roster[index].name)
+                            ? RefPillTone.danger
+                            : RefPillTone.success,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 9, 16, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: RefButton(
+                    label: 'CSV',
+                    leading: Icons.grid_on_rounded,
+                    kind: RefButtonKind.soft,
+                    onPressed: () => _exportAttendance(
+                      context,
+                      'csv',
+                      scope,
+                      roster,
+                      absentNames,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: RefButton(
+                    label: 'HTML',
+                    leading: Icons.code_rounded,
+                    onPressed: () => _exportAttendance(
+                      context,
+                      'html',
+                      scope,
+                      roster,
+                      absentNames,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _exportAttendance(
+  BuildContext context,
+  String format,
+  ({String branch, String group}) scope,
+  List<Student> roster,
+  Set<String> absentNames,
+) async {
+  String csvCell(String value) => '"${value.replaceAll('"', '""')}"';
+  String htmlCell(String value) => value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+  final rows = [
+    for (final student in roster)
+      (
+        student.name,
+        student.username ?? '—',
+        absentNames.contains(student.name) ? 'Absent' : 'Present',
+      ),
+  ];
+  final csv =
+      '\uFEFFName,Username,Status\n${rows.map((row) => '${csvCell(row.$1)},${csvCell(row.$2)},${csvCell(row.$3)}').join('\n')}';
+  final html =
+      '<!doctype html><html><head><meta charset="utf-8"><title>Attendance</title></head>'
+      '<body><h1>${htmlCell(scope.group)}</h1><p>${htmlCell(scope.branch)}</p>'
+      '<table border="1" cellspacing="0" cellpadding="6"><tr><th>Name</th><th>Username</th><th>Status</th></tr>'
+      '${rows.map((row) => '<tr><td>${htmlCell(row.$1)}</td><td>${htmlCell(row.$2)}</td><td>${htmlCell(row.$3)}</td></tr>').join()}'
+      '</table></body></html>';
+  final now = DateTime.now();
+  final safeGroup = scope.group.replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '_');
+  try {
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Сохранить отчёт посещаемости',
+      fileName:
+          'attendance_${safeGroup}_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.$format',
+      type: FileType.custom,
+      allowedExtensions: [format],
+      bytes: Uint8List.fromList(utf8.encode(format == 'csv' ? csv : html)),
+    );
+    if (context.mounted && path != null) {
+      _snack(
+        context,
+        'Отчёт сохранён: ${path.split(RegExp(r'[/\\]')).last}',
+        bg: SfTheme.of(context).success,
+      );
+    }
+  } catch (_) {
+    if (context.mounted) {
+      _snack(context, 'Не удалось сохранить отчёт');
+    }
   }
 }
 
@@ -22634,16 +29509,9 @@ class ModulesHub extends StatelessWidget {
                   icon: modules[i].$1,
                   label: modules[i].$2,
                   ready: modules[i].$3,
-                  onTap: modules[i].$4 != null
-                      ? () => Navigator.of(context).push(
-                          sfPageRoute(
-                            SfTheme(colors: c, child: modules[i].$4!()),
-                          ),
-                        )
-                      : () => _snack(
-                          context,
-                          '"${modules[i].$2}" — tez orada (demo)',
-                        ),
+                  onTap: () => Navigator.of(context).push(
+                    sfPageRoute(SfTheme(colors: c, child: modules[i].$4!())),
+                  ),
                 ),
               ),
           ],

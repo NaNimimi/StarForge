@@ -35,6 +35,7 @@ class _Row extends StatelessWidget {
   final bool last;
   final VoidCallback? onTap;
   const _Row({
+    super.key,
     this.lead,
     required this.title,
     this.sub,
@@ -128,8 +129,115 @@ Widget _mono(
   ),
 );
 
-void _toast(BuildContext context, String msg) =>
-    sfSnack(context, msg, bg: const Color(0xFF3A332A));
+Future<void> _showRecordDetails(
+  BuildContext context, {
+  required String title,
+  required IconData icon,
+  required Map<String, String> fields,
+}) {
+  final c = SfTheme.of(context);
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => SfTheme(
+      colors: c,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * .82,
+          ),
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 12, 10, 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: c.primary.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(icon, color: c.primary, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                          color: c.ink,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Yopish',
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: c.border),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
+                  itemCount: fields.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: c.border),
+                  itemBuilder: (_, index) {
+                    final field = fields.entries.elementAt(index);
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 108,
+                            child: Text(
+                              field.key,
+                              style: TextStyle(
+                                fontFamily: SfType.ui,
+                                fontSize: 11.5,
+                                color: c.muted,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: SelectableText(
+                              field.value,
+                              style: TextStyle(
+                                fontFamily: SfType.ui,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: c.ink,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
 /// Scaffold wrapper for a pushed page: app-bar + scrollable body.
 Widget _page(
@@ -703,7 +811,19 @@ class StudentsAdminPage extends StatelessWidget {
                     title: s.$1,
                     sub: '${s.$2}${ceo ? ' · ${s.$3}' : ''} · $att%',
                     last: last,
-                    onTap: () => _toast(context, '${s.$1} · ${s.$7}'),
+                    onTap: () => _showRecordDetails(
+                      context,
+                      title: s.$1,
+                      icon: Icons.school_rounded,
+                      fields: {
+                        'Guruh': s.$2,
+                        'Filial': s.$3,
+                        'Davomat': '$att%',
+                        'To‘lov': payLabel,
+                        'Qarzdorlik': s.$6 > 0 ? fmtMoney(s.$6) : 'Yo‘q',
+                        'Mas’ul': s.$7,
+                      },
+                    ),
                     trail: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -1134,7 +1254,21 @@ class TeachersAdminPage extends StatelessWidget {
                     sub:
                         '${t.$3}${ceo ? ' · ${t.$4}' : ''} · ↑${t.$6} ↓${t.$7}',
                     last: last,
-                    onTap: () => _toast(context, '${t.$1} · ${fmtMoney(t.$9)}'),
+                    onTap: () => _showRecordDetails(
+                      context,
+                      title: t.$1,
+                      icon: Icons.co_present_rounded,
+                      fields: {
+                        'Lavozim': t.$2,
+                        'Fan': t.$3,
+                        'Filial': t.$4,
+                        'Davomat': '${t.$5}%',
+                        'Up / Down': '${t.$6} / ${t.$7}',
+                        'Ko‘rsatkich': '${t.$8}',
+                        'Maosh': fmtMoney(t.$9),
+                        'Holat': t.$10 == 'active' ? 'Faol' : 'Tekshiruvda',
+                      },
+                    ),
                     trail: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -1433,7 +1567,18 @@ class ParentsAdminPage extends StatelessWidget {
                   title: p.$1,
                   sub: '${p.$2} · ${p.$3}',
                   last: last,
-                  onTap: () => _toast(context, '📞 ${p.$1}'),
+                  onTap: () => _showRecordDetails(
+                    context,
+                    title: p.$1,
+                    icon: Icons.family_restroom_rounded,
+                    fields: {
+                      'Farzand': p.$2,
+                      'Guruh / aloqa': p.$3,
+                      'Telegram': p.$4 ? 'Ulangan' : 'Ulanmagan',
+                      'Qarzdorlik': p.$5 > 0 ? fmtMoney(p.$5) : 'Yo‘q',
+                      'Eskalatsiya': p.$6 ? 'Kerak' : 'Yo‘q',
+                    },
+                  ),
                   trail: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
@@ -1470,46 +1615,132 @@ class ParentsAdminPage extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════════
 // CHATS (read-only oversight)
 // ════════════════════════════════════════════════════════════════════════
+class _OversightMessage {
+  final String sender;
+  final String text;
+  final String time;
+
+  const _OversightMessage(this.sender, this.text, this.time);
+}
+
+class _OversightThread {
+  final String teacher;
+  final String parent;
+  final String context;
+  final String lastActivity;
+  final bool flagged;
+  final List<_OversightMessage> messages;
+
+  const _OversightThread({
+    required this.teacher,
+    required this.parent,
+    required this.context,
+    required this.lastActivity,
+    required this.flagged,
+    required this.messages,
+  });
+}
+
+const _oversightThreads = <_OversightThread>[
+  _OversightThread(
+    teacher: 'Nigora Karimova',
+    parent: 'Akbarova Dilnoza',
+    context: '9-B · Akmal',
+    lastActivity: '14:42',
+    flagged: false,
+    messages: [
+      _OversightMessage(
+        'Nigora Karimova',
+        'Assalomu alaykum. Akmal bugun topshiriqni yaxshi bajardi.',
+        '14:31',
+      ),
+      _OversightMessage(
+        'Akbarova Dilnoza',
+        'Rahmat, uyda ham mashqlarni davom ettiramiz.',
+        '14:35',
+      ),
+      _OversightMessage(
+        'Nigora Karimova',
+        'Ertaga nazorat ishi bo‘ladi. Daftarini olib kelsin.',
+        '14:39',
+      ),
+      _OversightMessage(
+        'Akbarova Dilnoza',
+        'Rahmat, ustoz! Ertaga albatta olib keladi.',
+        '14:42',
+      ),
+    ],
+  ),
+  _OversightThread(
+    teacher: 'Nigora Karimova',
+    parent: 'Eshmatova Gulnora',
+    context: '9-B · Otabek',
+    lastActivity: '12:18',
+    flagged: true,
+    messages: [
+      _OversightMessage(
+        'Eshmatova Gulnora',
+        'Bolam bugun darsga kela olmaydi.',
+        '11:52',
+      ),
+      _OversightMessage(
+        'Nigora Karimova',
+        'Tushunarli. Sababini administratorga ham yuboring.',
+        '12:03',
+      ),
+      _OversightMessage(
+        'Eshmatova Gulnora',
+        'Ma’lumotnoma tayyor bo‘lgach yuboraman.',
+        '12:18',
+      ),
+    ],
+  ),
+  _OversightThread(
+    teacher: 'Bobur Aliyev',
+    parent: 'Halimov Rustam',
+    context: '10-V · Zilola',
+    lastActivity: 'Du',
+    flagged: false,
+    messages: [
+      _OversightMessage(
+        'Bobur Aliyev',
+        'Zilolaning sinov natijasi kabinetga joylandi.',
+        'Du · 09:15',
+      ),
+      _OversightMessage(
+        'Halimov Rustam',
+        'Yaxshi, biz ko‘rib chiqdik. Rahmat.',
+        'Du · 09:28',
+      ),
+    ],
+  ),
+  _OversightThread(
+    teacher: 'Aziz Tursunov',
+    parent: 'Davronov Temur',
+    context: 'Ingliz · Sevinch',
+    lastActivity: 'Du',
+    flagged: false,
+    messages: [
+      _OversightMessage(
+        'Davronov Temur',
+        'To‘lov haqida savol bor edi.',
+        'Du · 16:04',
+      ),
+      _OversightMessage(
+        'Aziz Tursunov',
+        'Kvitansiya va muddatni administrator aniqlashtirib beradi.',
+        'Du · 16:12',
+      ),
+    ],
+  ),
+];
+
 class ChatsAdminPage extends StatelessWidget {
   final SfColors colors;
   const ChatsAdminPage({super.key, required this.colors});
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    final threads = [
-      (
-        'Nigora Karimova',
-        'Akbarova Dilnoza',
-        '9-B · Akmal',
-        'Rahmat, ustoz! Ertaga albatta...',
-        '14:42',
-        false,
-      ),
-      (
-        'Nigora Karimova',
-        'Eshmatova Gulnora',
-        '9-B · Otabek',
-        'Bolam bugun darsga kela olmaydi',
-        '12:18',
-        true,
-      ),
-      (
-        'Bobur Aliyev',
-        'Halimov Rustam',
-        '10-V · Zilola',
-        'Yaxshi, biz keldik',
-        'Du',
-        false,
-      ),
-      (
-        'Aziz Tursunov',
-        'Davronov Temur',
-        'Ingliz · Sevinch',
-        'To‘lov haqida savol bor edi',
-        'Du',
-        false,
-      ),
-    ];
     return SfTheme(
       colors: c,
       child: _page(c, 'Suhbat nazorati', [
@@ -1550,19 +1781,31 @@ class ChatsAdminPage extends StatelessWidget {
               const SizedBox(height: 12),
               _listCard(
                 rows: [
-                  for (int i = 0; i < threads.length; i++)
+                  for (int i = 0; i < _oversightThreads.length; i++)
                     _Row(
-                      lead: SfAvatar(name: threads[i].$1, size: 32),
+                      key: ValueKey('oversight-thread-$i'),
+                      lead: SfAvatar(
+                        name: _oversightThreads[i].teacher,
+                        size: 32,
+                      ),
                       title:
-                          '${threads[i].$1.split(' ')[0]} ↔ ${threads[i].$2.split(' ')[0]}',
-                      sub: '${threads[i].$3} · ${threads[i].$4}',
-                      last: i == threads.length - 1,
-                      onTap: () => _toast(context, threads[i].$4),
-                      trail: threads[i].$6
+                          '${_oversightThreads[i].teacher.split(' ')[0]} ↔ ${_oversightThreads[i].parent.split(' ')[0]}',
+                      sub:
+                          '${_oversightThreads[i].context} · ${_oversightThreads[i].messages.last.text}',
+                      last: i == _oversightThreads.length - 1,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => _OversightChatDetailPage(
+                            colors: c,
+                            thread: _oversightThreads[i],
+                          ),
+                        ),
+                      ),
+                      trail: _oversightThreads[i].flagged
                           ? Icon(Icons.flag_rounded, size: 16, color: c.danger)
                           : _mono(
                               context,
-                              threads[i].$5,
+                              _oversightThreads[i].lastActivity,
                               size: 9.5,
                               color: c.muted,
                             ),
@@ -1573,6 +1816,325 @@ class ChatsAdminPage extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _OversightChatDetailPage extends StatefulWidget {
+  final SfColors colors;
+  final _OversightThread thread;
+
+  const _OversightChatDetailPage({required this.colors, required this.thread});
+
+  @override
+  State<_OversightChatDetailPage> createState() =>
+      _OversightChatDetailPageState();
+}
+
+class _OversightChatDetailPageState extends State<_OversightChatDetailPage> {
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final thread = widget.thread;
+    final query = _query.trim().toLowerCase();
+    final messages = thread.messages
+        .where(
+          (message) =>
+              query.isEmpty ||
+              message.sender.toLowerCase().contains(query) ||
+              message.text.toLowerCase().contains(query) ||
+              message.time.toLowerCase().contains(query),
+        )
+        .toList(growable: false);
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        key: const ValueKey('oversight-chat-detail'),
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${thread.teacher.split(' ')[0]} ↔ ${thread.parent.split(' ')[0]}',
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: c.ink,
+                ),
+              ),
+              Text(
+                thread.context,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: 9.5,
+                  color: c.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 26),
+          children: [
+            Container(
+              key: const ValueKey('oversight-read-only-banner'),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: c.aiBg.first,
+                border: Border.all(color: c.aiBorder),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.visibility_rounded, size: 17, color: c.ai),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      'Только чтение: отправка, редактирование и удаление сообщений отключены.',
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 11.5,
+                        height: 1.35,
+                        color: c.ink2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            SfCard(
+              child: Column(
+                children: [
+                  const SfCardHeader('Метаданные разговора'),
+                  _OversightMetadataRow('O‘qituvchi', thread.teacher),
+                  _OversightMetadataRow('Ota-ona', thread.parent),
+                  _OversightMetadataRow('O‘quvchi · guruh', thread.context),
+                  _OversightMetadataRow('Oxirgi faollik', thread.lastActivity),
+                  _OversightMetadataRow(
+                    'Nazorat holati',
+                    thread.flagged ? 'Flag qo‘yilgan' : 'Signal yo‘q',
+                    last: true,
+                    valueColor: thread.flagged ? c.danger : c.success,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('oversight-chat-search'),
+              controller: _search,
+              onChanged: (value) => setState(() => _query = value),
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 13,
+                color: c.ink,
+              ),
+              decoration: InputDecoration(
+                hintText: 'Поиск по сообщениям или участнику',
+                prefixIcon: const Icon(Icons.search_rounded),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Очистить поиск',
+                        onPressed: () {
+                          _search.clear();
+                          setState(() => _query = '');
+                        },
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'ПЕРЕПИСКА',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .7,
+                      color: c.muted,
+                    ),
+                  ),
+                ),
+                _mono(
+                  context,
+                  '${messages.length}/${thread.messages.length}',
+                  size: 10,
+                  color: c.muted,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (messages.isEmpty)
+              SfCard(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'Сообщения не найдены',
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 12.5,
+                        color: c.muted,
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            else
+              for (var index = 0; index < messages.length; index++) ...[
+                _OversightMessageCard(
+                  message: messages[index],
+                  teacher: thread.teacher,
+                ),
+                if (index < messages.length - 1) const SizedBox(height: 8),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OversightMetadataRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool last;
+  final Color? valueColor;
+
+  const _OversightMetadataRow(
+    this.label,
+    this.value, {
+    this.last = false,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 11,
+                color: c.muted,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+                color: valueColor ?? c.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OversightMessageCard extends StatelessWidget {
+  final _OversightMessage message;
+  final String teacher;
+
+  const _OversightMessageCard({required this.message, required this.teacher});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final fromTeacher = message.sender == teacher;
+    return Align(
+      alignment: fromTeacher ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 270),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+        decoration: BoxDecoration(
+          color: fromTeacher ? c.surface : c.primarySoft,
+          border: Border.all(
+            color: fromTeacher ? c.border : c.primary.withValues(alpha: .18),
+          ),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(14),
+            topRight: const Radius.circular(14),
+            bottomLeft: Radius.circular(fromTeacher ? 4 : 14),
+            bottomRight: Radius.circular(fromTeacher ? 14 : 4),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message.sender,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                color: fromTeacher ? c.primary : c.primaryInk,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              message.text,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12.5,
+                height: 1.35,
+                color: c.ink,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                message.time,
+                style: TextStyle(
+                  fontFamily: SfType.mono,
+                  fontSize: 9,
+                  color: c.muted,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1779,24 +2341,30 @@ class LeadsAdminPage extends StatelessWidget {
                                     children: [
                                       SfAvatar(name: l.$1, size: 26),
                                       const SizedBox(width: 8),
-                                      Text(
-                                        l.$1,
-                                        style: TextStyle(
-                                          fontFamily: SfType.ui,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                          color: c.ink,
+                                      Expanded(
+                                        child: Text(
+                                          l.$1,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontFamily: SfType.ui,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: c.ink,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                   const SizedBox(height: 8),
-                                  Row(
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
                                     children: [
                                       Pill(l.$3, tone: PillTone.primary),
-                                      const SizedBox(width: 6),
                                       Pill(l.$2, tone: PillTone.neutral),
-                                      const Spacer(),
                                       _mono(
                                         context,
                                         l.$4,
@@ -1825,12 +2393,20 @@ class LeadsAdminPage extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════════
 // APPROVALS (rich, manager)
 // ════════════════════════════════════════════════════════════════════════
-class ApprovalsAdminPage extends StatelessWidget {
+class ApprovalsAdminPage extends StatefulWidget {
   final SfColors colors;
   const ApprovalsAdminPage({super.key, required this.colors});
+
+  @override
+  State<ApprovalsAdminPage> createState() => _ApprovalsAdminPageState();
+}
+
+class _ApprovalsAdminPageState extends State<ApprovalsAdminPage> {
+  final Map<String, String> _decisions = {};
+
   @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
     final items = [
       (
         'To‘lov qaytarish',
@@ -1913,6 +2489,7 @@ class ApprovalsAdminPage extends StatelessWidget {
     (String, String, String, num, String, Color) it,
   ) {
     final c = SfTheme.of(context);
+    final decision = _decisions[it.$1];
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       clipBehavior: Clip.antiAlias,
@@ -1997,30 +2574,47 @@ class ApprovalsAdminPage extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SfButton(
-                            label: 'Rad',
-                            primary: false,
-                            onTap: () =>
-                                _toast(context, '✗ "${it.$1}" rad etildi'),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: SfButton(
-                            label: 'Tasdiqlash',
-                            primary: true,
-                            onTap: () => sfSnack(
-                              context,
-                              '✓ "${it.$1}" tasdiqlandi',
-                              bg: const Color(0xFF4F7B3B),
+                    if (decision == null)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SfButton(
+                              key: ValueKey('approval-reject-${it.$1}'),
+                              label: 'Rad',
+                              primary: false,
+                              onTap: () => _decide(it.$1, false),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: SfButton(
+                              key: ValueKey('approval-approve-${it.$1}'),
+                              label: 'Tasdiqlash',
+                              primary: true,
+                              onTap: () => _decide(it.$1, true),
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Pill(
+                              decision,
+                              tone: decision == 'Tasdiqlandi'
+                                  ? PillTone.success
+                                  : PillTone.danger,
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () =>
+                                setState(() => _decisions.remove(it.$1)),
+                            icon: const Icon(Icons.undo_rounded, size: 17),
+                            label: const Text('Bekor qilish'),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -2028,6 +2622,42 @@ class ApprovalsAdminPage extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _decide(String request, bool approve) async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(approve ? 'So‘rovni tasdiqlash' : 'So‘rovni rad etish'),
+            content: Text(
+              approve
+                  ? '“$request” so‘rovi tasdiqlangan holatga o‘tkazilsinmi?'
+                  : '“$request” so‘rovi rad etilgan holatga o‘tkazilsinmi?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Yo‘q'),
+              ),
+              FilledButton(
+                key: const ValueKey('approval-confirm'),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text(approve ? 'Tasdiqlash' : 'Rad etish'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    setState(
+      () => _decisions[request] = approve ? 'Tasdiqlandi' : 'Rad etildi',
+    );
+    sfSnack(
+      context,
+      approve ? '“$request” tasdiqlandi' : '“$request” rad etildi',
+      bg: approve ? const Color(0xFF4F7B3B) : const Color(0xFF9A4A42),
     );
   }
 }
@@ -2462,17 +3092,7 @@ class PermissionsAdminPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    final roles = [
-      ('Direktor', 4, c.primary, true),
-      ('Filial menejeri', 4, c.primary, false),
-      ('Metodist', 6, c.accent, false),
-      ('O‘qituvchi', 38, c.success, false),
-      ('Assistent', 12, c.success, false),
-      ('Qabul · Reception', 8, c.ink2, false),
-      ('Sotuv · Marketing', 5, c.warn, false),
-      ('Buxgalter', 3, c.success, false),
-      ('Auditor', 2, _purple, false),
-    ];
+    final roles = SfRole.values;
     return SfTheme(
       colors: c,
       child: _page(c, 'Ruxsatlar · RBAC', [
@@ -2480,7 +3100,7 @@ class PermissionsAdminPage extends StatelessWidget {
           context,
           'Rol va ruxsatlar',
           'Ruxsatlar · RBAC',
-          '9 ta rol · 82 xodim',
+          '${roles.length} ta amaldagi rol · faqat ko‘rish',
         ),
         Padding(
           padding: _pad,
@@ -2489,30 +3109,331 @@ class PermissionsAdminPage extends StatelessWidget {
             rows: [
               for (int i = 0; i < roles.length; i++)
                 _Row(
+                  key: ValueKey('permission-role-${roles[i].name}'),
                   lead: Container(
                     width: 10,
                     height: 10,
                     decoration: BoxDecoration(
-                      color: roles[i].$3,
+                      color: _permissionRoleColor(c, roles[i]),
                       borderRadius: BorderRadius.circular(3),
                     ),
                   ),
-                  title: roles[i].$1,
-                  sub: '${roles[i].$2} xodim',
+                  title: kRoleConfigs[roles[i]]!.label,
+                  sub:
+                      '${navigationRoutesFor(roles[i]).length} route · ${kRoleConfigs[roles[i]]!.scope}',
                   last: i == roles.length - 1,
-                  onTap: () => _toast(context, '${roles[i].$1} · ruxsatlar'),
-                  trail: roles[i].$4
-                      ? const Pill('tizim', tone: PillTone.neutral)
-                      : Icon(
-                          Icons.chevron_right_rounded,
-                          size: 18,
-                          color: c.muted2,
-                        ),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => _PermissionMatrixDetailPage(
+                        colors: c,
+                        role: roles[i],
+                      ),
+                    ),
+                  ),
+                  trail: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (roles[i] == SfRole.ceo) ...[
+                        const Pill('tizim', tone: PillTone.neutral),
+                        const SizedBox(width: 4),
+                      ],
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: c.muted2,
+                      ),
+                    ],
+                  ),
                 ),
             ],
           ),
         ),
       ]),
+    );
+  }
+}
+
+Color _permissionRoleColor(SfColors colors, SfRole role) => switch (role) {
+  SfRole.ceo => colors.primary,
+  SfRole.manager => colors.success,
+  SfRole.audit => _purple,
+};
+
+String _permissionActionFor(String route, SfRole role) => switch (route) {
+  'dash' => 'Просмотр показателей',
+  'branches' => 'Просмотр · настройка',
+  'comparison' || 'history' => 'Только чтение',
+  'students' => 'Просмотр профилей',
+  'groups' => 'Просмотр · управление',
+  'teachers' || 'hr' || 'departments' || 'meetings' => 'Просмотр · управление',
+  'parents' => 'Просмотр профилей',
+  'attendance' when role == SfRole.manager => 'Просмотр · отметка',
+  'attendance' => 'Только чтение',
+  'payments' => 'Просмотр операций',
+  'report' => 'Просмотр · экспорт',
+  'payroll' => 'Только чтение',
+  'leads' || 'enroll' || 'schedule' => 'Просмотр процесса',
+  'approvals' => 'Просмотр · решение',
+  'messages' => 'Чтение · отправка',
+  'chats' => 'Только чтение',
+  'ai' => 'AI-запросы',
+  'notifications' => 'Просмотр',
+  'permissions' => 'Только чтение',
+  'settings' => 'Настройка подключения',
+  'anomalies' => 'Просмотр · решение',
+  'fairness' ||
+  'finance' ||
+  'logs' ||
+  'aiusage' ||
+  'surveys' => 'Только чтение',
+  'cases' => 'Просмотр · смена статуса',
+  _ => 'Просмотр',
+};
+
+class _PermissionMatrixDetailPage extends StatelessWidget {
+  final SfColors colors;
+  final SfRole role;
+
+  const _PermissionMatrixDetailPage({required this.colors, required this.role});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    final config = kRoleConfigs[role]!;
+    final groups = menuFor(role);
+    final count = navigationRoutesFor(role).length;
+    return SfTheme(
+      colors: c,
+      child: Scaffold(
+        key: ValueKey('permission-matrix-${role.name}'),
+        backgroundColor: c.bg,
+        appBar: AppBar(
+          backgroundColor: c.surface,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          iconTheme: IconThemeData(color: c.ink),
+          title: Text(
+            '${config.label} · permissions',
+            style: TextStyle(
+              fontFamily: SfType.ui,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 26),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: c.surface,
+                border: Border.all(color: c.border),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: _permissionRoleColor(
+                            c,
+                            role,
+                          ).withValues(alpha: .14),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Icon(
+                          role == SfRole.audit
+                              ? Icons.shield_rounded
+                              : role == SfRole.manager
+                              ? Icons.business_center_rounded
+                              : Icons.account_balance_rounded,
+                          color: _permissionRoleColor(c, role),
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              config.roleTitle,
+                              style: TextStyle(
+                                fontFamily: SfType.ui,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: c.ink,
+                              ),
+                            ),
+                            Text(
+                              config.scope,
+                              style: TextStyle(
+                                fontFamily: SfType.ui,
+                                fontSize: 11,
+                                color: c.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Pill('$count route', tone: PillTone.neutral),
+                    ],
+                  ),
+                  const SizedBox(height: 11),
+                  Text(
+                    'Матрица формируется из фактического menuFor(${role.name}). Изменение разрешений на этом экране отключено.',
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 11,
+                      height: 1.4,
+                      color: c.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            for (final group in groups) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(2, 10, 2, 7),
+                child: Text(
+                  group.title.toUpperCase(),
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .7,
+                    color: c.muted,
+                  ),
+                ),
+              ),
+              SfCard(
+                child: Column(
+                  children: [
+                    for (var index = 0; index < group.items.length; index++)
+                      _PermissionRouteRow(
+                        key: ValueKey(
+                          'permission-route-${group.items[index].id}',
+                        ),
+                        item: group.items[index],
+                        role: role,
+                        scope: config.scope,
+                        last: index == group.items.length - 1,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            SfCard(
+              child: _PermissionRouteRow(
+                key: const ValueKey('permission-route-me'),
+                item: const MenuItem(
+                  'me',
+                  'Profil',
+                  Icons.person_outline_rounded,
+                ),
+                role: role,
+                scope: 'Собственный профиль',
+                last: true,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PermissionRouteRow extends StatelessWidget {
+  final MenuItem item;
+  final SfRole role;
+  final String scope;
+  final bool last;
+
+  const _PermissionRouteRow({
+    super.key,
+    required this.item,
+    required this.role,
+    required this.scope,
+    required this.last,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: last ? BorderSide.none : BorderSide(color: c.border),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: c.surface2,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Icon(item.icon, size: 16, color: c.ink2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: c.ink,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      item.id,
+                      style: TextStyle(
+                        fontFamily: SfType.mono,
+                        fontSize: 9,
+                        color: c.muted,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${_permissionActionFor(item.id, role)} · $scope',
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 10.5,
+                    height: 1.3,
+                    color: c.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 7),
+          Icon(Icons.visibility_rounded, size: 15, color: c.success),
+        ],
+      ),
     );
   }
 }
@@ -2775,15 +3696,27 @@ class MessagesAdminPage extends StatelessWidget {
                                 color: c.primary,
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Center(
-                                child: SfStar(size: 16, color: Colors.white),
+                              child: Center(
+                                child: SfStar(size: 16, color: c.surface),
                               ),
                             )
                           : SfAvatar(name: threads[i].$1, size: 34),
                       title: threads[i].$1,
                       sub: threads[i].$3,
                       last: i == threads.length - 1,
-                      onTap: () => _toast(context, threads[i].$3),
+                      onTap: () => _showRecordDetails(
+                        context,
+                        title: threads[i].$1,
+                        icon: Icons.forum_rounded,
+                        fields: {
+                          'Kim': threads[i].$2,
+                          'Oxirgi xabar': threads[i].$3,
+                          'Vaqt': threads[i].$4,
+                          'O‘qilmagan': '${threads[i].$5}',
+                          'Faol': threads[i].$6 ? 'Ha' : 'Yo‘q',
+                          'Guruh suhbati': threads[i].$7 ? 'Ha' : 'Yo‘q',
+                        },
+                      ),
                       trail: Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -2810,7 +3743,7 @@ class MessagesAdminPage extends StatelessWidget {
                                   fontFamily: SfType.ui,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.white,
+                                  color: c.surface,
                                 ),
                               ),
                             ),
@@ -2830,12 +3763,20 @@ class MessagesAdminPage extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════════
 // ENROLL (test funnel)
 // ════════════════════════════════════════════════════════════════════════
-class EnrollAdminPage extends StatelessWidget {
+class EnrollAdminPage extends StatefulWidget {
   final SfColors colors;
   const EnrollAdminPage({super.key, required this.colors});
+
+  @override
+  State<EnrollAdminPage> createState() => _EnrollAdminPageState();
+}
+
+class _EnrollAdminPageState extends State<EnrollAdminPage> {
+  final List<({String name, String target, int score})> _results = [];
+
   @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
     final steps = [
       (
         'Ariza',
@@ -2929,12 +3870,334 @@ class EnrollAdminPage extends StatelessWidget {
                 icon: Icons.add_rounded,
                 label: 'Yangi nomzod · test boshlash',
                 primary: true,
-                onTap: () => _toast(context, 'Test boshlandi (demo)'),
+                onTap: () async {
+                  final result = await Navigator.of(context)
+                      .push<({String name, String target, int score})>(
+                        MaterialPageRoute(
+                          builder: (_) => SfTheme(
+                            colors: c,
+                            child: const _EnrollmentTestPage(),
+                          ),
+                        ),
+                      );
+                  if (result == null || !mounted) return;
+                  setState(() => _results.insert(0, result));
+                },
               ),
+              if (_results.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _listCard(
+                  title: 'Oxirgi natijalar',
+                  rows: [
+                    for (var index = 0; index < _results.length; index++)
+                      _Row(
+                        lead: SfAvatar(name: _results[index].name, size: 32),
+                        title: _results[index].name,
+                        sub: _results[index].target,
+                        last: index == _results.length - 1,
+                        trail: Pill(
+                          '${_results[index].score}%',
+                          tone: _results[index].score >= 50
+                              ? PillTone.success
+                              : PillTone.warn,
+                        ),
+                        onTap: () => _showRecordDetails(
+                          context,
+                          title: _results[index].name,
+                          icon: Icons.assignment_turned_in_rounded,
+                          fields: {
+                            'Yo‘nalish': _results[index].target,
+                            'Natija': '${_results[index].score}%',
+                            'Tavsiya': _results[index].score >= 75
+                                ? 'Yuqori daraja guruhi'
+                                : _results[index].score >= 50
+                                ? 'O‘rta daraja guruhi'
+                                : 'Foundation guruhi',
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
       ]),
+    );
+  }
+}
+
+class _EnrollmentTestPage extends StatefulWidget {
+  const _EnrollmentTestPage();
+
+  @override
+  State<_EnrollmentTestPage> createState() => _EnrollmentTestPageState();
+}
+
+class _EnrollmentTestPageState extends State<_EnrollmentTestPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  String _target = 'English';
+  int _step = 0;
+  final List<int> _answers = List<int>.filled(4, -1);
+
+  static const _questions = [
+    (
+      'Choose the correct sentence',
+      ['She go to school.', 'She goes to school.', 'She going school.'],
+      1,
+    ),
+    ('Past tense of “teach”', ['teached', 'taught', 'teach'], 1),
+    ('12 × 8', ['86', '96', '108'], 1),
+    ('Davomini toping: 2, 4, 8, 16, …', ['24', '30', '32'], 2),
+  ];
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  int get _score {
+    var correct = 0;
+    for (var i = 0; i < _questions.length; i++) {
+      if (_answers[i] == _questions[i].$3) correct++;
+    }
+    return (correct / _questions.length * 100).round();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return SfScaffold(
+      colors: c,
+      title: _step == 0
+          ? 'Nomzod ma’lumotlari'
+          : _step == 1
+          ? 'Daraja testi'
+          : 'Test natijasi',
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+          child: _step == 0
+              ? _candidateForm(c)
+              : _step == 1
+              ? _testForm(c)
+              : _result(c),
+        ),
+      ),
+    );
+  }
+
+  Widget _candidateForm(SfColors c) {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SfCard(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  TextFormField(
+                    key: const Key('enroll-name'),
+                    controller: _name,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'To‘liq ism',
+                      prefixIcon: Icon(Icons.person_outline_rounded),
+                    ),
+                    validator: (value) => (value ?? '').trim().length < 3
+                        ? 'Ismni to‘liq kiriting'
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    key: const Key('enroll-phone'),
+                    controller: _phone,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Telefon',
+                      hintText: '+998 90 123 45 67',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                    ),
+                    validator: (value) =>
+                        (value ?? '').replaceAll(RegExp(r'\D'), '').length < 9
+                        ? 'Telefon raqamini tekshiring'
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    key: const Key('enroll-target'),
+                    initialValue: _target,
+                    decoration: const InputDecoration(
+                      labelText: 'Yo‘nalish',
+                      prefixIcon: Icon(Icons.school_outlined),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'English',
+                        child: Text('English'),
+                      ),
+                      DropdownMenuItem(value: 'IT', child: Text('IT')),
+                      DropdownMenuItem(
+                        value: 'Matematika',
+                        child: Text('Matematika'),
+                      ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _target = value ?? _target),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          SfButton(
+            icon: Icons.play_arrow_rounded,
+            label: 'Testni boshlash',
+            primary: true,
+            onTap: () {
+              if (!(_formKey.currentState?.validate() ?? false)) return;
+              FocusManager.instance.primaryFocus?.unfocus();
+              setState(() => _step = 1);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _testForm(SfColors c) {
+    final answered = _answers.where((answer) => answer >= 0).length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LinearProgressIndicator(
+          value: answered / _questions.length,
+          minHeight: 7,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '$answered / ${_questions.length} savol javoblandi',
+          style: TextStyle(color: c.muted, fontSize: 12),
+        ),
+        const SizedBox(height: 12),
+        for (var index = 0; index < _questions.length; index++) ...[
+          SfCard(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${index + 1}. ${_questions[index].$1}',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: c.ink),
+                  ),
+                  const SizedBox(height: 9),
+                  RadioGroup<int>(
+                    groupValue: _answers[index],
+                    onChanged: (value) =>
+                        setState(() => _answers[index] = value ?? -1),
+                    child: Column(
+                      children: [
+                        for (
+                          var option = 0;
+                          option < _questions[index].$2.length;
+                          option++
+                        )
+                          RadioListTile<int>(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: option,
+                            title: Text(_questions[index].$2[option]),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        SfButton(
+          icon: Icons.check_circle_outline_rounded,
+          label: 'Natijani hisoblash',
+          primary: true,
+          onTap: () {
+            if (answered != _questions.length) {
+              sfSnack(context, 'Barcha savollarga javob bering');
+              return;
+            }
+            setState(() => _step = 2);
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _result(SfColors c) {
+    final level = _score >= 75
+        ? 'Yuqori daraja'
+        : _score >= 50
+        ? 'O‘rta daraja'
+        : 'Boshlang‘ich daraja';
+    return Column(
+      children: [
+        SfCard(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                Icon(Icons.verified_rounded, size: 54, color: c.success),
+                const SizedBox(height: 10),
+                Text(
+                  '${_name.text.trim()} · $_score%',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text('$level · $_target', style: TextStyle(color: c.muted)),
+                const SizedBox(height: 14),
+                Pill(
+                  _score >= 50 ? 'Guruh tavsiya qilindi' : 'Foundation tavsiya',
+                  tone: _score >= 50 ? PillTone.success : PillTone.warn,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        SfButton(
+          icon: Icons.refresh_rounded,
+          label: 'Testni qayta topshirish',
+          primary: false,
+          onTap: () => setState(() {
+            _answers.fillRange(0, _answers.length, -1);
+            _step = 1;
+          }),
+        ),
+        const SizedBox(height: 8),
+        SfButton(
+          icon: Icons.done_rounded,
+          label: 'Natijani saqlash',
+          primary: true,
+          onTap: () => Navigator.pop(context, (
+            name: _name.text.trim(),
+            target: _target,
+            score: _score,
+          )),
+        ),
+      ],
     );
   }
 }
@@ -3067,7 +4330,19 @@ class AnomaliesAdminPage extends StatelessWidget {
                     title: r.$1,
                     sub: '${r.$3} · ${r.$2} · ${r.$6}',
                     last: last,
-                    onTap: () => _toast(context, '${r.$1} · AI skor ${r.$4}'),
+                    onTap: () => _showRecordDetails(
+                      context,
+                      title: r.$1,
+                      icon: Icons.warning_amber_rounded,
+                      fields: {
+                        'Turi': r.$2,
+                        'Manba': r.$3,
+                        'AI skor': '${r.$4} / 100',
+                        'Muhimlik': r.$5,
+                        'Aniqlangan': r.$6,
+                        'Holat': r.$7,
+                      },
+                    ),
                     trail: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -3821,6 +5096,7 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Boshqaruv paneli', Icons.home_rounded),
+          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
           MenuItem('branches', 'Filiallar', Icons.public_rounded),
           MenuItem(
             'comparison',
@@ -3830,26 +5106,43 @@ List<MenuGroup> menuFor(SfRole role) {
           MenuItem('history', 'So‘nggi hodisalar', Icons.history_rounded),
         ]),
         MenuGroup('Odamlar', [
-          MenuItem('students', 'O‘quvchilar', Icons.groups_rounded, 1842),
-          MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded, 96),
-          MenuItem('teachers', 'O‘qituvchilar', Icons.badge_rounded, 54),
+          MenuItem('students', 'O‘quvchilar', Icons.groups_rounded),
+          MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded),
+          MenuItem('teachers', 'O‘qituvchilar', Icons.badge_rounded),
           MenuItem('parents', 'Ota-onalar', Icons.chat_bubble_outline_rounded),
+          MenuItem('attendance', 'Davomat', Icons.fact_check_outlined),
         ]),
         MenuGroup('Tashkilot', [
           MenuItem('departments', 'Bo‘limlar', Icons.folder_rounded),
           MenuItem('hr', 'HR · Xodimlar', Icons.badge_outlined),
-          MenuItem('meetings', 'Yig‘ilishlar', Icons.event_rounded, 3),
+          MenuItem('meetings', 'Yig‘ilishlar', Icons.event_rounded),
         ]),
         MenuGroup('Moliya', [
           MenuItem('payments', 'To‘lovlar', Icons.payments_rounded),
+          MenuItem('report', 'Moliyaviy hisobot', Icons.analytics_outlined),
           MenuItem('payroll', 'Oyliklar', Icons.receipt_long_rounded),
         ]),
+        MenuGroup('Operatsiya', [
+          MenuItem('leads', 'Lidlar · Qabul', Icons.flag_rounded),
+          MenuItem('enroll', 'Qabul · Test', Icons.fact_check_rounded),
+          MenuItem('approvals', 'Tasdiqlash', Icons.fact_check_rounded),
+          MenuItem(
+            'schedule',
+            'Jadval · Xonalar',
+            Icons.calendar_month_rounded,
+          ),
+        ]),
         MenuGroup('Aloqa', [
-          MenuItem('messages', 'Xabarlar', Icons.chat_rounded, 5),
+          MenuItem('messages', 'Xabarlar', Icons.chat_rounded),
           MenuItem('chats', 'Suhbat nazorati', Icons.shield_outlined),
           MenuItem('ai', 'AI tahlil', Icons.auto_awesome_rounded),
         ]),
         MenuGroup('Tizim', [
+          MenuItem(
+            'notifications',
+            'Bildirishnomalar',
+            Icons.notifications_none_rounded,
+          ),
           MenuItem('permissions', 'Ruxsatlar · RBAC', Icons.shield_rounded),
           MenuItem('settings', 'Sozlamalar', Icons.settings_rounded),
         ]),
@@ -3858,26 +5151,28 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Boshqaruv paneli', Icons.home_rounded),
+          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
         ]),
         MenuGroup('Odamlar', [
-          MenuItem('students', 'O‘quvchilar', Icons.groups_rounded, 512),
-          MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded, 28),
-          MenuItem('teachers', 'Xodimlar', Icons.badge_rounded, 16),
+          MenuItem('students', 'O‘quvchilar', Icons.groups_rounded),
+          MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded),
+          MenuItem('teachers', 'Xodimlar', Icons.badge_rounded),
           MenuItem('parents', 'Ota-onalar', Icons.chat_bubble_outline_rounded),
-          MenuItem('leads', 'Lidlar · Qabul', Icons.flag_rounded, 34),
+          MenuItem('attendance', 'Davomat', Icons.fact_check_outlined),
+          MenuItem('leads', 'Lidlar · Qabul', Icons.flag_rounded),
           MenuItem('enroll', 'Qabul · Test', Icons.fact_check_rounded),
         ]),
         MenuGroup('Tashkilot', [
           MenuItem('departments', 'Bo‘limlar', Icons.folder_rounded),
           MenuItem('hr', 'HR · Xodimlar', Icons.badge_outlined),
-          MenuItem('meetings', 'Yig‘ilishlar', Icons.event_rounded, 2),
+          MenuItem('meetings', 'Yig‘ilishlar', Icons.event_rounded),
         ]),
         MenuGroup('Moliya', [
           MenuItem('payments', 'To‘lovlar', Icons.payments_rounded),
           MenuItem('payroll', 'Oyliklar', Icons.receipt_long_rounded),
         ]),
         MenuGroup('Operatsiya', [
-          MenuItem('approvals', 'Tasdiqlash', Icons.fact_check_rounded, 7),
+          MenuItem('approvals', 'Tasdiqlash', Icons.fact_check_rounded),
           MenuItem(
             'schedule',
             'Jadval · Xonalar',
@@ -3885,12 +5180,16 @@ List<MenuGroup> menuFor(SfRole role) {
           ),
         ]),
         MenuGroup('Aloqa', [
-          MenuItem('messages', 'Xabarlar', Icons.chat_rounded, 5),
+          MenuItem('messages', 'Xabarlar', Icons.chat_rounded),
           MenuItem('chats', 'Suhbat nazorati', Icons.shield_outlined),
           MenuItem('ai', 'AI tahlil', Icons.auto_awesome_rounded),
         ]),
         MenuGroup('Tizim', [
-          MenuItem('permissions', 'Ruxsatlar · RBAC', Icons.shield_rounded),
+          MenuItem(
+            'notifications',
+            'Bildirishnomalar',
+            Icons.notifications_none_rounded,
+          ),
           MenuItem('settings', 'Sozlamalar', Icons.settings_rounded),
         ]),
       ];
@@ -3898,10 +5197,11 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Audit paneli', Icons.shield_rounded),
+          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
         ]),
         MenuGroup('Nazorat', [
-          MenuItem('anomalies', 'Anomaliyalar', Icons.flag_rounded, 12),
-          MenuItem('fairness', 'Karta adolati', Icons.balance_rounded, 5),
+          MenuItem('anomalies', 'Anomaliyalar', Icons.flag_rounded),
+          MenuItem('fairness', 'Karta adolati', Icons.balance_rounded),
           MenuItem('finance', 'Moliyaviy tekshir', Icons.trending_up_rounded),
         ]),
         MenuGroup('Jurnal', [
@@ -3912,20 +5212,42 @@ List<MenuGroup> menuFor(SfRole role) {
             'So‘rovnoma yaxlitligi',
             Icons.fact_check_rounded,
           ),
+          MenuItem('messages', 'Xabarlar', Icons.chat_rounded),
         ]),
         MenuGroup('Boshqaruv', [
-          MenuItem('cases', 'Holatlar · Flaglar', Icons.push_pin_rounded, 8),
+          MenuItem('cases', 'Holatlar · Flaglar', Icons.push_pin_rounded),
         ]),
         MenuGroup('Tizim', [
+          MenuItem(
+            'notifications',
+            'Bildirishnomalar',
+            Icons.notifications_none_rounded,
+          ),
           MenuItem('settings', 'Sozlamalar', Icons.settings_rounded),
         ]),
       ];
   }
 }
 
+/// The single role-access source for navigation and pushed admin pages.
+///
+/// Keeping this derived from [menuFor] prevents the sidebar, notification
+/// deep-links and programmatic dashboard navigation from drifting into
+/// different permission matrices. Profile is intentionally available to every
+/// authenticated role even though it is not duplicated in the sidebar.
+Set<String> navigationRoutesFor(SfRole role) => {
+  'me',
+  for (final group in menuFor(role))
+    for (final item in group.items) item.id,
+};
+
+bool roleCanNavigate(SfRole role, String route) =>
+    navigationRoutesFor(role).contains(route);
+
 /// Resolve a menu id to its pushed page. Returns null for ids handled by the
 /// console's own bottom tabs (dash, and the role's quick screens).
 Widget? buildAdminPage(String id, SfColors c, SfRole role) {
+  if (!roleCanNavigate(role, id)) return null;
   final page = _adminPageFor(id, c, role);
   // Pushed routes have no ambient SfTheme, so wrap here: this gives the page's
   // own build context an SfTheme ancestor, which the shared free-function

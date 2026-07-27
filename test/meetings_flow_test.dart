@@ -36,9 +36,20 @@ void main() {
     expect(find.text('KUN TARTIBI'), findsOneWidget);
     expect(find.text('Davomat va to‘lovlar bo‘yicha yakun'), findsOneWidget);
 
-    await tester.tap(find.text('Eslatma yuborish'));
-    await tester.pump();
-    expect(find.text('Eslatma yuborildi'), findsWidgets);
+    await tester.tap(find.text('Подготовить напоминание'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('meeting-reminder-draft')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('отправка не выполняется автоматически'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Сохранить черновик'));
+    await tester.pumpAndSettle();
+    expect(find.text('Черновик готов'), findsOneWidget);
+    expect(store.activities.first.title, 'Yig‘ilish eslatmasi tayyorlandi');
     expect(tester.takeException(), isNull);
   });
 

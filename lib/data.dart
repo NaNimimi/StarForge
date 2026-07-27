@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 
+/// Human-readable build marker shown in the profile.
+///
+/// Keep this in one shared place instead of scattering stale version strings
+/// across screens.
+const kAppDisplayVersion = '1.1.5';
+
 /// Display currency for all money formatting. Switchable from the design panel.
 enum SfCurrency { uzs, usd, eur, rub }
 
@@ -443,7 +449,16 @@ class LedgerEntry {
   final bool inflow; // true = money in, false = money out
   final String kind; // To'lov | Oylik | Kitob | Naqd | Tasdiq | Qaytarish
   final String channel; // Click | Payme | Uzum | Naqd | Tizim
+  final String date;
   final String time;
+  final String? payer;
+  final String? student;
+  final String? group;
+  final String? teacher;
+  final String? branch;
+  final String? operationNumber;
+  final String? comment;
+  final String status;
   const LedgerEntry({
     required this.id,
     required this.title,
@@ -452,8 +467,26 @@ class LedgerEntry {
     required this.inflow,
     required this.kind,
     required this.channel,
+    this.date = '22.07.2026',
     required this.time,
+    this.payer,
+    this.student,
+    this.group,
+    this.teacher,
+    this.branch,
+    this.operationNumber,
+    this.comment,
+    this.status = 'accepted',
   });
+
+  /// Normalized fields used by payment-detail UIs. Older entries remain fully
+  /// compatible: their original [who], [channel], and [id] values are used
+  /// whenever a richer backend-style field was not supplied.
+  String get payerName => payer?.trim().isNotEmpty == true ? payer! : who;
+  String get studentName => student?.trim().isNotEmpty == true ? student! : who;
+  String get paymentMethod => channel;
+  String get transactionNumber =>
+      operationNumber?.trim().isNotEmpty == true ? operationNumber! : id;
 }
 
 const List<LedgerEntry> kLedgerSeed = [
@@ -465,7 +498,15 @@ const List<LedgerEntry> kLedgerSeed = [
     inflow: true,
     kind: "To'lov",
     channel: 'Payme',
+    date: '22.07.2026',
     time: '09:14',
+    payer: 'Azizov Anvar',
+    student: 'Azizova Madina',
+    group: '9-B Algebra',
+    teacher: 'Nigora Karimova',
+    branch: 'Yunusobod',
+    operationNumber: 'PAYME-220726-0914',
+    comment: 'Iyul oyi uchun to‘liq to‘lov',
   ),
   LedgerEntry(
     id: 'L-2047',
@@ -475,7 +516,15 @@ const List<LedgerEntry> kLedgerSeed = [
     inflow: true,
     kind: "To'lov",
     channel: 'Click',
+    date: '22.07.2026',
     time: '09:02',
+    payer: 'Halimov Rustam',
+    student: 'Halimova Zilola',
+    group: '9-B Algebra',
+    teacher: 'Nigora Karimova',
+    branch: 'Yunusobod',
+    operationNumber: 'CLICK-220726-0902',
+    comment: 'Iyul oyi uchun to‘liq to‘lov',
   ),
   LedgerEntry(
     id: 'L-2046',
@@ -485,7 +534,14 @@ const List<LedgerEntry> kLedgerSeed = [
     inflow: true,
     kind: 'Kitob',
     channel: 'Naqd',
+    date: '21.07.2026',
     time: 'Kecha 17:40',
+    student: "G'aniyev Jasur",
+    group: '10-V Geom',
+    teacher: 'Bobur Akramov',
+    branch: 'Yunusobod',
+    operationNumber: 'CASH-210726-1740',
+    comment: 'Grammar 4 kitobi',
   ),
   LedgerEntry(
     id: 'L-2045',
@@ -495,7 +551,11 @@ const List<LedgerEntry> kLedgerSeed = [
     inflow: false,
     kind: 'Oylik',
     channel: 'Tizim',
+    date: '21.07.2026',
     time: 'Kecha 15:20',
+    payer: 'StarForge EDU',
+    operationNumber: 'SALARY-210726-1520',
+    comment: 'Iyul oyi avans to‘lovi',
   ),
   LedgerEntry(
     id: 'L-2044',
@@ -505,7 +565,15 @@ const List<LedgerEntry> kLedgerSeed = [
     inflow: true,
     kind: 'Naqd',
     channel: 'Naqd',
+    date: '21.07.2026',
     time: 'Kecha 11:05',
+    payer: 'Ibragimov Sardor',
+    student: 'Ibragimov Sardor',
+    group: 'Algebra Mid',
+    teacher: 'Nigora Karimova',
+    branch: 'Yunusobod',
+    operationNumber: 'CASH-210726-1105',
+    comment: 'Iyul oyi uchun to‘lov',
   ),
 ];
 

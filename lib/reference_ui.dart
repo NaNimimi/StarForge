@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'theme.dart';
 
@@ -20,6 +21,7 @@ abstract final class RefMotion {
 abstract final class RefRadius {
   static const sm = BorderRadius.all(Radius.circular(8));
   static const md = BorderRadius.all(Radius.circular(14));
+  static const card = BorderRadius.all(Radius.circular(16));
   static const lg = BorderRadius.all(Radius.circular(22));
   static const xl = BorderRadius.all(Radius.circular(28));
   static const pill = BorderRadius.all(Radius.circular(999));
@@ -27,15 +29,15 @@ abstract final class RefRadius {
 
 abstract final class RefShadows {
   static const soft = <BoxShadow>[
-    BoxShadow(color: Color(0x0F361E0E), blurRadius: 2, offset: Offset(0, 1)),
+    BoxShadow(color: Color(0x0F1A1E18), blurRadius: 3, offset: Offset(0, 1)),
   ];
   static const card = <BoxShadow>[
-    BoxShadow(color: Color(0x14361E0E), blurRadius: 18, offset: Offset(0, 6)),
-    BoxShadow(color: Color(0x0A361E0E), blurRadius: 4, offset: Offset(0, 2)),
+    BoxShadow(color: Color(0x141A1E18), blurRadius: 18, offset: Offset(0, 6)),
+    BoxShadow(color: Color(0x0A1A1E18), blurRadius: 4, offset: Offset(0, 2)),
   ];
   static const raised = <BoxShadow>[
-    BoxShadow(color: Color(0x1F361E0E), blurRadius: 40, offset: Offset(0, 18)),
-    BoxShadow(color: Color(0x0F361E0E), blurRadius: 10, offset: Offset(0, 4)),
+    BoxShadow(color: Color(0x1F1A1E18), blurRadius: 40, offset: Offset(0, 18)),
+    BoxShadow(color: Color(0x0F1A1E18), blurRadius: 10, offset: Offset(0, 4)),
   ];
 }
 
@@ -130,10 +132,23 @@ class _RefPressableState extends State<RefPressable> {
       enabled: enabled,
       selected: widget.selected,
       label: widget.semanticLabel,
-      child: Focus(
-        onFocusChange: (value) => setState(() => _focused = value),
+      child: FocusableActionDetector(
+        enabled: enabled,
+        mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        onShowFocusHighlight: (value) => setState(() => _focused = value),
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+        },
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              widget.onPressed?.call();
+              return null;
+            },
+          ),
+        },
         child: MouseRegion(
-          cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
           onEnter: (_) => setState(() => _hovered = true),
           onExit: (_) => setState(() => _hovered = false),
           child: GestureDetector(
@@ -141,7 +156,9 @@ class _RefPressableState extends State<RefPressable> {
             onTap: widget.onPressed,
             onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
             onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
-            onTapCancel: enabled ? () => setState(() => _pressed = false) : null,
+            onTapCancel: enabled
+                ? () => setState(() => _pressed = false)
+                : null,
             child: AnimatedScale(
               duration: duration,
               curve: Curves.easeOutCubic,
@@ -177,7 +194,7 @@ class RefSurfaceCard extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
-    this.radius = RefRadius.lg,
+    this.radius = RefRadius.card,
     this.color,
     this.elevated = false,
   });
@@ -196,7 +213,12 @@ class RefSurfaceCard extends StatelessWidget {
         color: color ?? c.surface,
         borderRadius: radius,
         border: Border.all(color: c.border),
-        boxShadow: elevated ? RefShadows.card : null,
+        // Borders and surface contrast create ordinary grouping.  Elevation is
+        // opt-in for a true floating surface and is deliberately absent in
+        // dark mode, where borders read more cleanly.
+        boxShadow: elevated && Theme.of(context).brightness == Brightness.light
+            ? RefShadows.card
+            : null,
       ),
       child: ClipRRect(
         borderRadius: radius,
@@ -236,7 +258,7 @@ class RefButton extends StatelessWidget {
     final (background, foreground, border) = switch (kind) {
       RefButtonKind.primary => (c.primary, c.surface, null),
       RefButtonKind.ghost => (Colors.transparent, c.ink, c.borderStrong),
-      RefButtonKind.soft => (c.surface2, c.ink, null),
+      RefButtonKind.soft => (c.primarySoft, c.primaryInk, null),
       RefButtonKind.ink => (c.ink, c.bg, null),
       RefButtonKind.danger => (c.danger, c.surface, null),
     };
@@ -288,7 +310,9 @@ class RefButton extends StatelessWidget {
       semanticLabel: label,
       child: child,
     );
-    return block ? SizedBox(width: double.infinity, child: pressable) : pressable;
+    return block
+        ? SizedBox(width: double.infinity, child: pressable)
+        : pressable;
   }
 }
 
@@ -318,45 +342,62 @@ class RefLargeHeader extends StatelessWidget {
         border: Border(bottom: BorderSide(color: c.border)),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 12, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.fromLTRB(16, 11, 12, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            SizedBox(
-              height: 44,
-              child: Row(
+            if (leading != null) ...[leading!, const SizedBox(width: 10)],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  ?leading,
-                  const Spacer(),
-                  for (final action in actions)
+                  if (eyebrow != null) ...[
+                    Text(
+                      eyebrow!.toUpperCase(),
+                      style: RefType.eyebrow(color: c.primary, size: 9.5),
+                    ),
+                    const SizedBox(height: 2),
+                  ],
+                  Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.display(
+                      size: 24,
+                      weight: FontWeight.w400,
+                      color: c.ink,
+                      height: 1.02,
+                    ),
+                  ),
+                  if (subtitle != null && subtitle!.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: action,
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        subtitle!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: RefType.ui(
+                          size: 11.5,
+                          color: c.muted,
+                          height: 1.3,
+                        ),
+                      ),
                     ),
                 ],
               ),
             ),
-            const SizedBox(height: 6),
-            if (eyebrow != null) ...[
-              Text(eyebrow!.toUpperCase(), style: RefType.eyebrow(color: c.primary, size: 10.5)),
-              const SizedBox(height: 4),
-            ],
-            Text(
-              title,
-              style: RefType.ui(
-                size: 28,
-                weight: FontWeight.w800,
-                color: c.ink,
-                letterSpacing: -.84,
-                height: 1.05,
-              ),
-            ),
-            if (subtitle != null && subtitle!.isNotEmpty)
+            if (actions.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Text(
-                  subtitle!,
-                  style: RefType.ui(size: 13, color: c.muted, height: 1.35),
+                padding: const EdgeInsets.only(left: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var index = 0; index < actions.length; index++) ...[
+                      if (index > 0) const SizedBox(width: 6),
+                      actions[index],
+                    ],
+                  ],
                 ),
               ),
           ],
@@ -397,7 +438,9 @@ class RefNavHeader extends StatelessWidget {
             alignment: Alignment.center,
             children: [
               Padding(
-                padding: EdgeInsets.symmetric(horizontal: actions.isEmpty ? 52 : 96),
+                padding: EdgeInsets.symmetric(
+                  horizontal: actions.isEmpty ? 52 : 96,
+                ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -406,7 +449,11 @@ class RefNavHeader extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
-                      style: RefType.ui(size: 17, weight: FontWeight.w700, color: c.ink),
+                      style: RefType.ui(
+                        size: 17,
+                        weight: FontWeight.w700,
+                        color: c.ink,
+                      ),
                     ),
                     if (subtitle != null)
                       Text(
@@ -473,7 +520,7 @@ class RefIconAction extends StatelessWidget {
                 borderRadius: RefRadius.md,
                 border: Border.all(color: c.border),
               ),
-              child: const SizedBox(width: 40, height: 40),
+              child: const SizedBox(width: 44, height: 44),
             ),
           ),
           Positioned.fill(
@@ -492,11 +539,18 @@ class RefIconAction extends StatelessWidget {
                   border: Border.all(color: c.surface, width: 2),
                 ),
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minWidth: 17, minHeight: 17),
+                  constraints: const BoxConstraints(
+                    minWidth: 17,
+                    minHeight: 17,
+                  ),
                   child: Center(
                     child: Text(
                       badge! > 9 ? '9+' : '$badge',
-                      style: RefType.mono(size: 8.5, weight: FontWeight.w700, color: c.surface),
+                      style: RefType.mono(
+                        size: 8.5,
+                        weight: FontWeight.w700,
+                        color: c.surface,
+                      ),
                     ),
                   ),
                 ),
@@ -540,7 +594,10 @@ class RefSearchField extends StatelessWidget {
         suffixIcon: suffix,
         filled: true,
         fillColor: c.surface,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 15,
+        ),
         hintStyle: RefType.ui(size: 14, color: c.muted),
         enabledBorder: OutlineInputBorder(
           borderRadius: RefRadius.md,
@@ -594,11 +651,19 @@ class RefSegmentedControl<T> extends StatelessWidget {
                     borderRadius: RefRadius.sm,
                     semanticLabel: labelOf(value),
                     child: AnimatedContainer(
-                      duration: RefMotion.resolve(context, const Duration(milliseconds: 180)),
-                      constraints: const BoxConstraints(minHeight: 42),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      duration: RefMotion.resolve(
+                        context,
+                        const Duration(milliseconds: 180),
+                      ),
+                      constraints: const BoxConstraints(minHeight: 44),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
-                        color: value == selected ? c.surface : Colors.transparent,
+                        color: value == selected
+                            ? c.surface
+                            : Colors.transparent,
                         borderRadius: RefRadius.sm,
                         boxShadow: value == selected ? RefShadows.soft : null,
                       ),
@@ -607,7 +672,9 @@ class RefSegmentedControl<T> extends StatelessWidget {
                         labelOf(value),
                         style: RefType.ui(
                           size: 11.5,
-                          weight: value == selected ? FontWeight.w700 : FontWeight.w500,
+                          weight: value == selected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
                           color: value == selected ? c.ink : c.muted,
                         ),
                       ),
@@ -625,7 +692,11 @@ class RefSegmentedControl<T> extends StatelessWidget {
 enum RefPillTone { neutral, primary, accent, success, warning, danger }
 
 class RefPill extends StatelessWidget {
-  const RefPill({super.key, required this.label, this.tone = RefPillTone.neutral});
+  const RefPill({
+    super.key,
+    required this.label,
+    this.tone = RefPillTone.neutral,
+  });
 
   final String label;
   final RefPillTone tone;
@@ -649,7 +720,10 @@ class RefPill extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        child: Text(label.toUpperCase(), style: RefType.eyebrow(color: foreground, size: 10)),
+        child: Text(
+          label.toUpperCase(),
+          style: RefType.eyebrow(color: foreground, size: 10),
+        ),
       ),
     );
   }
@@ -668,6 +742,7 @@ class RefMetricCard extends StatelessWidget {
     this.tone = RefMetricTone.neutral,
     this.onTap,
     this.uppercaseLabel = true,
+    this.compact = false,
   });
 
   final String label;
@@ -677,6 +752,7 @@ class RefMetricCard extends StatelessWidget {
   final RefMetricTone tone;
   final VoidCallback? onTap;
   final bool uppercaseLabel;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -690,39 +766,73 @@ class RefMetricCard extends StatelessWidget {
       RefMetricTone.neutral => (c.ink2, c.surface2),
     };
     final content = RefSurfaceCard(
-      padding: const EdgeInsets.all(14),
+      padding: compact ? const EdgeInsets.all(10) : const EdgeInsets.all(13),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               DecoratedBox(
-                decoration: BoxDecoration(color: soft, borderRadius: RefRadius.sm),
-                child: SizedBox(width: 30, height: 30, child: Icon(icon, size: 17, color: accent)),
+                decoration: BoxDecoration(
+                  color: soft,
+                  borderRadius: RefRadius.sm,
+                ),
+                child: SizedBox(
+                  width: compact ? 28 : 32,
+                  height: compact ? 28 : 32,
+                  child: Icon(icon, size: compact ? 15 : 17, color: accent),
+                ),
               ),
               const Spacer(),
-              if (onTap != null) Icon(Icons.chevron_right_rounded, size: 18, color: c.muted),
+              if (onTap != null)
+                Icon(Icons.chevron_right_rounded, size: 18, color: c.muted),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(value, style: RefType.mono(size: 22, weight: FontWeight.w700, color: accent, height: 1)),
-          const SizedBox(height: 6),
-          Text(uppercaseLabel ? label.toUpperCase() : label, style: RefType.eyebrow(color: c.muted, size: 10)),
+          SizedBox(height: compact ? 8 : 12),
+          Text(
+            value,
+            style: RefType.mono(
+              size: compact ? 18 : 21,
+              weight: FontWeight.w700,
+              color: c.ink,
+              height: 1,
+            ),
+          ),
+          SizedBox(height: compact ? 5 : 6),
+          Text(
+            uppercaseLabel ? label.toUpperCase() : label,
+            style: RefType.eyebrow(color: c.muted, size: 9.5),
+          ),
           if (detail != null) ...[
-            const SizedBox(height: 4),
-            Text(detail!, maxLines: 2, overflow: TextOverflow.ellipsis, style: RefType.ui(size: 10.5, color: c.muted, height: 1.25)),
+            const SizedBox(height: 5),
+            Text(
+              detail!,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: RefType.ui(size: 10.5, color: c.muted, height: 1.25),
+            ),
           ],
         ],
       ),
     );
     return onTap == null
         ? content
-        : RefPressable(onPressed: onTap, borderRadius: RefRadius.lg, semanticLabel: '$label: $value', child: content);
+        : RefPressable(
+            onPressed: onTap,
+            borderRadius: RefRadius.lg,
+            semanticLabel: '$label: $value',
+            child: content,
+          );
   }
 }
 
 class RefAdaptiveGrid extends StatelessWidget {
-  const RefAdaptiveGrid({super.key, required this.children, this.minCellWidth = 152, this.spacing = 10});
+  const RefAdaptiveGrid({
+    super.key,
+    required this.children,
+    this.minCellWidth = 152,
+    this.spacing = 10,
+  });
 
   final List<Widget> children;
   final double minCellWidth;
@@ -731,22 +841,30 @@ class RefAdaptiveGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final count = ((constraints.maxWidth + spacing) / (minCellWidth + spacing))
-          .floor()
-          .clamp(1, 4)
-          .toInt();
+      final count =
+          ((constraints.maxWidth + spacing) / (minCellWidth + spacing))
+              .floor()
+              .clamp(1, 4)
+              .toInt();
       final width = (constraints.maxWidth - spacing * (count - 1)) / count;
       return Wrap(
         spacing: spacing,
         runSpacing: spacing,
-        children: [for (final child in children) SizedBox(width: width, child: child)],
+        children: [
+          for (final child in children) SizedBox(width: width, child: child),
+        ],
       );
     },
   );
 }
 
 class RefSectionHeader extends StatelessWidget {
-  const RefSectionHeader({super.key, required this.title, this.subtitle, this.trailing});
+  const RefSectionHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+  });
 
   final String title;
   final String? subtitle;
@@ -762,11 +880,21 @@ class RefSectionHeader extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: RefType.ui(size: 17, weight: FontWeight.w800, color: c.ink)),
+              Text(
+                title,
+                style: RefType.ui(
+                  size: 17,
+                  weight: FontWeight.w800,
+                  color: c.ink,
+                ),
+              ),
               if (subtitle != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
-                  child: Text(subtitle!, style: RefType.ui(size: 11.5, color: c.muted)),
+                  child: Text(
+                    subtitle!,
+                    style: RefType.ui(size: 11.5, color: c.muted),
+                  ),
                 ),
             ],
           ),
@@ -811,31 +939,69 @@ class RefStatusTile extends StatelessWidget {
       child: Row(
         children: [
           DecoratedBox(
-            decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: RefRadius.md),
-            child: SizedBox(width: 38, height: 38, child: Icon(icon, size: 19, color: color)),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .12),
+              borderRadius: RefRadius.md,
+            ),
+            child: SizedBox(
+              width: 38,
+              height: 38,
+              child: Icon(icon, size: 19, color: color),
+            ),
           ),
           const SizedBox(width: 11),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: RefType.ui(size: 13.5, weight: FontWeight.w700, color: c.ink)),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: RefType.ui(
+                    size: 13.5,
+                    weight: FontWeight.w700,
+                    color: c.ink,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: RefType.ui(size: 11.5, color: c.muted, height: 1.3)),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: RefType.ui(size: 11.5, color: c.muted, height: 1.3),
+                ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          trailing ?? (onTap == null ? const SizedBox.shrink() : Icon(Icons.chevron_right_rounded, size: 18, color: c.muted)),
+          trailing ??
+              (onTap == null
+                  ? const SizedBox.shrink()
+                  : Icon(
+                      Icons.chevron_right_rounded,
+                      size: 18,
+                      color: c.muted,
+                    )),
         ],
       ),
     );
-    return onTap == null ? tile : RefPressable(onPressed: onTap, borderRadius: RefRadius.lg, child: tile);
+    return onTap == null
+        ? tile
+        : RefPressable(
+            onPressed: onTap,
+            borderRadius: RefRadius.lg,
+            child: tile,
+          );
   }
 }
 
 class RefStaggeredReveal extends StatelessWidget {
-  const RefStaggeredReveal({super.key, required this.order, required this.child});
+  const RefStaggeredReveal({
+    super.key,
+    required this.order,
+    required this.child,
+  });
 
   final int order;
   final Widget child;
@@ -843,18 +1009,29 @@ class RefStaggeredReveal extends StatelessWidget {
   @override
   Widget build(BuildContext context) => TweenAnimationBuilder<double>(
     tween: Tween(begin: 0, end: 1),
-    duration: RefMotion.resolve(context, Duration(milliseconds: 230 + order * 45)),
+    duration: RefMotion.resolve(
+      context,
+      Duration(milliseconds: 230 + order * 45),
+    ),
     curve: Curves.easeOutCubic,
     child: child,
     builder: (context, value, child) => Opacity(
       opacity: value,
-      child: Transform.translate(offset: Offset(0, 12 * (1 - value)), child: child),
+      child: Transform.translate(
+        offset: Offset(0, 12 * (1 - value)),
+        child: child,
+      ),
     ),
   );
 }
 
 class RefChatBubble extends StatelessWidget {
-  const RefChatBubble({super.key, required this.text, required this.mine, this.time});
+  const RefChatBubble({
+    super.key,
+    required this.text,
+    required this.mine,
+    this.time,
+  });
 
   final String text;
   final bool mine;
@@ -882,13 +1059,143 @@ class RefChatBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(text, style: RefType.ui(size: 13, color: mine ? c.surface : c.ink, height: 1.35)),
+              Text(
+                text,
+                style: RefType.ui(
+                  size: 13,
+                  color: mine ? c.surface : c.ink,
+                  height: 1.35,
+                ),
+              ),
               if (time != null) ...[
                 const SizedBox(height: 3),
-                Text(time!, style: RefType.mono(size: 8.5, color: mine ? c.surface.withValues(alpha: .72) : c.muted)),
+                Text(
+                  time!,
+                  style: RefType.mono(
+                    size: 8.5,
+                    color: mine ? c.surface.withValues(alpha: .72) : c.muted,
+                  ),
+                ),
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact, accessible paging controls shared by offline and live lists.
+///
+/// The range label makes the current slice explicit, while page-size changes
+/// always return to the first page in the owning screen.
+class RefPaginationBar extends StatelessWidget {
+  const RefPaginationBar({
+    super.key,
+    required this.page,
+    required this.pages,
+    required this.total,
+    required this.pageSize,
+    required this.onPageChanged,
+    required this.onPageSizeChanged,
+    this.pageSizes = const [5, 10, 20],
+  });
+
+  final int page;
+  final int pages;
+  final int total;
+  final int pageSize;
+  final ValueChanged<int> onPageChanged;
+  final ValueChanged<int> onPageSizeChanged;
+  final List<int> pageSizes;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final safePages = pages < 1 ? 1 : pages;
+    final safePage = page.clamp(1, safePages).toInt();
+    final from = total == 0 ? 0 : (safePage - 1) * pageSize + 1;
+    final to = (safePage * pageSize).clamp(0, total).toInt();
+    return Semantics(
+      container: true,
+      label: 'Пагинация. Страница $safePage из $safePages',
+      child: RefSurfaceCard(
+        padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+        child: Row(
+          children: [
+            Tooltip(
+              message: 'Записей на странице',
+              child: PopupMenuButton<int>(
+                tooltip: 'Записей на странице: $pageSize',
+                onSelected: onPageSizeChanged,
+                itemBuilder: (context) => [
+                  for (final size in pageSizes)
+                    PopupMenuItem<int>(
+                      value: size,
+                      child: Text('$size на странице'),
+                    ),
+                ],
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.surface2,
+                    borderRadius: RefRadius.sm,
+                    border: Border.all(color: c.border),
+                  ),
+                  child: Text(
+                    '$pageSize / стр.',
+                    style: RefType.mono(
+                      size: 10,
+                      weight: FontWeight.w700,
+                      color: c.ink2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$from–$to из $total',
+                textAlign: TextAlign.center,
+                style: RefType.ui(
+                  size: 11,
+                  weight: FontWeight.w700,
+                  color: c.muted,
+                ),
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('pagination-previous'),
+              tooltip: 'Предыдущая страница',
+              onPressed: safePage > 1
+                  ? () => onPageChanged(safePage - 1)
+                  : null,
+              icon: const Icon(Icons.chevron_left_rounded),
+            ),
+            Container(
+              constraints: const BoxConstraints(minWidth: 42, minHeight: 44),
+              alignment: Alignment.center,
+              child: Text(
+                '$safePage/$safePages',
+                style: RefType.mono(
+                  size: 10.5,
+                  weight: FontWeight.w800,
+                  color: c.ink,
+                ),
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('pagination-next'),
+              tooltip: 'Следующая страница',
+              onPressed: safePage < safePages
+                  ? () => onPageChanged(safePage + 1)
+                  : null,
+              icon: const Icon(Icons.chevron_right_rounded),
+            ),
+          ],
         ),
       ),
     );
@@ -924,10 +1231,16 @@ class RefComposer extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
           child: Row(
             children: [
-              IconButton(onPressed: onAttach, icon: Icon(Icons.add_circle_outline_rounded, color: c.muted)),
+              IconButton(
+                onPressed: onAttach,
+                icon: Icon(Icons.add_circle_outline_rounded, color: c.muted),
+              ),
               Expanded(
                 child: DecoratedBox(
-                  decoration: BoxDecoration(color: c.surface2, borderRadius: BorderRadius.circular(20)),
+                  decoration: BoxDecoration(
+                    color: c.surface2,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
                   child: TextField(
                     controller: controller,
                     textInputAction: TextInputAction.send,
@@ -936,7 +1249,10 @@ class RefComposer extends StatelessWidget {
                     decoration: InputDecoration(
                       isCollapsed: true,
                       border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 11,
+                      ),
                       hintText: hint,
                       hintStyle: RefType.ui(size: 13, color: c.muted),
                     ),
@@ -948,8 +1264,15 @@ class RefComposer extends StatelessWidget {
                 onPressed: onSend,
                 borderRadius: const BorderRadius.all(Radius.circular(12)),
                 child: DecoratedBox(
-                  decoration: BoxDecoration(color: c.primary, borderRadius: const BorderRadius.all(Radius.circular(12))),
-                  child: const SizedBox(width: 40, height: 40, child: Icon(Icons.send_rounded, size: 18, color: Colors.white)),
+                  decoration: BoxDecoration(
+                    color: c.primary,
+                    borderRadius: const BorderRadius.all(Radius.circular(12)),
+                  ),
+                  child: SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: Icon(Icons.send_rounded, size: 18, color: c.surface),
+                  ),
                 ),
               ),
             ],

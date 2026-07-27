@@ -955,7 +955,7 @@ class HBars extends StatelessWidget {
 /// Adapted from the Staff app's `SfSurfaceCard`.
 ///
 /// This is the shared physical surface for the CEO console.  It intentionally
-/// owns the reference app's radius, border, soft elevation and clipping so
+/// owns the reference app's radius, border and clipping so
 /// feature screens no longer construct their own unrelated Container cards.
 class SfSurfaceCard extends StatelessWidget {
   final Widget child;
@@ -966,7 +966,7 @@ class SfSurfaceCard extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
-    this.borderRadius = const BorderRadius.all(Radius.circular(22)),
+    this.borderRadius = const BorderRadius.all(Radius.circular(16)),
     this.color,
   });
 
@@ -981,25 +981,7 @@ class SfSurfaceCard extends StatelessWidget {
         side: BorderSide(color: c.border.withValues(alpha: 0.92)),
       ),
       elevation: 0,
-      shadowColor: c.ink.withValues(alpha: 0.08),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: [
-            BoxShadow(
-              color: c.ink.withValues(alpha: 0.045),
-              blurRadius: 24,
-              offset: const Offset(0, 9),
-            ),
-            BoxShadow(
-              color: Colors.white.withValues(alpha: 0.45),
-              blurRadius: 1,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Padding(padding: padding, child: child),
-      ),
+      child: Padding(padding: padding, child: child),
     );
   }
 }
@@ -1013,7 +995,7 @@ class SfCard extends StatelessWidget {
     super.key,
     required this.child,
     this.padding,
-    this.margin = const EdgeInsets.only(bottom: 12),
+    this.margin = const EdgeInsets.only(bottom: 8),
   });
   @override
   Widget build(BuildContext context) {
@@ -1034,32 +1016,42 @@ class SfCardHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      padding: const EdgeInsets.fromLTRB(13, 10, 13, 8),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: c.ink,
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: c.ink,
+              ),
             ),
           ),
-          if (link != null)
-            GestureDetector(
-              onTap: onTap,
-              child: Text(
-                link!,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: c.primary,
+          if (link != null) ...[
+            const SizedBox(width: 10),
+            Flexible(
+              child: GestureDetector(
+                onTap: onTap,
+                child: Text(
+                  link!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: c.primary,
+                  ),
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -1081,7 +1073,7 @@ class SfHead extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1099,10 +1091,11 @@ class SfHead extends StatelessWidget {
           Text(
             title,
             style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.7,
+              fontFamily: SfType.display,
+              fontSize: 28,
+              fontWeight: FontWeight.w400,
+              height: 1.12,
+              letterSpacing: -0.25,
               color: c.ink,
             ),
           ),
@@ -1143,47 +1136,59 @@ class SfLargeAppBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 8, 12, 16),
+      padding: const EdgeInsets.fromLTRB(16, 11, 12, 12),
       color: c.surface,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            height: 44,
-            child: Row(
+          if (leading != null) ...[leading!, const SizedBox(width: 10)],
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ?leading,
-                const Spacer(),
-                for (final action in actions)
+                Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: SfType.display,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w400,
+                    height: 1.05,
+                    letterSpacing: -0.2,
+                    color: c.ink,
+                  ),
+                ),
+                if (subtitle != null && subtitle!.isNotEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: action,
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      subtitle!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w500,
+                        color: c.muted,
+                      ),
+                    ),
                   ),
               ],
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            title,
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.84,
-              color: c.ink,
-            ),
-          ),
-          if (subtitle != null && subtitle!.isNotEmpty)
+          if (actions.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                subtitle!,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: c.muted,
-                ),
+              padding: const EdgeInsets.only(left: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var index = 0; index < actions.length; index++) ...[
+                    if (index > 0) const SizedBox(width: 6),
+                    actions[index],
+                  ],
+                ],
               ),
             ),
         ],
@@ -1294,7 +1299,7 @@ class _SfChipsState extends State<SfChips> {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return SizedBox(
-      height: 34,
+      height: 44,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: widget.chips.length,
@@ -1314,14 +1319,14 @@ class _SfChipsState extends State<SfChips> {
                 color: ai
                     ? c.aiBg.first
                     : on
-                    ? c.ink
+                    ? c.primarySoft
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
                   color: ai
                       ? c.aiBorder
                       : on
-                      ? Colors.transparent
+                      ? c.primarySoft
                       : c.border,
                 ),
               ),
@@ -1334,7 +1339,7 @@ class _SfChipsState extends State<SfChips> {
                   color: ai
                       ? c.ai
                       : on
-                      ? c.bg
+                      ? c.primaryInk
                       : c.muted,
                 ),
               ),
@@ -1540,7 +1545,7 @@ class SfStatTile extends StatelessWidget {
   }
 }
 
-/// Single-select chip row (dark "ink" pill = active).
+/// Single-select chip row with a tonal selected state.
 class SfSelectChips extends StatelessWidget {
   final List<String> items;
   final int selected;
@@ -1555,7 +1560,7 @@ class SfSelectChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return SizedBox(
-      height: 34,
+      height: 44,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: items.length,
@@ -1568,9 +1573,9 @@ class SfSelectChips extends StatelessWidget {
               alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 14),
               decoration: BoxDecoration(
-                color: on ? c.ink : Colors.transparent,
+                color: on ? c.primarySoft : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: on ? Colors.transparent : c.border),
+                border: Border.all(color: on ? c.primarySoft : c.border),
               ),
               child: Text(
                 items[i],
@@ -1578,7 +1583,7 @@ class SfSelectChips extends StatelessWidget {
                   fontFamily: SfType.ui,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: on ? c.bg : c.muted,
+                  color: on ? c.primaryInk : c.muted,
                 ),
               ),
             ),
@@ -1605,22 +1610,24 @@ class SfButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
+    final iconOnly = icon != null && label.trim().isEmpty;
     return Material(
-      color: primary ? c.primary : c.surface2,
+      color: primary ? c.primary : c.primarySoft,
       // Buttons in the reference workspace are deliberately pill-shaped. It
       // gives primary actions a calm, recognisable affordance across pages.
       borderRadius: BorderRadius.circular(999),
-      elevation: primary ? 2 : 0,
-      shadowColor: primary
-          ? c.primary.withValues(alpha: 0.26)
-          : Colors.transparent,
+      elevation: 0,
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: EdgeInsets.symmetric(
+            vertical: 10,
+            horizontal: iconOnly ? 0 : 18,
+          ),
           decoration: BoxDecoration(
-            border: primary ? null : Border.all(color: c.border),
+            border: primary ? null : Border.all(color: c.primarySoft),
             borderRadius: BorderRadius.circular(999),
           ),
           // mainAxisSize.max + center keeps the button full-width and its label
@@ -1632,22 +1639,23 @@ class SfButton extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 17, color: primary ? Colors.white : c.ink2),
-                const SizedBox(width: 7),
+                Icon(icon, size: 18, color: primary ? c.surface : c.primaryInk),
+                if (!iconOnly) const SizedBox(width: 8),
               ],
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: SfType.ui,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: primary ? Colors.white : c.ink2,
+              if (!iconOnly)
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: primary ? c.surface : c.primaryInk,
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -1673,7 +1681,7 @@ void sfSnack(BuildContext context, String msg, {Color? bg}) {
           12,
           12 + MediaQuery.of(context).padding.bottom,
         ),
-        backgroundColor: bg ?? const Color(0xFF3A332A),
+        backgroundColor: bg ?? SfTheme.of(context).ink,
         content: Text(
           msg,
           style: TextStyle(

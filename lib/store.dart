@@ -75,6 +75,7 @@ class StaffMember {
   final String rate;
   final String gender;
   final String hireDate;
+  final List<String> groups;
   const StaffMember({
     required this.firstName,
     required this.lastName,
@@ -89,19 +90,20 @@ class StaffMember {
     required this.rate,
     required this.gender,
     required this.hireDate,
+    this.groups = const <String>[],
   });
 
   String get fullName => '$firstName $lastName'.trim();
 
   /// Staff records are immutable so a transfer creates a complete new record
   /// instead of accidentally dropping HR data that is not shown in the UI.
-  StaffMember copyWith({String? department}) => StaffMember(
+  StaffMember copyWith({String? branch, String? department}) => StaffMember(
     firstName: firstName,
     lastName: lastName,
     username: username,
     phone: phone,
     email: email,
-    branch: branch,
+    branch: branch ?? this.branch,
     department: department ?? this.department,
     subject: subject,
     qualification: qualification,
@@ -109,6 +111,7 @@ class StaffMember {
     rate: rate,
     gender: gender,
     hireDate: hireDate,
+    groups: groups,
   );
 }
 
@@ -119,14 +122,95 @@ class DepartmentRecord {
   String name;
   String manager;
   String description;
+  String branch;
+  String status;
+  String responsible;
+  String createdAt;
+  double rating;
+  final List<String> initialStaffUsernames;
   final List<DepartmentChange> history;
 
   DepartmentRecord({
     required this.name,
     required this.manager,
     required this.description,
+    this.branch = 'Barcha filiallar',
+    this.status = 'active',
+    this.responsible = 'Tayinlanmagan',
+    this.createdAt = '—',
+    this.rating = 0,
+    List<String>? initialStaffUsernames,
     List<DepartmentChange>? history,
-  }) : history = history ?? <DepartmentChange>[];
+  }) : initialStaffUsernames = initialStaffUsernames ?? <String>[],
+       history = history ?? <DepartmentChange>[];
+}
+
+/// Compact parent/child projection used by the modern parent list. It is
+/// intentionally derived from canonical students instead of maintaining a
+/// second mutable copy of the same child data.
+class ParentSummary {
+  final String fullName;
+  final String phone;
+  final Student child;
+  final String teacher;
+  final String educationStarted;
+  final DateTime lastCallAt;
+
+  const ParentSummary({
+    required this.fullName,
+    required this.phone,
+    required this.child,
+    required this.teacher,
+    required this.educationStarted,
+    required this.lastCallAt,
+  });
+}
+
+/// Business metrics shared by group cards and the CEO group detail. These
+/// values are computed from the same store collections as the list screens,
+/// so totals cannot drift between pages in offline mode.
+class GroupAnalytics {
+  final int studentCount;
+  final int averageAttendance;
+  final int debtorCount;
+  final num debt;
+  final num income;
+
+  const GroupAnalytics({
+    required this.studentCount,
+    required this.averageAttendance,
+    required this.debtorCount,
+    required this.debt,
+    required this.income,
+  });
+}
+
+/// A locally-created operational note. Notes are kept in the shared store so
+/// they remain visible in the group history after navigating away and back.
+class GroupNote {
+  final String groupName;
+  final String text;
+  final DateTime createdAt;
+
+  const GroupNote({
+    required this.groupName,
+    required this.text,
+    required this.createdAt,
+  });
+}
+
+/// An exam scheduled from the group quick actions. The API can later map this
+/// exact record to its exam endpoint without changing the group UI.
+class GroupExam {
+  final String groupName;
+  final String title;
+  final DateTime scheduledAt;
+
+  const GroupExam({
+    required this.groupName,
+    required this.title,
+    required this.scheduledAt,
+  });
 }
 
 class DepartmentChange {
@@ -179,15 +263,103 @@ class AppStore extends ChangeNotifier {
   final List<Anomaly> anomalies;
   final List<AuditCase> cases;
   final List<ChatThread> threads;
+  final Map<ChatMsg, String> messageReactions = <ChatMsg, String>{};
+
+  /// Role-scoped productivity state used by the command centre.
+  ///
+  /// An [AppStore] belongs to exactly one signed-in role, so route ids can stay
+  /// compact here. Every rendering/navigation surface still validates them
+  /// against the canonical permission matrix before exposing or opening one.
+  final Set<String> favoriteCommandRoutes = <String>{};
+  final List<String> recentCommandRoutes = <String>[];
+  final Set<String> readLocalNotificationIds = <String>{};
+  final Set<String> hiddenLocalNotificationIds = <String>{};
+
+  bool isFavoriteCommand(String route) => favoriteCommandRoutes.contains(route);
+
+  void toggleFavoriteCommand(String route) {
+    final value = route.trim();
+    if (value.isEmpty) return;
+    favoriteCommandRoutes.contains(value)
+        ? favoriteCommandRoutes.remove(value)
+        : favoriteCommandRoutes.add(value);
+    notifyListeners();
+  }
+
+  /// Remembers a successfully-opened destination, newest first.
+  ///
+  /// Keeping a small, deduplicated window prevents an unbounded navigation log
+  /// while still making the command centre useful on a phone.
+  void rememberOpenedRoute(String route) {
+    final value = route.trim();
+    if (value.isEmpty) return;
+    if (recentCommandRoutes.isNotEmpty && recentCommandRoutes.first == value) {
+      return;
+    }
+    recentCommandRoutes
+      ..remove(value)
+      ..insert(0, value);
+    if (recentCommandRoutes.length > 8) {
+      recentCommandRoutes.removeRange(8, recentCommandRoutes.length);
+    }
+    notifyListeners();
+  }
+
+  bool localNotificationIsRead(String id) =>
+      readLocalNotificationIds.contains(id);
+
+  bool localNotificationIsHidden(String id) =>
+      hiddenLocalNotificationIds.contains(id);
+
+  void markLocalNotificationRead(String id) {
+    if (readLocalNotificationIds.add(id)) {
+      notifyListeners();
+    }
+  }
+
+  void markAllLocalNotificationsRead(Iterable<String> ids) {
+    final before = readLocalNotificationIds.length;
+    readLocalNotificationIds.addAll(ids);
+    if (before != readLocalNotificationIds.length) {
+      notifyListeners();
+    }
+  }
+
+  void hideLocalNotification(String id) {
+    final hiddenChanged = hiddenLocalNotificationIds.add(id);
+    final readChanged = readLocalNotificationIds.add(id);
+    if (hiddenChanged || readChanged) {
+      notifyListeners();
+    }
+  }
+
+  String? reactionFor(ChatMsg message) => messageReactions[message];
+
+  void setMessageReaction(ChatMsg message, String reaction) {
+    if (messageReactions[message] == reaction) {
+      messageReactions.remove(message);
+    } else {
+      messageReactions[message] = reaction;
+    }
+    notifyListeners();
+  }
 
   /// Runtime-created objects. They deliberately live in the store so a form
   /// can update every related screen in this offline preview immediately.
   final List<ManagedGroup> extraGroups = [];
+  final List<GroupNote> groupNotes = [];
+  final List<GroupExam> groupExams = [];
+  final Map<String, DateTime> groupDebtReminders = {};
+  final Set<String> pinnedGroups = {};
   final List<DepartmentRecord> departments = [
     DepartmentRecord(
       name: 'Matematika',
       manager: 'Nigora Karimova',
       description: 'Algebra va geometriya',
+      branch: 'Yunusobod',
+      responsible: 'Sardor Rashidov',
+      createdAt: '12.08.2021',
+      rating: 4.9,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -201,6 +373,10 @@ class AppStore extends ChangeNotifier {
       name: 'English',
       manager: 'Aziz Tursunov',
       description: 'IELTS va umumiy ingliz tili',
+      branch: 'Chilonzor',
+      responsible: 'Dilnoza Yo‘ldosheva',
+      createdAt: '03.02.2022',
+      rating: 4.7,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -214,6 +390,10 @@ class AppStore extends ChangeNotifier {
       name: 'Reception',
       manager: 'Gulnora Saidova',
       description: 'Qabul va ota-onalar aloqasi',
+      branch: 'Mirobod',
+      responsible: 'Sardor Rashidov',
+      createdAt: '18.05.2023',
+      rating: 4.5,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -239,6 +419,7 @@ class AppStore extends ChangeNotifier {
       rate: '8 400 000',
       gender: 'Female',
       hireDate: '12.08.2021',
+      groups: ['9-B Algebra', 'Algebra Mid'],
     ),
     const StaffMember(
       firstName: 'Aziz',
@@ -254,6 +435,7 @@ class AppStore extends ChangeNotifier {
       rate: '7 800 000',
       gender: 'Male',
       hireDate: '03.02.2022',
+      groups: ['Ingliz B2'],
     ),
     const StaffMember(
       firstName: 'Gulnora',
@@ -381,21 +563,6 @@ class AppStore extends ChangeNotifier {
   // ── AI assistant: multiple conversations with a history sidebar ─────────
   final List<AiConversation> conversations = [
     AiConversation('Yangi suhbat', []),
-    AiConversation('Churn tahlili · Sebzor', const [
-      AiTurn('Sebzorda churn nega oshdi?', mine: true),
-      AiTurn(
-        "Sebzorda churn 6.2% — 3 o'qituvchi almashdi va 6 o'quvchi davomati tushdi. "
-        "Ota-onalarga qo'ng'iroq tavsiya etaman.",
-        mine: false,
-      ),
-    ]),
-    AiConversation('Daromad prognozi', const [
-      AiTurn('Kelgusi oy daromadi qancha?', mine: true),
-      AiTurn(
-        "~1.34 mlrd so'm (+4%). Ingliz B2 yangi guruhi +52 mln so'm qo'shadi.",
-        mine: false,
-      ),
-    ]),
   ];
   int activeConv = 0;
   List<AiTurn> get chat => conversations[activeConv].turns;
@@ -411,6 +578,32 @@ class AppStore extends ChangeNotifier {
 
   void selectConversation(int i) {
     activeConv = i;
+    notifyListeners();
+  }
+
+  void addAiUserTurn(String text) {
+    final value = text.trim();
+    if (value.isEmpty) return;
+    final conversation = conversations[activeConv];
+    if (conversation.turns.isEmpty) {
+      conversation.title = value.length > 32
+          ? '${value.substring(0, 32)}…'
+          : value;
+    }
+    conversation.turns.add(AiTurn(value, mine: true));
+    notifyListeners();
+  }
+
+  void addAiAssistantTurn(String text) {
+    final value = text.trim();
+    if (value.isEmpty) return;
+    conversations[activeConv].turns.add(AiTurn(value, mine: false));
+    notifyListeners();
+  }
+
+  void clearActiveConversation() {
+    conversations[activeConv].turns.clear();
+    conversations[activeConv].title = 'Yangi suhbat';
     notifyListeners();
   }
 
@@ -492,12 +685,159 @@ class AppStore extends ChangeNotifier {
       .where((member) => member.department == department.name)
       .toList(growable: false);
 
+  List<String> groupsForStaff(StaffMember member) {
+    final names = <String>{...member.groups};
+    for (final group in extraGroups) {
+      if (group.teacher.toLowerCase() == member.fullName.toLowerCase()) {
+        names.add(group.name);
+      }
+    }
+    return names.toList(growable: false);
+  }
+
+  List<Student> studentsForGroup(String groupName) => students
+      .where(
+        (student) =>
+            student.group.trim().toLowerCase() ==
+            groupName.trim().toLowerCase(),
+      )
+      .toList(growable: false);
+
+  List<LedgerEntry> paymentsForGroup(String groupName, {DateTimeRange? range}) {
+    final members = studentsForGroup(
+      groupName,
+    ).map((student) => student.name.toLowerCase()).toSet();
+    return ledger
+        .where((entry) {
+          if (!entry.inflow) return false;
+          final belongs =
+              entry.group?.trim().toLowerCase() ==
+                  groupName.trim().toLowerCase() ||
+              members.contains(entry.studentName.toLowerCase());
+          if (!belongs || range == null) return belongs;
+          final date = _ledgerDate(entry.date);
+          if (date == null) return false;
+          final start = DateTime(
+            range.start.year,
+            range.start.month,
+            range.start.day,
+          );
+          final end = DateTime(
+            range.end.year,
+            range.end.month,
+            range.end.day,
+            23,
+            59,
+            59,
+          );
+          return !date.isBefore(start) && !date.isAfter(end);
+        })
+        .toList(growable: false);
+  }
+
+  GroupAnalytics analyticsForGroup(String groupName, {DateTimeRange? range}) {
+    final groupStudents = studentsForGroup(groupName);
+    final payments = paymentsForGroup(groupName, range: range);
+    final attendance = groupStudents.isEmpty
+        ? 0
+        : (groupStudents.fold<int>(
+                    0,
+                    (sum, student) => sum + student.attendance,
+                  ) /
+                  groupStudents.length)
+              .round();
+    return GroupAnalytics(
+      studentCount: groupStudents.length,
+      averageAttendance: attendance,
+      debtorCount: groupStudents.where((student) => student.debt > 0).length,
+      debt: groupStudents.fold<num>(0, (sum, student) => sum + student.debt),
+      income: payments.fold<num>(0, (sum, entry) => sum + entry.amount),
+    );
+  }
+
+  List<GroupNote> notesForGroup(String groupName) =>
+      groupNotes
+          .where((note) => note.groupName == groupName)
+          .toList(growable: false)
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  void addGroupNote(String groupName, String text) {
+    final value = text.trim();
+    if (value.isEmpty) return;
+    groupNotes.add(
+      GroupNote(groupName: groupName, text: value, createdAt: DateTime.now()),
+    );
+    notifyListeners();
+  }
+
+  List<GroupExam> examsForGroup(String groupName) =>
+      groupExams
+          .where((exam) => exam.groupName == groupName)
+          .toList(growable: false)
+        ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+
+  void addGroupExam(String groupName, String title, DateTime scheduledAt) {
+    final value = title.trim();
+    if (value.isEmpty) return;
+    groupExams.add(
+      GroupExam(groupName: groupName, title: value, scheduledAt: scheduledAt),
+    );
+    notifyListeners();
+  }
+
+  void saveGroupDebtReminder(String groupName) {
+    groupDebtReminders[groupName] = DateTime.now();
+    notifyListeners();
+  }
+
+  void togglePinnedGroup(String groupName) {
+    pinnedGroups.contains(groupName)
+        ? pinnedGroups.remove(groupName)
+        : pinnedGroups.add(groupName);
+    notifyListeners();
+  }
+
+  List<ParentSummary> get parentSummaries {
+    final now = DateTime.now();
+    return students
+        .map((student) {
+          final profile = studentProfile(student);
+          return ParentSummary(
+            fullName: profile.fatherName,
+            phone: profile.fatherPhone,
+            child: student,
+            teacher: _teacherForGroup(student.group),
+            educationStarted: profile.enrolled,
+            lastCallAt: now.subtract(Duration(days: studentCallDays(student))),
+          );
+        })
+        .toList(growable: false);
+  }
+
+  List<DepartmentRecord> get departmentRanking =>
+      [...departments]..sort((a, b) => b.rating.compareTo(a.rating));
+
   void addDepartment(DepartmentRecord department) {
     departments.add(department);
+    for (final username in department.initialStaffUsernames) {
+      final index = staff.indexWhere((member) => member.username == username);
+      if (index < 0) continue;
+      final member = staff[index];
+      staff[index] = member.copyWith(department: department.name);
+      department.history.insert(
+        0,
+        DepartmentChange(
+          icon: Icons.person_add_alt_1_rounded,
+          title: 'Xodim biriktirildi',
+          detail: member.fullName,
+        ),
+      );
+    }
     _log(
       icon: Icons.create_new_folder_rounded,
       title: 'Yangi bo‘lim yaratildi',
-      detail: '${department.name} · ${department.manager}',
+      detail:
+          '${department.name} · ${department.branch} · ${department.manager}',
       kind: 'staff',
     );
   }
@@ -530,6 +870,20 @@ class AppStore extends ChangeNotifier {
       icon: Icons.swap_horiz_rounded,
       title: 'Xodim bo‘limga ko‘chirildi',
       detail: '${member.fullName} · ${member.department} → ${target.name}',
+      kind: 'staff',
+    );
+  }
+
+  void transferStaffToBranch(StaffMember member, String targetBranch) {
+    final branch = targetBranch.trim();
+    final index = staff.indexWhere((item) => item.username == member.username);
+    if (index < 0 || branch.isEmpty || member.branch == branch) return;
+    final source = member.branch;
+    staff[index] = member.copyWith(branch: branch);
+    _log(
+      icon: Icons.swap_horiz_rounded,
+      title: 'Xodim filialga ko‘chirildi',
+      detail: '${member.fullName} · $source → $branch',
       kind: 'staff',
     );
   }
@@ -595,6 +949,34 @@ class AppStore extends ChangeNotifier {
       if (department.name == name) return department;
     }
     return null;
+  }
+
+  String _teacherForGroup(String groupName) {
+    for (final group in extraGroups) {
+      if (group.name.toLowerCase() == groupName.toLowerCase()) {
+        return group.teacher;
+      }
+    }
+    for (final member in staff) {
+      if (member.groups.any(
+        (group) => group.toLowerCase() == groupName.toLowerCase(),
+      )) {
+        return member.fullName;
+      }
+    }
+    return 'Tayinlanmagan';
+  }
+
+  DateTime? _ledgerDate(String value) {
+    final direct = DateTime.tryParse(value);
+    if (direct != null) return direct;
+    final parts = value.split('.');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final year = int.tryParse(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    return DateTime(year, month, day);
   }
 
   void logActivity({
@@ -712,6 +1094,20 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  AuditCase createAuditCase(String title, {String severity = 'med'}) {
+    final id = 'C-${(_caseSeq++).toString().padLeft(4, '0')}';
+    final auditCase = AuditCase(id, title.trim(), severity, 'open');
+    cases.insert(0, auditCase);
+    _caseStatus[id] = 'open';
+    _log(
+      icon: Icons.push_pin_rounded,
+      title: 'Yangi audit holati',
+      detail: '$id · ${auditCase.title}',
+      kind: 'audit',
+    );
+    return auditCase;
+  }
+
   // ── Messages ──────────────────────────────────────────────────────────
   void sendMessage(int threadIdx, String text) {
     final t = text.trim();
@@ -739,6 +1135,47 @@ class AppStore extends ChangeNotifier {
       ),
     );
     notifyListeners();
+  }
+
+  LedgerEntry recordPayment({
+    required Student student,
+    required String payer,
+    required num amount,
+    required String channel,
+    required String operationNumber,
+    String? comment,
+  }) {
+    final now = DateTime.now();
+    final profile = studentProfile(student);
+    final entry = LedgerEntry(
+      id: 'L-${_seq++}',
+      title: "Oylik to'lov",
+      who: student.name,
+      amount: amount,
+      inflow: true,
+      kind: "To'lov",
+      channel: channel,
+      date:
+          '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year}',
+      time:
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
+      payer: payer.trim(),
+      student: student.name,
+      group: student.group,
+      teacher: _teacherForGroup(student.group),
+      branch: profile.branch,
+      operationNumber: operationNumber.trim(),
+      comment: comment?.trim(),
+      status: 'accepted',
+    );
+    ledger.insert(0, entry);
+    _log(
+      icon: Icons.payments_rounded,
+      title: "Yangi to'lov qabul qilindi",
+      detail: '${student.name} · $amount · $channel',
+      kind: 'payment',
+    );
+    return entry;
   }
 
   /// Approve or reject a request. Approving a money request ( amount > 0 )
@@ -776,39 +1213,10 @@ class AppStore extends ChangeNotifier {
   void sendChat(String text) {
     final t = text.trim();
     if (t.isEmpty) return;
-    final conv = conversations[activeConv];
-    if (conv.turns.isEmpty) {
-      conv.title = t.length > 32 ? '${t.substring(0, 32)}…' : t;
-    }
-    conv.turns.add(AiTurn(t, mine: true));
-    conv.turns.add(AiTurn(_reply(t), mine: false));
-    notifyListeners();
-  }
-
-  /// Offline canned reasoning so the chat feels alive without a backend.
-  String _reply(String q) {
-    final s = q.toLowerCase();
-    if (s.contains('churn') || s.contains('ketish') || s.contains('risk')) {
-      return 'Sebzor filialida churn 6.2% — markaz bo‘yicha 2x yuqori. Asosiy sabab: '
-          "3 o'qituvchi almashdi va 6 o'quvchining davomati 75% dan tushdi. "
-          'Ota-onalarga bugun qo‘ng‘iroq qilishni tavsiya qilaman.';
-    }
-    if (s.contains('daromad') ||
-        s.contains('prognoz') ||
-        s.contains('revenue')) {
-      return 'Joriy sur’atda kelgusi oy daromadi ~1.34 mlrd so‘m (+4%). '
-          'Ingliz B2 to‘ldi — yangi guruh oyiga +52 mln so‘m qo‘shadi.';
-    }
-    if (s.contains('qarz') || s.contains("to'lov") || s.contains('debt')) {
-      return '142 oila qarzdor (jami 84 mln so‘m), 38 tasi 30 kundan oshgan. '
-          'Eng katta 5 tasiga eslatma yuborib, to‘lov-kechiktirish taklif qilsak bo‘ladi.';
-    }
-    if (s.contains('reyting') || s.contains('filial') || s.contains('branch')) {
-      return 'Filiallar reytingi (daromad): Yunusobod → Chilonzor → Mirobod → Sebzor. '
-          'Sebzor pasaymoqda (-1.2%), e’tibor talab qiladi.';
-    }
-    return 'Savolingizni qabul qildim. Demo rejimida ishlayapman (backend ulanmagan) — '
-        'davomat, to‘lov yoki churn bo‘yicha aniq so‘rasangiz, batafsil tahlil beraman.';
+    addAiUserTurn(t);
+    addAiAssistantTurn(
+      'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
+    );
   }
 }
 
