@@ -1,10 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'settings.dart';
 
-/// Tiny in-app translation table. Each value is `[uz, ru, en]` matching
-/// [SfLang.index]. Demo *content* (names, money, AI quotes, message bodies) is
-/// intentionally left in its original language — only the app chrome is
-/// translated, which is what makes the language switch visibly work.
+/// In-app translation table. Each value is `[uz, ru, en]` matching
+/// [SfLang.index]. User-authored content (names, comments and message bodies)
+/// stays untouched, while every system label, status and action is localised.
 const Map<String, List<String>> _strings = {
   // ── Login ─────────────────────────────────────────────────────────────
   'brand_sub': [
@@ -37,7 +36,7 @@ const Map<String, List<String>> _strings = {
   'tab_students': ["O'quvchi", 'Ученики', 'Students'],
   'tab_messages': ['Xabar', 'Чат', 'Chat'],
   'tab_ai': ['AI', 'AI', 'AI'],
-  'tab_approvals': ['Tasdiq', 'Заявки', 'Approve'],
+  'tab_approvals': ['Tasdiq', 'Заявки', 'Approvals'],
   'tab_anomalies': ['Signal', 'Сигналы', 'Signals'],
   'tab_cases': ['Holat', 'Дела', 'Cases'],
   'tab_profile': ['Profil', 'Профиль', 'Profile'],
@@ -134,7 +133,7 @@ const Map<String, List<String>> _strings = {
     'Search · group, teacher…',
   ],
   'unit_group': ['guruh', 'групп', 'groups'],
-  'group_teacher': ['Ustoz', 'Педагог', 'Teacher'],
+  'group_teacher': ['Ustoz', 'Преподаватель', 'Teacher'],
   'group_avg': ["O'rtacha davomat", 'Средняя посещ.', 'Avg attendance'],
   'messages_title': ['Xabarlar', 'Сообщения', 'Messages'],
   'messages_eyebrow': ['Aloqa markazi', 'Центр связи', 'Communication hub'],
@@ -374,6 +373,89 @@ const Map<String, List<String>> _strings = {
   'stu_message': ['Xabar yuborish', 'Отправить сообщение', 'Send message'],
   'stat_attendance': ['Davomat', 'Посещаемость', 'Attendance'],
   'stat_debt': ['Qarzdorlik', 'Задолженность', 'Debt'],
+  'tap_chart_hint': [
+    'Tafsilot uchun sektor yoki nuqtani bosing',
+    'Нажмите сектор или точку для деталей',
+    'Tap a segment or point for details',
+  ],
+  'chart_total': ['Jami', 'Всего', 'Total'],
+  'attendance_last8': ['Oxirgi 8 hafta', 'Последние 8 недель', 'Last 8 weeks'],
+  'attendance_estimated': [
+    'Hisoblangan trend',
+    'Расчётный тренд',
+    'Estimated trend',
+  ],
+  'attendance_week': ['Hafta', 'Неделя', 'Week'],
+  'attendance_normal': ['meʼyor', 'норма', 'on track'],
+  'attendance_attention': [
+    'eʼtibor kerak',
+    'требует внимания',
+    'needs attention',
+  ],
+  'attendance_present': ['Qatnashdi', 'Присутствовал(а)', 'Present'],
+  'attendance_absent': ['Kelmagan', 'Отсутствовал(а)', 'Absent'],
+  'attendance_late': ['Kechikdi', 'Опоздал(а)', 'Late'],
+  'date_today': ['Bugun', 'Сегодня', 'Today'],
+  'date_yesterday': ['Kecha', 'Вчера', 'Yesterday'],
+  'period_last30': ['Oxirgi 30 kun', 'Последние 30 дней', 'Last 30 days'],
+  'status_stable': ['barqaror', 'стабильно', 'stable'],
+  'status_paid': ['To‘langan', 'Оплачено', 'Paid'],
+  'status_pending': ['Kutilmoqda', 'Ожидается', 'Pending'],
+  'student_results': [
+    'Natijalar va o‘qish',
+    'Результаты и обучение',
+    'Results and learning',
+  ],
+  'student_teacher': ['O‘qituvchi', 'Преподаватель', 'Teacher'],
+  'student_rating': ['Reyting', 'Рейтинг', 'Rating'],
+  'student_average': ['O‘rtacha baho', 'Средняя оценка', 'Average score'],
+  'student_homework': ['Uy vazifalari', 'Домашние задания', 'Homework'],
+  'student_exams': ['Imtihonlar', 'Экзамены', 'Exams'],
+  'attendance_history': [
+    'Davomat tarixi',
+    'История посещаемости',
+    'Attendance history',
+  ],
+  'payment_history': [
+    'To‘lovlar tarixi',
+    'История платежей',
+    'Payment history',
+  ],
+  'teacher_notes': [
+    'O‘qituvchi izohlari',
+    'Комментарии преподавателя',
+    'Teacher notes',
+  ],
+  'recent_messages': [
+    'So‘nggi xabarlar',
+    'Последние сообщения',
+    'Recent messages',
+  ],
+  'branch_revenue': ['Daromad', 'Доход', 'Revenue'],
+  'branch_students': ['O‘quvchilar', 'Ученики', 'Students'],
+  'branch_staff': ['Xodimlar', 'Сотрудники', 'Staff'],
+  'branch_health': [
+    'Davomat · guruhlar holati',
+    'Посещаемость · состояние групп',
+    'Attendance · group health',
+  ],
+  'branch_teachers_top': [
+    'O‘qituvchilar reytingi · top',
+    'Лучшие преподаватели',
+    'Top teachers',
+  ],
+  'branch_active': [
+    'Faol filial · ko‘rsatkichlar yangilanmoqda',
+    'Активный филиал · показатели обновляются',
+    'Active branch · metrics are updating',
+  ],
+  'branch_paused': [
+    'Pauzada · qayta faollashtirish kerak',
+    'Приостановлен · требуется активация',
+    'Paused · activation required',
+  ],
+  'status_active': ['Faol', 'Активен', 'Active'],
+  'status_paused': ['Pauza', 'Пауза', 'Paused'],
   // Student full profile
   'stu_personal': ['Shaxsiy maʼlumotlar', 'Личные данные', 'Personal info'],
   'stu_fname': ['Ism', 'Имя', 'First name'],
@@ -554,6 +636,54 @@ const Map<String, List<String>> _strings = {
 
   // ── Misc ──────────────────────────────────────────────────────────────
   'coming_soon': ['tez orada', 'скоро', 'coming soon'],
+  'quick_actions_subtitle': [
+    'ruxsat etilgan bo‘lim · tezkor kirish',
+    'разрешённых разделов · быстрый доступ',
+    'permitted sections · quick access',
+  ],
+  'quick_actions_search': [
+    'Bo‘lim yoki amalni qidiring',
+    'Найти раздел или действие',
+    'Find a section or action',
+  ],
+  'quick_actions_all': ['Barchasi', 'Все', 'All'],
+  'quick_actions_clear': ['Tozalash', 'Очистить', 'Clear'],
+  'quick_actions_favorites': ['Tanlanganlar', 'Избранное', 'Favorites'],
+  'quick_actions_favorites_sub': [
+    'Eng kerakli bo‘limlar',
+    'Самые нужные разделы',
+    'Your most useful sections',
+  ],
+  'quick_actions_recent': [
+    'Yaqinda ochilgan',
+    'Недавно открытые',
+    'Recently opened',
+  ],
+  'quick_actions_recent_sub': [
+    'Ishni davom ettiring',
+    'Продолжить работу',
+    'Continue your work',
+  ],
+  'quick_actions_empty': [
+    'Amal topilmadi',
+    'Ничего не найдено',
+    'No actions found',
+  ],
+  'quick_actions_empty_sub': [
+    'Qidiruv yoki kategoriya filtrini o‘zgartiring.',
+    'Измените запрос или фильтр категории.',
+    'Change the search or category filter.',
+  ],
+  'quick_actions_add_favorite': [
+    'Tanlanganlarga qo‘shish',
+    'Добавить в избранное',
+    'Add to favorites',
+  ],
+  'quick_actions_remove_favorite': [
+    'Tanlanganlardan olib tashlash',
+    'Убрать из избранного',
+    'Remove from favorites',
+  ],
   'pill_high': ['Yuqori', 'Высокий', 'High'],
   'pill_mid': ["O'rta", 'Средний', 'Medium'],
 };
@@ -564,7 +694,7 @@ const Map<String, List<String>> _strings = {
 const Map<String, List<String>> _menuLabels = {
   'Boshqaruv paneli': ['Boshqaruv paneli', 'Панель управления', 'Dashboard'],
   'Audit paneli': ['Audit paneli', 'Панель аудита', 'Audit panel'],
-  'Buyruqlar markazi': ['Buyruqlar markazi', 'Центр команд', 'Command center'],
+  'Tezkor amallar': ['Tezkor amallar', 'Быстрые действия', 'Quick actions'],
   'Filiallar': ['Filiallar', 'Филиалы', 'Branches'],
   'Filiallarni solishtirish': [
     'Filiallarni solishtirish',
@@ -581,10 +711,16 @@ const Map<String, List<String>> _menuLabels = {
   'O‘qituvchilar': ['O‘qituvchilar', 'Учителя', 'Teachers'],
   'Xodimlar': ['Xodimlar', 'Сотрудники', 'Staff'],
   'Ota-onalar': ['Ota-onalar', 'Родители', 'Parents'],
+  'Посещаемость': ['Davomat', 'Посещаемость', 'Attendance'],
   'Bo‘limlar': ['Bo‘limlar', 'Отделы', 'Departments'],
   'HR · Xodimlar': ['HR · Xodimlar', 'HR · Персонал', 'HR · Staff'],
   'Yig‘ilishlar': ['Yig‘ilishlar', 'Собрания', 'Meetings'],
   'To‘lovlar': ['To‘lovlar', 'Платежи', 'Payments'],
+  'Moliyaviy hisobot': [
+    'Moliyaviy hisobot',
+    'Финансовый отчёт',
+    'Financial report',
+  ],
   'Oyliklar': ['Oyliklar', 'Зарплаты', 'Payroll'],
   'Xabarlar': ['Xabarlar', 'Сообщения', 'Messages'],
   'Suhbat nazorati': ['Suhbat nazorati', 'Контроль чатов', 'Chat oversight'],
@@ -622,6 +758,7 @@ const Map<String, List<String>> _menuLabels = {
     'Cases · Flags',
   ],
   'Sozlamalar': ['Sozlamalar', 'Настройки', 'Settings'],
+  'Bildirishnomalar': ['Bildirishnomalar', 'Уведомления', 'Notifications'],
 };
 
 const Map<String, List<String>> _groupLabels = {
@@ -637,6 +774,16 @@ const Map<String, List<String>> _groupLabels = {
   'Tizim': ['Tizim', 'Система', 'System'],
 };
 
+const Map<String, List<String>> _configLabels = {
+  'Bosh direktor': ['Bosh direktor', 'Генеральный директор', 'CEO'],
+  'Filial menejeri': ['Filial menejeri', 'Менеджер филиала', 'Branch manager'],
+  'Bosh auditor': ['Bosh auditor', 'Главный аудитор', 'Lead auditor'],
+  'Barcha filiallar': ['Barcha filiallar', 'Все филиалы', 'All branches'],
+  'Nazorat': ['Nazorat', 'Контроль', 'Oversight'],
+  'Manager': ['Menejer', 'Менеджер', 'Manager'],
+  'Audit': ['Audit', 'Аудит', 'Audit'],
+};
+
 /// Translate a menu item label (from `menuFor`) to the current UI language.
 String menuLabel(BuildContext context, String uzLabel) {
   final lang = SettingsScope.of(context).lang;
@@ -647,6 +794,12 @@ String menuLabel(BuildContext context, String uzLabel) {
 String grpLabel(BuildContext context, String uzTitle) {
   final lang = SettingsScope.of(context).lang;
   return _groupLabels[uzTitle]?[lang.index] ?? uzTitle;
+}
+
+/// Localise immutable role configuration labels without mutating domain data.
+String configLabel(BuildContext context, String source) {
+  final lang = SettingsScope.of(context).lang;
+  return _configLabels[source]?[lang.index] ?? source;
 }
 
 /// Translate [key] for the current UI language. Falls back to the key itself
@@ -662,10 +815,31 @@ String tr(BuildContext context, String key) {
 /// surrounding widget already rebuilds on settings change.
 String trLang(SfLang lang, String key) => _strings[key]?[lang.index] ?? key;
 
+/// Localise a one-off label without adding a global key. Prefer [tr] for
+/// repeated product vocabulary and this helper for route-specific copy.
+String tx(
+  BuildContext context, {
+  required String uz,
+  required String ru,
+  required String en,
+}) => txLang(SettingsScope.of(context).lang, uz: uz, ru: ru, en: en);
+
+String txLang(
+  SfLang lang, {
+  required String uz,
+  required String ru,
+  required String en,
+}) => switch (lang) {
+  SfLang.uz => uz,
+  SfLang.ru => ru,
+  SfLang.en => en,
+};
+
 /// Localised tab label for a tab [id]; falls back to [fallback] for unknown ids.
 String tabLabel(BuildContext context, String id, String fallback) {
   const map = {
     'dash': 'tab_dash',
+    'groups': 'groups_title',
     'students': 'tab_students',
     'messages': 'tab_messages',
     'ai': 'tab_ai',

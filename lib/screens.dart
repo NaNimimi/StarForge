@@ -15,7 +15,7 @@ import 'package:record/record.dart';
 import 'package:video_player/video_player.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'api_client.dart';
-import 'api_connection.dart';
+import 'api_data_view.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
@@ -46,12 +46,10 @@ num? _dashboardNumber(Map<String, dynamic> row, List<String> keys) {
 }
 
 String _dashboardText(Map<String, dynamic> row, List<String> keys) {
-  final value = _dashboardField(row, keys);
-  if (value is Map) {
-    final map = Map<String, dynamic>.from(value);
-    return _dashboardText(map, const ['name', 'full_name', 'title', 'id']);
-  }
-  return value?.toString().trim().isNotEmpty == true ? '$value' : '—';
+  return apiText(
+    apiPresentationValue(_dashboardField(row, keys)),
+    fallback: '—',
+  );
 }
 
 DateTime? _dashboardDate(Map<String, dynamic> row) {
@@ -102,6 +100,15 @@ bool _dashboardPaymentCountsAsRevenue(Map<String, dynamic> row) {
     'void',
   };
   return !excluded.contains(status);
+}
+
+bool _dashboardInvoiceIsOutstanding(Map<String, dynamic> row) {
+  final status = _dashboardText(row, const [
+    'status',
+    'invoice_status',
+    'state',
+  ]).toLowerCase();
+  return const {'issued', 'partially_paid', 'overdue'}.contains(status);
 }
 
 bool _dashboardRecordIsOpen(Map<String, dynamic> row) {
@@ -1215,9 +1222,24 @@ class DashboardScreen extends StatelessWidget {
                               size: 92,
                               thickness: 14,
                               segments: [
-                                DonutSegment(72, c.success),
-                                DonutSegment(19, c.warn),
-                                DonutSegment(9, c.danger),
+                                DonutSegment(
+                                  72,
+                                  c.success,
+                                  label: tr(context, 'legend_good'),
+                                  display: '72%',
+                                ),
+                                DonutSegment(
+                                  19,
+                                  c.warn,
+                                  label: tr(context, 'legend_mid'),
+                                  display: '19%',
+                                ),
+                                DonutSegment(
+                                  9,
+                                  c.danger,
+                                  label: tr(context, 'legend_low'),
+                                  display: '9%',
+                                ),
                               ],
                               center: _mono(context, '91%', size: 17),
                             ),
@@ -1320,7 +1342,7 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
       const _DashboardSearchResult(
         category: 'Tezkor buyruqlar',
         label: 'Guruhlarni ochish',
-        subtitle: 'Guruhlar, davomat va natijalar',
+        subtitle: 'Группы, посещаемость и результаты',
         icon: Icons.workspaces_rounded,
         route: 'groups',
         keywords: 'group guruh sinf',
@@ -1679,6 +1701,7 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
           (sum, row) =>
               sum +
               (_dashboardNumber(row, const [
+                    'amount_uzs',
                     'amount',
                     'paid_amount',
                     'total',
@@ -1687,29 +1710,41 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
         );
     final liveStudents = api.records('students');
     final liveStaff = api.records('staff');
-    final liveDebt = liveStudents.fold<num>(
-      0,
-      (sum, row) =>
-          sum +
-          (_dashboardNumber(row, const [
-                'debt',
-                'outstanding',
-                'balance_due',
-                'amount_due',
-              ]) ??
-              0),
-    );
-    final summary = api.document('attendanceSummary');
-    final summaryMap = summary is Map
-        ? Map<String, dynamic>.from(summary)
-        : const <String, dynamic>{};
-    final liveAttendance = _dashboardNumber(summaryMap, const [
-      'attendance',
-      'attendance_rate',
-      'attendance_percentage',
-      'percentage',
-      'present_rate',
-    ]);
+    final liveInvoices = api.records('invoices');
+    final liveDebt = liveInvoices
+        .where(_dashboardInvoiceIsOutstanding)
+        .fold<num>(
+          0,
+          (sum, row) =>
+              sum +
+              (_dashboardNumber(row, const [
+                    'total_uzs',
+                    'debt',
+                    'outstanding',
+                    'balance_due',
+                    'amount_due',
+                  ]) ??
+                  0),
+        );
+    final attendanceRows = api.records('attendanceRecords');
+    var attendanceCount = 0;
+    var attendedCount = 0;
+    for (final row in attendanceRows) {
+      final status = _dashboardText(row, const [
+        'status',
+        'attendance_status',
+        'state',
+      ]).toLowerCase();
+      if (status == 'present' || status == 'late') {
+        attendanceCount++;
+        attendedCount++;
+      } else if (status == 'absent') {
+        attendanceCount++;
+      }
+    }
+    final liveAttendance = attendanceCount == 0
+        ? null
+        : attendedCount * 100 / attendanceCount;
     final revenue = live
         ? liveRevenue
         : store.scopedRevenue(ceo ? 1284000000 : 342000000);
@@ -1797,7 +1832,7 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                   : '$attendance%',
               icon: Icons.how_to_reg_rounded,
               tone: RefMetricTone.success,
-              detail: live ? 'Attendance summary' : '+0.8%',
+              detail: live ? 'Attendance records API' : '+0.8%',
               onTap: () => go('attendance'),
             ),
             RefMetricCard(
@@ -1985,9 +2020,9 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                 quote: audit
                     ? live
                           ? '${api.records('studentRisk').length} ta live risk yozuvi mavjud. Tafsilotlar uchun Signal sahifasini oching.'
-                          : 'Sebzorda 3 ta yuqori signal: davomat, naqd to‘lov va karta nomutanosibligi.'
+                          : 'В Sebzor три сигнала: посещаемость, наличные и расхождение по карте.'
                     : live
-                    ? 'Live backend ma’lumotlari ulangan. Reyting, davomat va moliyani tegishli kartadan oching.'
+                    ? 'Данные backend подключены. Откройте посещаемость и финансы из нужной карточки.'
                     : 'AI ещё не подключен. Откройте ассистента, чтобы проверить backend и AI endpoint.',
                 onTap: () => go(
                   audit
@@ -2679,29 +2714,12 @@ class _ReferenceDashboardContext extends StatelessWidget {
   }
 
   Future<void> _chooseRange(BuildContext context, AppStore store) async {
-    final c = SfTheme.of(context);
-    final value = await showDateRangePicker(
+    final value = await showRefDateRangePicker(
       context: context,
       firstDate: DateTime(2023),
       lastDate: DateTime.now(),
       initialDateRange: store.selectedRange,
-      helpText: 'Hisobot davrini tanlang',
-      saveText: 'Qo‘llash',
-      cancelText: 'Bekor qilish',
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: Theme.of(context).colorScheme.copyWith(
-            primary: c.primary,
-            surface: c.surface,
-            onSurface: c.ink,
-          ),
-          dialogTheme: DialogThemeData(
-            backgroundColor: c.surface,
-            shape: const RoundedRectangleBorder(borderRadius: RefRadius.xl),
-          ),
-        ),
-        child: child!,
-      ),
+      title: 'Период отчёта',
     );
     if (value != null) store.setDateRange(value);
   }
@@ -2837,18 +2855,6 @@ class _ReferenceDashboardContext extends StatelessWidget {
     }
     final store = AppScope.of(context);
     final items = <Widget>[
-      _ReferenceContextAction(
-        icon: Icons.science_outlined,
-        label: 'OFFLINE DEMO',
-        onTap: () => Navigator.of(context).push(
-          sfPageRoute(
-            SfTheme(
-              colors: SfTheme.of(context),
-              child: const ApiConnectionScreen(),
-            ),
-          ),
-        ),
-      ),
       _ReferenceContextAction(
         icon: Icons.date_range_rounded,
         label:
@@ -2986,6 +2992,7 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
         if (!_dashboardPaymentCountsAsRevenue(payment)) continue;
         final amount =
             _dashboardNumber(payment, const [
+              'amount_uzs',
               'amount',
               'paid_amount',
               'total',
@@ -3679,8 +3686,8 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                 children: [
                   Text(
                     fraction == null
-                        ? 'Davomat ma’lumoti kutilmoqda'
-                        : 'Davomat holati',
+                        ? 'Посещаемость ma’lumoti kutilmoqda'
+                        : 'Посещаемость holati',
                     style: RefType.ui(
                       size: 14,
                       weight: FontWeight.w800,
@@ -3744,7 +3751,7 @@ class _ReferenceAuditSignals extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Davomat · 5',
+                    'Посещаемость · 5',
                     style: RefType.ui(
                       size: 11,
                       weight: FontWeight.w700,
@@ -3797,7 +3804,7 @@ class _ReferenceAuditQueue extends StatelessWidget {
       const SizedBox(height: 8),
       RefStatusTile(
         icon: Icons.warning_amber_rounded,
-        title: 'Davomat 100% · 21 kun',
+        title: 'Посещаемость 100% · 21 kun',
         subtitle: 'Sebzor · yuqori signal',
         tone: RefMetricTone.danger,
         onTap: onTap,
@@ -4017,7 +4024,7 @@ class _CeoDashboardExtras extends StatelessWidget {
               event(
                 Icons.flag_rounded,
                 c.danger,
-                'Audit flag · davomati past',
+                'Audit flag · низкая посещаемость',
                 '2 soat',
                 last: true,
               ),
@@ -4095,25 +4102,12 @@ class _CeoContextFilter extends StatelessWidget {
   }
 
   Future<void> _chooseRange(BuildContext context, AppStore store) async {
-    final c = SfTheme.of(context);
-    final range = await showDateRangePicker(
+    final range = await showRefDateRangePicker(
       context: context,
       firstDate: DateTime(2023),
       lastDate: DateTime.now(),
       initialDateRange: store.selectedRange,
-      helpText: 'Hisobot davrini tanlang',
-      saveText: 'Qo‘llash',
-      cancelText: 'Bekor qilish',
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: Theme.of(context).colorScheme.copyWith(
-            primary: c.primary,
-            surface: c.surface,
-            onSurface: c.ink,
-          ),
-        ),
-        child: child!,
-      ),
+      title: 'Период отчёта',
     );
     if (range != null) store.setDateRange(range);
   }
@@ -4889,7 +4883,7 @@ class _AuditDash extends StatelessWidget {
                         children: [
                           _footStat(
                             context,
-                            'Davomat anomaliyasi',
+                            'Посещаемость anomaliyasi',
                             '5',
                             c.danger,
                           ),
@@ -4910,7 +4904,7 @@ class _AuditDash extends StatelessWidget {
               SfAiCard(
                 badge: 'Audit AI',
                 quote:
-                    'Sebzorda 3 ta yuqori signal: 100% davomat, kvitansiyasiz naqd, karta nomutanosibligi.',
+                    'В Sebzor три сигнала: 100% посещаемость, наличные без квитанции и расхождение по карте.',
                 onTap: () => go('anomalies'),
               ),
               SfCard(
@@ -4922,7 +4916,7 @@ class _AuditDash extends StatelessWidget {
                       onTap: () => go('anomalies'),
                     ),
                     for (final f in const [
-                      ['Davomat 100% · 21 kun', 'Sebzor', 'high'],
+                      ['Посещаемость 100% · 21 kun', 'Sebzor', 'high'],
                       ['48 Up karta/hafta', 'Mirobod', 'med'],
                       ['Naqd · kvitansiyasiz', 'Sebzor', 'high'],
                     ])
@@ -4996,9 +4990,24 @@ class _AuditDash extends StatelessWidget {
                             size: 92,
                             thickness: 14,
                             segments: [
-                              DonutSegment(3, c.danger),
-                              DonutSegment(5, c.warn),
-                              DonutSegment(14, c.success),
+                              DonutSegment(
+                                3,
+                                c.danger,
+                                label: tr(context, 'legend_open_serious'),
+                                display: '3',
+                              ),
+                              DonutSegment(
+                                5,
+                                c.warn,
+                                label: tr(context, 'legend_reviewing'),
+                                display: '5',
+                              ),
+                              DonutSegment(
+                                14,
+                                c.success,
+                                label: tr(context, 'legend_closed'),
+                                display: '14',
+                              ),
                             ],
                             center: Column(
                               mainAxisSize: MainAxisSize.min,
@@ -5179,6 +5188,15 @@ const _studentTones = {
   'left': (PillTone.neutral, 'Ketgan'),
 };
 
+String _studentPaymentLabel(BuildContext context, String status) =>
+    switch (status) {
+      'paid' => tr(context, 'f_paid'),
+      'debt' => tr(context, 'f_debtor'),
+      'partial' => tr(context, 'f_partial'),
+      'left' => tx(context, uz: 'Ketgan', ru: 'Выбыл(а)', en: 'Left'),
+      _ => status,
+    };
+
 String studentTeacher(Student student) {
   final group = student.group.toLowerCase();
   if (group.contains('ingliz') || group.contains('ielts')) {
@@ -5228,9 +5246,10 @@ class _StudentsScreenState extends State<StudentsScreen>
   int callSel = 0; // all / recent / mid / overdue
   int branchSel = 0;
   int levelSel = 0;
+  DateTimeRange? enrolledRange;
   bool showFilters = false;
   int page = 1;
-  int pageSize = 5;
+  int pageSize = 1000000;
 
   bool _statusOk(Student s) => switch (statusSel) {
     1 => s.debt > 0,
@@ -5250,6 +5269,47 @@ class _StudentsScreenState extends State<StudentsScreen>
       3 => d > 14,
       _ => true,
     };
+  }
+
+  bool _enrolledOk(Student student) {
+    final range = enrolledRange;
+    if (range == null) return true;
+    final enrolledAt = apiDate(studentProfile(student).enrolled);
+    if (enrolledAt == null) return false;
+    final start = DateTime(
+      range.start.year,
+      range.start.month,
+      range.start.day,
+    );
+    final end = DateTime(
+      range.end.year,
+      range.end.month,
+      range.end.day,
+      23,
+      59,
+      59,
+    );
+    return !enrolledAt.isBefore(start) && !enrolledAt.isAfter(end);
+  }
+
+  Future<void> _pickEnrolledRange(BuildContext context) async {
+    final value = await showRefDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      initialDateRange: enrolledRange,
+      title: tx(
+        context,
+        uz: 'O‘qishni boshlagan sana',
+        ru: 'Дата начала обучения',
+        en: 'Education start date',
+      ),
+    );
+    if (value == null || !mounted) return;
+    setState(() {
+      enrolledRange = value;
+      page = 1;
+    });
   }
 
   void _update(VoidCallback change) => setState(change);
@@ -5283,7 +5343,7 @@ class _StudentsScreenState extends State<StudentsScreen>
     final q = query.trim().toLowerCase();
 
     final list = all.where((s) {
-      if (!_statusOk(s) || !_callOk(s)) return false;
+      if (!_statusOk(s) || !_callOk(s) || !_enrolledOk(s)) return false;
       final p = studentProfile(s);
       if (wantBranch != '__all' && p.branch != wantBranch) return false;
       if (wantLevel != '__all' && p.level != wantLevel) return false;
@@ -5528,6 +5588,7 @@ class _ReferenceStudentsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
+    final enrolledRange = state.enrolledRange;
     final all = [...AppScope.of(context).students, ...kExitedStudents];
     final branches = <String>[
       '__all',
@@ -5543,7 +5604,11 @@ class _ReferenceStudentsPage extends StatelessWidget {
     final wantedLevel = levels[state.levelSel];
     final query = state.query.trim().toLowerCase();
     final students = all.where((student) {
-      if (!state._statusOk(student) || !state._callOk(student)) return false;
+      if (!state._statusOk(student) ||
+          !state._callOk(student) ||
+          !state._enrolledOk(student)) {
+        return false;
+      }
       final profile = studentProfile(student);
       if (wantedBranch != '__all' && profile.branch != wantedBranch) {
         return false;
@@ -5707,34 +5772,84 @@ class _ReferenceStudentsPage extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(18, 6, 18, 12),
           sliver: SliverToBoxAdapter(
-            child: AnimatedSwitcher(
-              duration: RefMotion.resolve(context, RefMotion.standard),
-              reverseDuration: RefMotion.resolve(context, RefMotion.quick),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: SizeTransition(
-                  sizeFactor: animation,
-                  alignment: Alignment.topCenter,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0, -.045),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  ),
-                ),
-              ),
-              child: state.showFilters
-                  ? _ReferenceStudentFilters(
-                      key: const ValueKey('reference-student-filters-open'),
-                      activeCount: activeCount,
-                      groups: filters,
-                    )
-                  : const SizedBox(
-                      key: ValueKey('reference-student-filters-closed'),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('students-enrolled-date-range'),
+                        onPressed: () => state._pickEnrolledRange(context),
+                        icon: const Icon(Icons.date_range_rounded),
+                        label: Text(
+                          enrolledRange == null
+                              ? tx(
+                                  context,
+                                  uz: 'Boshlagan sana: dan — gacha',
+                                  ru: 'Начало обучения: от — до',
+                                  en: 'Start date: from — to',
+                                )
+                              : '${_groupDateLabel(enrolledRange.start)} — '
+                                    '${_groupDateLabel(enrolledRange.end)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ),
+                    if (enrolledRange != null) ...[
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: const ValueKey(
+                          'students-reset-enrolled-date-range',
+                        ),
+                        tooltip: tx(
+                          context,
+                          uz: 'Davrni tiklash',
+                          ru: 'Сбросить период',
+                          en: 'Reset period',
+                        ),
+                        onPressed: () => state._update(() {
+                          state.enrolledRange = null;
+                          state.page = 1;
+                        }),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ],
+                ),
+                AnimatedSwitcher(
+                  duration: RefMotion.resolve(context, RefMotion.standard),
+                  reverseDuration: RefMotion.resolve(context, RefMotion.quick),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SizeTransition(
+                      sizeFactor: animation,
+                      alignment: Alignment.topCenter,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, -.045),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: child,
+                      ),
+                    ),
+                  ),
+                  child: state.showFilters
+                      ? Padding(
+                          key: const ValueKey('reference-student-filters-open'),
+                          padding: const EdgeInsets.only(top: 10),
+                          child: _ReferenceStudentFilters(
+                            activeCount: activeCount,
+                            groups: filters,
+                          ),
+                        )
+                      : const SizedBox(
+                          key: ValueKey('reference-student-filters-closed'),
+                        ),
+                ),
+              ],
             ),
           ),
         ),
@@ -5776,23 +5891,6 @@ class _ReferenceStudentsPage extends StatelessWidget {
                   ),
                 );
               },
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(18, 0, 18, 28),
-            sliver: SliverToBoxAdapter(
-              child: RefPaginationBar(
-                page: currentPage,
-                pages: pageCount,
-                total: students.length,
-                pageSize: state.pageSize,
-                onPageChanged: (value) =>
-                    state._update(() => state.page = value),
-                onPageSizeChanged: (value) => state._update(() {
-                  state.pageSize = value;
-                  state.page = 1;
-                }),
-              ),
             ),
           ),
         ],
@@ -5855,7 +5953,6 @@ class _ReferenceFilterToggle extends StatelessWidget {
 
 class _ReferenceStudentFilters extends StatelessWidget {
   const _ReferenceStudentFilters({
-    super.key,
     required this.activeCount,
     required this.groups,
   });
@@ -6120,7 +6217,7 @@ class _ReferenceStudentCard extends StatelessWidget {
         context,
       ).push(sfPageRoute(StudentDetailScreen(student: student, colors: c))),
       borderRadius: RefRadius.lg,
-      semanticLabel: 'O‘quvchi ${student.name}',
+      semanticLabel: '${tr(context, 'unit_student')} ${student.name}',
       child: RefSurfaceCard(
         padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
         child: Row(
@@ -6198,7 +6295,7 @@ class _ReferenceStudentCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 RefPill(
-                  label: student.pay == 'left' ? 'Ketgan' : payment.$2,
+                  label: _studentPaymentLabel(context, student.pay),
                   tone: student.pay == 'left'
                       ? RefPillTone.neutral
                       : _paymentTone(payment.$1),
@@ -6732,7 +6829,7 @@ class _StudentRow extends StatelessWidget {
                     Row(
                       children: [
                         Pill(
-                          s.pay == 'left' ? 'Ketgan' : payment.$2,
+                          _studentPaymentLabel(context, s.pay),
                           tone: s.pay == 'left' ? PillTone.neutral : payment.$1,
                         ),
                         const SizedBox(width: 7),
@@ -6927,7 +7024,7 @@ class StudentDetailScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                    Pill(t.$2, tone: t.$1),
+                    Pill(_studentPaymentLabel(context, s.pay), tone: t.$1),
                   ],
                 ),
               ),
@@ -7085,7 +7182,7 @@ class StudentDetailScreen extends StatelessWidget {
                   _InfoRow('Username', username),
                   _InfoRow(
                     tr(context, 'stu_age'),
-                    '${p.age} ${tr(context, 'stu_years')}',
+                    p.age < 0 ? '—' : '${p.age} ${tr(context, 'stu_years')}',
                   ),
                   _InfoRow(tr(context, 'stu_level'), p.level),
                   _InfoRow(tr(context, 'stu_id'), p.studentId, mono: true),
@@ -7421,9 +7518,7 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                                   ),
                                 ),
                                 RefPill(
-                                  label: s.pay == 'left'
-                                      ? 'Ketgan'
-                                      : payment.$2,
+                                  label: _studentPaymentLabel(context, s.pay),
                                   tone: _referencePillTone(payment.$1),
                                 ),
                               ],
@@ -7442,6 +7537,11 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                                       : s.attendance >= 85
                                       ? RefMetricTone.warning
                                       : RefMetricTone.danger,
+                                  onTap: () => _showStudentAttendanceSummary(
+                                    context,
+                                    student: s,
+                                    colors: colors,
+                                  ),
                                 ),
                                 RefMetricCard(
                                   label: tr(context, 'stat_debt'),
@@ -7454,7 +7554,7 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                                       : RefMetricTone.success,
                                 ),
                                 RefMetricCard(
-                                  label: 'Reyting',
+                                  label: tr(context, 'student_rating'),
                                   value: studentRating(s).toStringAsFixed(1),
                                   icon: Icons.star_rounded,
                                   tone: RefMetricTone.accent,
@@ -7539,7 +7639,9 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                   const SizedBox(height: 18),
                   RefSectionHeader(
                     title: tr(context, 'stu_trend'),
-                    subtitle: 'Oxirgi 8 hafta',
+                    subtitle:
+                        '${tr(context, 'attendance_estimated')} · '
+                        '${tr(context, 'attendance_last8')}',
                   ),
                   const SizedBox(height: 8),
                   RefSurfaceCard(
@@ -7548,17 +7650,32 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'DAVOMAT',
+                          tr(context, 'stat_attendance').toUpperCase(),
                           style: RefType.eyebrow(
                             color: colors.muted,
                             size: 9.5,
                           ),
                         ),
                         const SizedBox(height: 10),
-                        Sparkline(
+                        InteractiveSparkline(
+                          key: const ValueKey('student-attendance-trend'),
                           data: trend,
                           color: attendanceColor,
-                          height: 52,
+                          height: 58,
+                          labels: List.generate(
+                            trend.length,
+                            (index) =>
+                                '${tr(context, 'attendance_week')} ${index + 1}',
+                          ),
+                          valueFormatter: (value) => '${value.round()}%',
+                          selectionLabelBuilder: (index, label, value) =>
+                              '$label · ${value.round()}% · '
+                              '${tr(context, value >= 90 ? 'attendance_normal' : 'attendance_attention')}',
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          tr(context, 'tap_chart_hint'),
+                          style: RefType.ui(size: 9.5, color: colors.muted),
                         ),
                       ],
                     ),
@@ -7572,7 +7689,9 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                       _ReferenceDataRow('Username', username, mono: true),
                       _ReferenceDataRow(
                         tr(context, 'stu_age'),
-                        '${p.age} ${tr(context, 'stu_years')}',
+                        p.age < 0
+                            ? '—'
+                            : '${p.age} ${tr(context, 'stu_years')}',
                       ),
                       _ReferenceDataRow(tr(context, 'stu_level'), p.level),
                       _ReferenceDataRow(
@@ -7615,72 +7734,108 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
-                    title: 'NATIJALAR VA O‘QISH',
+                    title: tr(context, 'student_results').toUpperCase(),
                     rows: [
-                      _ReferenceDataRow('O‘qituvchi', studentTeacher(s)),
                       _ReferenceDataRow(
-                        'Reyting',
+                        tr(context, 'student_teacher'),
+                        studentTeacher(s),
+                      ),
+                      _ReferenceDataRow(
+                        tr(context, 'student_rating'),
                         '★ ${studentRating(s).toStringAsFixed(1)} / 5.0',
                       ),
                       _ReferenceDataRow(
-                        'O‘rtacha baho',
+                        tr(context, 'student_average'),
                         '${studentAverageScore(s)}%',
                       ),
-                      const _ReferenceDataRow(
-                        'Uy vazifalari',
-                        '18 / 20 topshirilgan',
+                      _ReferenceDataRow(
+                        tr(context, 'student_homework'),
+                        tx(
+                          context,
+                          uz: '18 / 20 topshirilgan',
+                          ru: '18 из 20 выполнено',
+                          en: '18 of 20 completed',
+                        ),
                       ),
                       _ReferenceDataRow(
-                        'Imtihonlar',
-                        '3 ta · oxirgisi ${studentAverageScore(s)}%',
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  _ReferenceDetailSection(
-                    title: 'DAVOMAT TARIXI',
-                    rows: [
-                      _ReferenceDataRow(
-                        'Bugun',
-                        s.attendance >= 85 ? 'Qatnashdi' : 'Kechikdi',
-                      ),
-                      const _ReferenceDataRow('Kecha', 'Qatnashdi'),
-                      _ReferenceDataRow(
-                        'Oxirgi 30 kun',
-                        '${s.attendance}% · ${s.attendance >= 90 ? 'barqaror' : 'e’tibor kerak'}',
+                        tr(context, 'student_exams'),
+                        tx(
+                          context,
+                          uz: '3 ta · oxirgisi ${studentAverageScore(s)}%',
+                          ru: '3 · последний ${studentAverageScore(s)}%',
+                          en: '3 · latest ${studentAverageScore(s)}%',
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
-                    title: 'TO‘LOVLAR TARIXI',
+                    title: tr(context, 'attendance_history').toUpperCase(),
                     rows: [
                       _ReferenceDataRow(
-                        'Iyul 2026',
+                        tr(context, 'date_today'),
+                        tr(
+                          context,
+                          s.attendance >= 85
+                              ? 'attendance_present'
+                              : 'attendance_late',
+                        ),
+                      ),
+                      _ReferenceDataRow(
+                        tr(context, 'date_yesterday'),
+                        tr(context, 'attendance_present'),
+                      ),
+                      _ReferenceDataRow(
+                        tr(context, 'period_last30'),
+                        '${s.attendance}% · ${tr(context, s.attendance >= 90 ? 'status_stable' : 'attendance_attention')}',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  _ReferenceDetailSection(
+                    title: tr(context, 'payment_history').toUpperCase(),
+                    rows: [
+                      _ReferenceDataRow(
+                        tx(
+                          context,
+                          uz: 'Iyul 2026',
+                          ru: 'Июль 2026',
+                          en: 'July 2026',
+                        ),
                         s.debt > 0
-                            ? 'Kutilmoqda · ${fmtMoney(s.debt)}'
-                            : 'To‘langan',
+                            ? '${tr(context, 'status_pending')} · ${fmtMoney(s.debt)}'
+                            : tr(context, 'status_paid'),
                         mono: s.debt > 0,
                       ),
-                      const _ReferenceDataRow(
-                        'Iyun 2026',
-                        'To‘langan · 600 000 so‘m',
+                      _ReferenceDataRow(
+                        tx(
+                          context,
+                          uz: 'Iyun 2026',
+                          ru: 'Июнь 2026',
+                          en: 'June 2026',
+                        ),
+                        '${tr(context, 'status_paid')} · 600 000 so‘m',
                       ),
-                      const _ReferenceDataRow(
-                        'May 2026',
-                        'To‘langan · 600 000 so‘m',
+                      _ReferenceDataRow(
+                        tx(
+                          context,
+                          uz: 'May 2026',
+                          ru: 'Май 2026',
+                          en: 'May 2026',
+                        ),
+                        '${tr(context, 'status_paid')} · 600 000 so‘m',
                       ),
                     ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
-                    title: 'O‘QITUVCHI IZOHLARI',
-                    rows: const [
+                    title: tr(context, 'teacher_notes').toUpperCase(),
+                    rows: [
                       _ReferenceDataRow(
-                        'Bugun',
+                        tr(context, 'date_today'),
                         'Darsda faol, uy vazifasini vaqtida topshirdi.',
                       ),
-                      _ReferenceDataRow(
+                      const _ReferenceDataRow(
                         '08.07.2026',
                         'Keyingi mavzu bo‘yicha qo‘shimcha mashq tavsiya qilindi.',
                       ),
@@ -7688,14 +7843,19 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
-                    title: 'SO‘NGGI XABARLAR',
-                    rows: const [
+                    title: tr(context, 'recent_messages').toUpperCase(),
+                    rows: [
                       _ReferenceDataRow(
-                        'Ota-ona',
+                        tr(context, 'stu_parents'),
                         'Rahmat, uy vazifasini nazorat qilamiz.',
                       ),
                       _ReferenceDataRow(
-                        'Administrator',
+                        tx(
+                          context,
+                          uz: 'Administrator',
+                          ru: 'Администратор',
+                          en: 'Administrator',
+                        ),
                         'Keyingi to‘lov muddati 20-iyul.',
                       ),
                     ],
@@ -7751,6 +7911,108 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
     );
   }
 }
+
+Future<void> _showStudentAttendanceSummary(
+  BuildContext context, {
+  required Student student,
+  required SfColors colors,
+}) => showModalBottomSheet<void>(
+  context: context,
+  backgroundColor: Colors.transparent,
+  isScrollControlled: true,
+  builder: (sheetContext) => SfTheme(
+    colors: colors,
+    child: SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.muted2,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: student.attendance >= 90
+                        ? colors.successSoft
+                        : colors.warnSoft,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.fact_check_rounded,
+                    color: student.attendance >= 90
+                        ? colors.success
+                        : colors.warn,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        tr(context, 'stat_attendance'),
+                        style: RefType.ui(
+                          size: 16,
+                          weight: FontWeight.w800,
+                          color: colors.ink,
+                        ),
+                      ),
+                      Text(
+                        '${student.attendance}% · ${tr(context, student.attendance >= 90 ? 'attendance_normal' : 'attendance_attention')}',
+                        style: RefType.mono(size: 11, color: colors.ink2),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text(
+              tx(
+                context,
+                uz: 'Foiz oxirgi 30 kundagi qatnashilgan darslarning barcha rejalashtirilgan darslarga nisbatini ko‘rsatadi.',
+                ru: 'Процент показывает долю посещённых занятий от всех запланированных занятий за последние 30 дней.',
+                en: 'The percentage is attended lessons divided by all scheduled lessons over the last 30 days.',
+              ),
+              style: RefType.ui(size: 12.5, color: colors.ink2, height: 1.45),
+            ),
+            const SizedBox(height: 10),
+            RefStatusTile(
+              icon: Icons.touch_app_rounded,
+              title: tr(context, 'tap_chart_hint'),
+              subtitle: tx(
+                context,
+                uz: 'Har bir haftaning aniq foizini ko‘rish mumkin.',
+                ru: 'На графике можно посмотреть точный процент каждой недели.',
+                en: 'The chart shows the exact percentage for each week.',
+              ),
+              tone: RefMetricTone.primary,
+            ),
+          ],
+        ),
+      ),
+    ),
+  ),
+);
 
 RefPillTone _referencePillTone(PillTone tone) => switch (tone) {
   PillTone.success => RefPillTone.success,
@@ -8144,7 +8406,6 @@ class _TopStudentCard extends StatelessWidget {
     final username =
         student.username ??
         '@${profile.firstName.toLowerCase()}.${profile.lastName.toLowerCase()}';
-    final payment = _studentTones[student.pay]!;
     return SfCard(
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
@@ -8191,18 +8452,37 @@ class _TopStudentCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 11),
-              _TopStudentData('Branch', profile.branch),
-              _TopStudentData('Group', student.group),
-              _TopStudentData('Teacher', studentTeacher(student)),
-              _TopStudentData('Attendance', '${student.attendance}%'),
+              _TopStudentData(tr(context, 'stu_branch'), profile.branch),
+              _TopStudentData(tr(context, 'stu_group'), student.group),
               _TopStudentData(
-                'Average score',
+                tr(context, 'student_teacher'),
+                studentTeacher(student),
+              ),
+              _TopStudentData(
+                tr(context, 'stat_attendance'),
+                '${student.attendance}%',
+              ),
+              _TopStudentData(
+                tr(context, 'student_average'),
                 '${studentAverageScore(student)}%',
               ),
-              _TopStudentData('Payment status', payment.$2),
               _TopStudentData(
-                'Study history',
-                '${profile.enrolled} · ${student.pay == 'left' ? 'completed' : 'active'}',
+                tx(
+                  context,
+                  uz: 'To‘lov holati',
+                  ru: 'Статус оплаты',
+                  en: 'Payment status',
+                ),
+                _studentPaymentLabel(context, student.pay),
+              ),
+              _TopStudentData(
+                tx(
+                  context,
+                  uz: 'O‘qish tarixi',
+                  ru: 'История обучения',
+                  en: 'Study history',
+                ),
+                '${profile.enrolled} · ${student.pay == 'left' ? tx(context, uz: 'yakunlangan', ru: 'завершено', en: 'completed') : tr(context, 'status_active').toLowerCase()}',
                 last: true,
               ),
             ],
@@ -8584,12 +8864,21 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
       );
       if (attachment == null || !mounted) return;
       var prepared = attachment;
-      if (attachment.messageKind != null) {
-        final localPath = await _saveStudentAttachment(
-          attachment.path,
-          attachment.messageKind == ChatMessageKind.video ? 'video' : 'image',
+      if (prepared.messageKind != null) {
+        final confirmed = await _previewChatAttachment(
+          context: context,
+          colors: widget.colors,
+          attachment: prepared,
         );
-        prepared = attachment.copyWith(path: localPath);
+        if (confirmed == null || !mounted) return;
+        prepared = confirmed;
+      }
+      if (prepared.messageKind != null) {
+        final localPath = await _saveStudentAttachment(
+          prepared.path,
+          prepared.messageKind == ChatMessageKind.video ? 'video' : 'image',
+        );
+        prepared = prepared.copyWith(path: localPath);
       }
       if (!mounted) return;
       _queueStudentUpload(prepared);
@@ -8618,7 +8907,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
               upload.attachment.messageKind == null
                   ? ChatMsg('📎 ${upload.attachment.name}', mine: true)
                   : ChatMsg(
-                      upload.attachment.name,
+                      upload.attachment.caption,
                       mine: true,
                       kind: upload.attachment.messageKind!,
                       path: upload.attachment.path,
@@ -9504,7 +9793,7 @@ class _AnomaliesScreenState extends State<AnomaliesScreen> {
       case 1:
         return a.sev == 'high';
       case 2:
-        return a.kind == 'Davomat';
+        return a.kind == 'Посещаемость';
       case 3:
         return a.kind == 'Karta';
       case 4:
@@ -9983,9 +10272,9 @@ class AnomalyDetailScreen extends StatelessWidget {
 /// Deterministic "why flagged" explanation per anomaly kind.
 String _anomalyWhy(Anomaly a) {
   switch (a.kind) {
-    case 'Davomat':
-      return "${a.branch} filialida bu guruh 21 kun ketma-ket 100% davomat ko'rsatdi. "
-          "Statistik jihatdan bu kam uchraydi — qo'lda belgilangan davomat ehtimoli bor.";
+    case 'Посещаемость':
+      return "${a.branch}: у группы 100% посещаемость 21 день подряд. "
+          "Это статистически редкий случай — стоит проверить ручные отметки.";
     case 'Karta':
       return "Bir hafta ichida 48 ta karta o'tkazmasi qayd etildi — o'rtacha ko'rsatkichdan "
           "ancha yuqori. Takroriy yoki bog'liq to'lovlar bo'lishi mumkin.";
@@ -10004,7 +10293,7 @@ String _anomalyWhy(Anomaly a) {
 /// Deterministic recommended next step per anomaly kind.
 String _anomalyReco(Anomaly a) {
   switch (a.kind) {
-    case 'Davomat':
+    case 'Посещаемость':
       return "Kamera tahlilini solishtiring va o'qituvchi bilan suhbatlashing.";
     case 'Karta':
       return "To'lov kanallarini ko'rib chiqing va takroriy o'tkazmalarni tasdiqlang.";
@@ -11219,7 +11508,7 @@ class BranchesScreen extends StatelessWidget {
                                         _branchStat(
                                           context,
                                           '${b.attendance}%',
-                                          'davomat',
+                                          'посещаемость',
                                           b.attendance >= 92
                                               ? c.success
                                               : c.warn,
@@ -11340,7 +11629,7 @@ class _ReferenceBranchesPage extends StatelessWidget {
                     tone: RefMetricTone.success,
                   ),
                   RefMetricCard(
-                    label: 'O‘rtacha davomat',
+                    label: 'Средняя посещаемость',
                     value: '$averageAttendance%',
                     icon: Icons.how_to_reg_rounded,
                     tone: averageAttendance >= 92
@@ -11352,7 +11641,7 @@ class _ReferenceBranchesPage extends StatelessWidget {
               const SizedBox(height: 20),
               const RefSectionHeader(
                 title: 'Filiallar ro‘yxati',
-                subtitle: 'Daromad, davomat va trend',
+                subtitle: 'Доход, посещаемость и динамика',
               ),
               const SizedBox(height: 8),
               for (var index = 0; index < branches.length; index++) ...[
@@ -11672,7 +11961,7 @@ void _showBranchSheet(BuildContext context, Branch b) {
               const SizedBox(width: 10),
               Expanded(
                 child: _DetailStat(
-                  'Davomat',
+                  'Посещаемость',
                   '${b.attendance}%',
                   b.attendance >= 92 ? c.success : c.warn,
                 ),
@@ -11833,7 +12122,7 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
           ),
           actions: [
             IconButton(
-              tooltip: 'Report',
+              tooltip: tr(context, 'btn_report'),
               icon: Icon(Icons.download_rounded, color: c.ink2),
               onPressed: () {
                 AppScope.of(context).setBranchScope(b.name);
@@ -11841,7 +12130,12 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
               },
             ),
             IconButton(
-              tooltip: 'Configure',
+              tooltip: tx(
+                context,
+                uz: 'Sozlash',
+                ru: 'Настроить',
+                en: 'Configure',
+              ),
               icon: Icon(Icons.tune_rounded, color: c.ink2),
               onPressed: () => Navigator.of(
                 context,
@@ -11888,9 +12182,10 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                           ),
                         ),
                         Text(
-                          paused
-                              ? 'Pauzada · qayta faollashtirish kerak'
-                              : 'Faol filial · barcha ko‘rsatkichlar yangilanadi',
+                          tr(
+                            context,
+                            paused ? 'branch_paused' : 'branch_active',
+                          ),
                           style: TextStyle(
                             fontFamily: SfType.ui,
                             fontSize: 11.5,
@@ -11901,7 +12196,7 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                     ),
                   ),
                   Pill(
-                    paused ? 'PAUZA' : 'FAOL',
+                    tr(context, paused ? 'status_paused' : 'status_active'),
                     tone: paused ? PillTone.danger : PillTone.success,
                   ),
                 ],
@@ -11910,24 +12205,24 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
             const SizedBox(height: 14),
             _kpiGrid([
               _Kpi(
-                label: 'Daromad',
+                label: tr(context, 'branch_revenue'),
                 value: fmtMoneyMln(b.revenue),
                 color: c.success,
                 icon: Icons.payments_rounded,
                 trend: (up: b.trend >= 0, v: '${b.trend.abs()}%'),
               ),
               _Kpi(
-                label: 'O‘quvchilar',
+                label: tr(context, 'branch_students'),
                 value: '${b.students}',
                 icon: Icons.groups_rounded,
               ),
               _Kpi(
-                label: 'Xodimlar',
+                label: tr(context, 'branch_staff'),
                 value: '${(b.students / 31).round()}',
                 icon: Icons.badge_rounded,
               ),
               _Kpi(
-                label: 'Davomat',
+                label: tr(context, 'stat_attendance'),
                 value: '${b.attendance}%',
                 color: b.attendance >= 92 ? c.success : c.warn,
                 icon: Icons.fact_check_rounded,
@@ -11937,20 +12232,42 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
             SfCard(
               child: Column(
                 children: [
-                  const SfCardHeader('Davomat / karta salomatligi'),
+                  SfCardHeader(
+                    tr(context, 'branch_health'),
+                    link: tr(context, 'tap_chart_hint'),
+                  ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                     child: Row(
                       children: [
                         Tooltip(
-                          message: 'Yaxshi: 72%\nO‘rtacha: 19%\nPast: 9%',
+                          message:
+                              '${tr(context, 'legend_good')}: 72%\n'
+                              '${tr(context, 'legend_mid')}: 19%\n'
+                              '${tr(context, 'legend_low')}: 9%',
                           child: Donut(
+                            key: const ValueKey('branch-attendance-donut'),
                             size: 92,
                             thickness: 14,
                             segments: [
-                              DonutSegment(72, c.success),
-                              DonutSegment(19, c.warn),
-                              DonutSegment(9, c.danger),
+                              DonutSegment(
+                                72,
+                                c.success,
+                                label: tr(context, 'legend_good'),
+                                display: '72%',
+                              ),
+                              DonutSegment(
+                                19,
+                                c.warn,
+                                label: tr(context, 'legend_mid'),
+                                display: '19%',
+                              ),
+                              DonutSegment(
+                                9,
+                                c.danger,
+                                label: tr(context, 'legend_low'),
+                                display: '9%',
+                              ),
                             ],
                             // This State's build context is above the local
                             // SfTheme wrapper. Build the label from the known
@@ -11970,9 +12287,21 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                         Expanded(
                           child: Column(
                             children: [
-                              LegendRow(c.success, 'Yaxshi (>90%)', '72%'),
-                              LegendRow(c.warn, 'O‘rtacha (80–90%)', '19%'),
-                              LegendRow(c.danger, 'Past (<80%)', '9%'),
+                              LegendRow(
+                                c.success,
+                                '${tr(context, 'legend_good')} (>90%)',
+                                '72%',
+                              ),
+                              LegendRow(
+                                c.warn,
+                                '${tr(context, 'legend_mid')} (80–90%)',
+                                '19%',
+                              ),
+                              LegendRow(
+                                c.danger,
+                                '${tr(context, 'legend_low')} (<80%)',
+                                '9%',
+                              ),
                             ],
                           ),
                         ),
@@ -11986,7 +12315,7 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
             SfCard(
               child: Column(
                 children: [
-                  const SfCardHeader('O‘qituvchilar reytingi · top'),
+                  SfCardHeader(tr(context, 'branch_teachers_top')),
                   _branchTeacherRow(
                     c,
                     'Madina Halimova',
@@ -12016,26 +12345,58 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
             SfCard(
               child: Column(
                 children: [
-                  const SfCardHeader('So‘nggi hodisalar'),
+                  SfCardHeader(
+                    tx(
+                      context,
+                      uz: 'So‘nggi hodisalar',
+                      ru: 'Последние события',
+                      en: 'Recent activity',
+                    ),
+                  ),
                   _branchEventRow(
                     c,
                     Icons.trending_up_rounded,
-                    'Yangi to‘lov · 1.2 mln',
-                    '2 daqiqa',
+                    tx(
+                      context,
+                      uz: 'Yangi to‘lov · 1.2 mln',
+                      ru: 'Новый платёж · 1,2 млн',
+                      en: 'New payment · 1.2m',
+                    ),
+                    tx(
+                      context,
+                      uz: '2 daqiqa',
+                      ru: '2 минуты',
+                      en: '2 minutes',
+                    ),
                     c.success,
                   ),
                   _branchEventRow(
                     c,
                     Icons.notifications_active_rounded,
-                    'Qarz eslatmasi yuborildi',
-                    '14 daqiqa',
+                    tx(
+                      context,
+                      uz: 'Qarz eslatmasi yuborildi',
+                      ru: 'Отправлено напоминание о долге',
+                      en: 'Debt reminder sent',
+                    ),
+                    tx(
+                      context,
+                      uz: '14 daqiqa',
+                      ru: '14 минут',
+                      en: '14 minutes',
+                    ),
                     c.warn,
                   ),
                   _branchEventRow(
                     c,
                     Icons.flag_rounded,
-                    'Audit flag · davomati past',
-                    '2 soat',
+                    tx(
+                      context,
+                      uz: 'Audit flag · past davomat',
+                      ru: 'Флаг аудита · низкая посещаемость',
+                      en: 'Audit flag · low attendance',
+                    ),
+                    tx(context, uz: '2 soat', ru: '2 часа', en: '2 hours'),
                     c.danger,
                     last: true,
                   ),
@@ -12048,7 +12409,12 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                 Expanded(
                   child: SfButton(
                     icon: Icons.tune_rounded,
-                    label: 'Configure',
+                    label: tx(
+                      context,
+                      uz: 'Sozlash',
+                      ru: 'Настроить',
+                      en: 'Configure',
+                    ),
                     primary: false,
                     onTap: () => Navigator.of(context).push(
                       sfPageRoute(BranchConfigureScreen(branch: b, colors: c)),
@@ -12061,7 +12427,14 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                     icon: paused
                         ? Icons.play_arrow_rounded
                         : Icons.pause_rounded,
-                    label: paused ? 'Faollashtirish' : 'Pauza',
+                    label: paused
+                        ? tx(
+                            context,
+                            uz: 'Faollashtirish',
+                            ru: 'Активировать',
+                            en: 'Activate',
+                          )
+                        : tr(context, 'status_paused'),
                     primary: true,
                     onTap: paused
                         ? () => setState(() => paused = false)
@@ -12149,19 +12522,33 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
       fields: [
         (
           icon: Icons.account_tree_outlined,
-          label: 'Филиал',
+          label: tr(context, 'filter_branch'),
           value: widget.branch.name,
         ),
-        (icon: Icons.schedule_rounded, label: 'Время', value: time),
+        (
+          icon: Icons.schedule_rounded,
+          label: tx(context, uz: 'Vaqt', ru: 'Время', en: 'Time'),
+          value: time,
+        ),
         (
           icon: Icons.storage_rounded,
-          label: 'Источник',
-          value: 'Журнал филиала',
+          label: tx(context, uz: 'Manba', ru: 'Источник', en: 'Source'),
+          value: tx(
+            context,
+            uz: 'Filial jurnali',
+            ru: 'Журнал филиала',
+            en: 'Branch log',
+          ),
         ),
         (
           icon: Icons.verified_outlined,
-          label: 'Статус',
-          value: 'Зафиксировано',
+          label: tr(context, 'case_status_label'),
+          value: tx(
+            context,
+            uz: 'Qayd etilgan',
+            ru: 'Зафиксировано',
+            en: 'Recorded',
+          ),
         ),
       ],
     ),
@@ -13891,21 +14278,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   Future<void> _pickRange(AppStore store) async {
-    final range = await showDateRangePicker(
+    final range = await showRefDateRangePicker(
       context: context,
       initialDateRange: store.selectedRange,
       firstDate: DateTime(2023),
       lastDate: DateTime(2032),
-      builder: (context, child) => SfTheme(
-        colors: widget.colors,
-        child: Theme(
-          data: sfMaterialTheme(
-            widget.colors,
-            dark: Theme.of(context).brightness == Brightness.dark,
-          ),
-          child: child!,
-        ),
-      ),
+      title: 'Период группы',
     );
     if (range != null && mounted) store.setDateRange(range);
   }
@@ -13936,7 +14314,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         '${group.branch} · ${group.level}\n'
         'O‘qituvchi: ${group.teacher}\n'
         'O‘quvchilar: ${analytics.studentCount}\n'
-        'Davomat: ${analytics.averageAttendance}%\n'
+        'Посещаемость: ${analytics.averageAttendance}%\n'
         'Qarzdorlar: ${analytics.debtorCount}\n'
         'Qarzdorlik: ${fmtMoney(analytics.debt)}\n'
         'Davr: ${store.selectedRange.start.day}.${store.selectedRange.start.month}.${store.selectedRange.start.year}'
@@ -14068,7 +14446,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       ['O‘qituvchi', group.teacher],
       ['Jadval', group.schedule],
       ['O‘quvchilar', '${analytics.studentCount}'],
-      ['Davomat', '${analytics.averageAttendance}%'],
+      ['Посещаемость', '${analytics.averageAttendance}%'],
       ['Qarzdorlar', '${analytics.debtorCount}'],
       ['Qarzdorlik', '${analytics.debt}'],
       ['Davr boshi', store.selectedRange.start.toIso8601String()],
@@ -14086,7 +14464,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             'Ko‘rsatkich,Qiymat',
             ...rows.map((row) => row.map(csvCell).join(',')),
             '',
-            'O‘quvchi,Guruh,Davomat,Qarzdorlik',
+            'O‘quvchi,Guruh,Посещаемость,Qarzdorlik',
             ...members.map((student) => [student.name, student.group, '${student.attendance}%', '${student.debt}'].map(csvCell).join(',')),
           ].join('\n')}'
         : '<!doctype html><html><head><meta charset="utf-8">'
@@ -14096,7 +14474,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               '${rows.map((row) => '<tr><th>${htmlCell(row[0])}</th><td>${htmlCell(row[1])}</td></tr>').join()}'
               '</table><h2>O‘quvchilar</h2>'
               '<table border="1" cellspacing="0" cellpadding="6">'
-              '<tr><th>O‘quvchi</th><th>Davomat</th><th>Qarzdorlik</th></tr>'
+              '<tr><th>O‘quvchi</th><th>Посещаемость</th><th>Qarzdorlik</th></tr>'
               '${members.map((student) => '<tr><td>${htmlCell(student.name)}</td><td>${student.attendance}%</td><td>${student.debt}</td></tr>').join()}'
               '</table></body></html>';
     final safeName = group.name
@@ -14424,7 +14802,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
               labelOf: (tab) => switch (tab) {
                 _GroupDetailTab.overview => 'Umumiy',
                 _GroupDetailTab.students => 'O‘quvchi',
-                _GroupDetailTab.attendance => 'Davomat',
+                _GroupDetailTab.attendance => 'Посещаемость',
                 _GroupDetailTab.payments => 'To‘lov',
                 _GroupDetailTab.exams => 'Imtihon',
                 _GroupDetailTab.history => 'Tarix',
@@ -14550,7 +14928,7 @@ class _GroupOverview extends StatelessWidget {
     final nextTitle = outstanding > 0
         ? '$outstanding ta qarzdor bilan ishlash'
         : group.avgAtt < 90
-        ? 'Davomat pasayishini tekshirish'
+        ? 'Посещаемость pasayishini tekshirish'
         : 'Keyingi imtihonni tayyorlash';
     final nextSubtitle = outstanding > 0
         ? 'To‘lovlar ro‘yxati va qarzdorlik tafsilotlarini oching'
@@ -14608,7 +14986,7 @@ class _GroupOverview extends StatelessWidget {
               uppercaseLabel: false,
             ),
             RefMetricCard(
-              label: 'Davomat',
+              label: 'Посещаемость',
               value: '${group.avgAtt}%',
               icon: Icons.how_to_reg_rounded,
               tone: RefMetricTone.primary,
@@ -14724,7 +15102,7 @@ class _GroupAttendance extends StatelessWidget {
     if (members.isEmpty) {
       return _EmptyState(
         icon: Icons.fact_check_outlined,
-        title: 'Davomat yozuvlari yo‘q',
+        title: 'Посещаемость yozuvlari yo‘q',
         sub: 'Guruhga o‘quvchilar biriktirilganda tarix shu yerda ko‘rinadi.',
       );
     }
@@ -16363,7 +16741,7 @@ class StaffDetailScreen extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: SfStatTile(
-                    'Davomat',
+                    'Посещаемость',
                     attendance == 0 ? '—' : '$attendance%',
                     c.warn,
                   ),
@@ -16424,8 +16802,7 @@ class TeachersWorkspaceScreen extends StatefulWidget {
 class _TeachersWorkspaceScreenState extends State<TeachersWorkspaceScreen> {
   String query = '';
   int filter = 0;
-  int page = 1;
-  int pageSize = 5;
+  bool withGroupsOnly = false;
   final TextEditingController _referenceSearch = TextEditingController();
 
   void _update(VoidCallback change) => setState(change);
@@ -16534,6 +16911,10 @@ class _ReferenceTeachersPage extends StatelessWidget {
       final isTeacher = member.subject.toLowerCase() != 'operations';
       if (state.filter == 1 && !isTeacher) return false;
       if (state.filter == 2 && member.salaryType != 'Monthly') return false;
+      if (state.withGroupsOnly &&
+          teacherGroupsFor(AppScope.of(context), member).isEmpty) {
+        return false;
+      }
       final q = state.query.toLowerCase();
       return q.isEmpty ||
           member.fullName.toLowerCase().contains(q) ||
@@ -16542,14 +16923,6 @@ class _ReferenceTeachersPage extends StatelessWidget {
     final teachingCount = AppScope.of(context).staff
         .where((member) => member.subject.toLowerCase() != 'operations')
         .length;
-    final pageCount = teachers.isEmpty
-        ? 1
-        : ((teachers.length + state.pageSize - 1) ~/ state.pageSize);
-    final currentPage = state.page.clamp(1, pageCount).toInt();
-    final pageTeachers = teachers
-        .skip((currentPage - 1) * state.pageSize)
-        .take(state.pageSize)
-        .toList(growable: false);
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -16581,7 +16954,6 @@ class _ReferenceTeachersPage extends StatelessWidget {
                     hint: 'O‘qituvchi qidirish',
                     onChanged: (value) => state._update(() {
                       state.query = value;
-                      state.page = 1;
                     }),
                     suffix: state.query.isEmpty
                         ? null
@@ -16590,7 +16962,6 @@ class _ReferenceTeachersPage extends StatelessWidget {
                             onPressed: () => state._update(() {
                               state._referenceSearch.clear();
                               state.query = '';
-                              state.page = 1;
                             }),
                             icon: Icon(Icons.close_rounded, color: c.muted),
                           ),
@@ -16603,7 +16974,6 @@ class _ReferenceTeachersPage extends StatelessWidget {
                         const ['Hammasi', 'O‘qituvchi', 'Oylik'][value],
                     onChanged: (value) => state._update(() {
                       state.filter = value;
-                      state.page = 1;
                     }),
                   ),
                   const SizedBox(height: 16),
@@ -16611,13 +16981,19 @@ class _ReferenceTeachersPage extends StatelessWidget {
                     minCellWidth: 170,
                     children: [
                       RefMetricCard(
+                        key: const ValueKey('teachers-all-metric'),
                         label: 'Jami',
                         value: '${teachers.length}',
                         icon: Icons.groups_rounded,
                         tone: RefMetricTone.primary,
                         compact: true,
+                        onTap: () => state._update(() {
+                          state.withGroupsOnly = false;
+                          state.filter = 0;
+                        }),
                       ),
                       RefMetricCard(
+                        key: const ValueKey('teachers-groups-metric'),
                         label: 'Faol guruhlar',
                         value:
                             '${teachers.fold<int>(0, (sum, member) => sum + teacherGroupsFor(AppScope.of(context), member).length)}',
@@ -16625,6 +17001,8 @@ class _ReferenceTeachersPage extends StatelessWidget {
                         tone: RefMetricTone.success,
                         compact: true,
                         uppercaseLabel: false,
+                        onTap: () =>
+                            state._update(() => state.withGroupsOnly = true),
                       ),
                     ],
                   ),
@@ -16637,35 +17015,16 @@ class _ReferenceTeachersPage extends StatelessWidget {
                   if (teachers.isEmpty)
                     _ReferenceStudentEmpty(hasQuery: state.query.isNotEmpty)
                   else
-                    for (
-                      var index = 0;
-                      index < pageTeachers.length;
-                      index++
-                    ) ...[
+                    for (var index = 0; index < teachers.length; index++) ...[
                       RefStaggeredReveal(
                         order: index,
                         child: _ReferenceTeacherCard(
-                          member: pageTeachers[index],
+                          member: teachers[index],
                           colors: c,
                         ),
                       ),
                       const SizedBox(height: 9),
                     ],
-                  if (teachers.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    RefPaginationBar(
-                      page: currentPage,
-                      pages: pageCount,
-                      total: teachers.length,
-                      pageSize: state.pageSize,
-                      onPageChanged: (value) =>
-                          state._update(() => state.page = value),
-                      onPageSizeChanged: (value) => state._update(() {
-                        state.pageSize = value;
-                        state.page = 1;
-                      }),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -16777,7 +17136,7 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
         Icons.payments_rounded,
       ),
       (
-        'Davomat',
+        'Посещаемость',
         '${first.attendance}%',
         '${second.attendance}%',
         Icons.fact_check_rounded,
@@ -17203,8 +17562,7 @@ class ParentsWorkspaceScreen extends StatefulWidget {
 
 class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
   String query = '';
-  int page = 1;
-  int pageSize = 5;
+  int metric = 0;
   final TextEditingController _search = TextEditingController();
 
   @override
@@ -17223,28 +17581,30 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
           .putIfAbsent(studentProfile(student).fatherName, () => [])
           .add(student);
     }
-    final entries = byParent.entries.where((entry) {
+    final matchingEntries = byParent.entries.where((entry) {
       final q = query.toLowerCase();
       return q.isEmpty ||
           entry.key.toLowerCase().contains(q) ||
           entry.value.any((s) => s.name.toLowerCase().contains(q));
     }).toList();
-    final allChildren = entries.expand((entry) => entry.value).toList();
-    final attentionCount = entries.where((entry) {
+    final allChildren = matchingEntries.expand((entry) => entry.value).toList();
+    final attentionCount = matchingEntries.where((entry) {
       final lastCall = entry.value
           .map(studentCallDays)
           .reduce((a, b) => a < b ? a : b);
       return lastCall > 7;
     }).length;
     final debtCount = allChildren.where((child) => child.debt > 0).length;
-    final pageCount = entries.isEmpty
-        ? 1
-        : ((entries.length + pageSize - 1) ~/ pageSize);
-    final currentPage = page.clamp(1, pageCount).toInt();
-    final pageEntries = entries
-        .skip((currentPage - 1) * pageSize)
-        .take(pageSize)
-        .toList(growable: false);
+    final entries = matchingEntries.where((entry) {
+      if (metric == 1) {
+        final lastCall = entry.value
+            .map(studentCallDays)
+            .reduce((a, b) => a < b ? a : b);
+        return lastCall > 7;
+      }
+      if (metric == 2) return entry.value.any((child) => child.debt > 0);
+      return true;
+    }).toList();
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -17252,7 +17612,7 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
         body: Column(
           children: [
             RefLargeHeader(
-              eyebrow: '${entries.length} OILA',
+              eyebrow: '${matchingEntries.length} OILA',
               title: 'Ota-onalar',
               subtitle: 'Aloqa, farzandlar va ta’lim holati',
             ),
@@ -17267,7 +17627,6 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
                     hint: 'Ota-ona yoki farzand qidirish',
                     onChanged: (value) => setState(() {
                       query = value;
-                      page = 1;
                     }),
                     suffix: query.isEmpty
                         ? null
@@ -17276,38 +17635,51 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
                             onPressed: () => setState(() {
                               _search.clear();
                               query = '';
-                              page = 1;
                             }),
                             icon: Icon(Icons.close_rounded, color: c.muted),
                           ),
                   ),
                   const SizedBox(height: 12),
-                  RefAdaptiveGrid(
-                    minCellWidth: 145,
-                    spacing: 8,
+                  Row(
                     children: [
-                      RefMetricCard(
-                        label: 'Ota-onalar',
-                        value: '${entries.length}',
-                        icon: Icons.family_restroom_rounded,
-                        tone: RefMetricTone.primary,
-                        compact: true,
+                      Expanded(
+                        child: RefMetricCard(
+                          key: const ValueKey('parents-all-metric'),
+                          label: 'Ota-onalar',
+                          value: '${matchingEntries.length}',
+                          icon: Icons.family_restroom_rounded,
+                          tone: RefMetricTone.primary,
+                          compact: true,
+                          onTap: () => setState(() => metric = 0),
+                        ),
                       ),
-                      RefMetricCard(
-                        label: 'Aloqa kerak',
-                        value: '$attentionCount',
-                        icon: Icons.phone_callback_outlined,
-                        tone: RefMetricTone.warning,
-                        compact: true,
-                      ),
-                      RefMetricCard(
-                        label: 'Qarzdor farzand',
-                        value: '$debtCount',
-                        icon: Icons.account_balance_wallet_outlined,
-                        tone: RefMetricTone.danger,
-                        compact: true,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: RefMetricCard(
+                          key: const ValueKey('parents-callback-metric'),
+                          label: 'Aloqa kerak',
+                          value: '$attentionCount',
+                          icon: Icons.phone_callback_outlined,
+                          tone: RefMetricTone.warning,
+                          compact: true,
+                          onTap: () => setState(() => metric = 1),
+                        ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: RefMetricCard(
+                      key: const ValueKey('parents-debt-metric'),
+                      label: 'Qarzdor farzand',
+                      value: '$debtCount',
+                      detail: 'Нажмите, чтобы показать семьи с задолженностью',
+                      icon: Icons.account_balance_wallet_outlined,
+                      tone: RefMetricTone.danger,
+                      compact: true,
+                      onTap: () => setState(() => metric = 2),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   RefSectionHeader(
@@ -17322,31 +17694,17 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
                       sub: 'Qidiruv so‘rovini o‘zgartirib ko‘ring.',
                     )
                   else
-                    for (int i = 0; i < pageEntries.length; i++) ...[
+                    for (int i = 0; i < entries.length; i++) ...[
                       RefStaggeredReveal(
                         order: i,
                         child: _ParentRow(
-                          name: pageEntries[i].key,
-                          children: pageEntries[i].value,
+                          name: entries[i].key,
+                          children: entries[i].value,
                           colors: c,
                         ),
                       ),
-                      if (i < pageEntries.length - 1) const SizedBox(height: 8),
+                      if (i < entries.length - 1) const SizedBox(height: 8),
                     ],
-                  if (entries.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    RefPaginationBar(
-                      page: currentPage,
-                      pages: pageCount,
-                      total: entries.length,
-                      pageSize: pageSize,
-                      onPageChanged: (value) => setState(() => page = value),
-                      onPageSizeChanged: (value) => setState(() {
-                        pageSize = value;
-                        page = 1;
-                      }),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -17711,21 +18069,14 @@ class _DepartmentsWorkspaceScreenState
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
-    final ranked = store.departmentRanking;
-    final list = ranked
+    final departments = store.departments;
+    final list = departments
         .where(
           (d) =>
               d.name.toLowerCase().contains(query.toLowerCase()) ||
               d.manager.toLowerCase().contains(query.toLowerCase()),
         )
         .toList();
-    final averageRating = ranked.isEmpty
-        ? 0.0
-        : ranked.fold<double>(
-                0,
-                (total, department) => total + department.rating,
-              ) /
-              ranked.length;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -17733,9 +18084,9 @@ class _DepartmentsWorkspaceScreenState
         body: Column(
           children: [
             RefLargeHeader(
-              eyebrow: '${ranked.length} DEPARTAMENT',
+              eyebrow: '${departments.length} DEPARTAMENT',
               title: 'Departamentlar',
-              subtitle: 'Jamoa, rahbarlar va natijalar reytingi',
+              subtitle: 'Jamoa, rahbarlar va faoliyat holati',
               actions: [
                 RefIconAction(
                   icon: Icons.add_rounded,
@@ -17755,15 +18106,15 @@ class _DepartmentsWorkspaceScreenState
                       RefMetricCard(
                         label: 'Faol bo‘limlar',
                         value:
-                            '${ranked.where((item) => item.status == 'active').length}',
+                            '${departments.where((item) => item.status == 'active').length}',
                         icon: Icons.domain_verification_outlined,
                         tone: RefMetricTone.success,
                         compact: true,
                       ),
                       RefMetricCard(
-                        label: 'O‘rtacha reyting',
-                        value: averageRating.toStringAsFixed(1),
-                        icon: Icons.star_rounded,
+                        label: 'Jami xodimlar',
+                        value: '${store.staff.length}',
+                        icon: Icons.badge_outlined,
                         tone: RefMetricTone.accent,
                         compact: true,
                       ),
@@ -17776,7 +18127,7 @@ class _DepartmentsWorkspaceScreenState
                   ),
                   const SizedBox(height: 14),
                   RefSectionHeader(
-                    title: 'Departamentlar reytingi',
+                    title: 'Departamentlar',
                     subtitle: '${list.length} ta mos natija',
                   ),
                   const SizedBox(height: 8),
@@ -17790,7 +18141,6 @@ class _DepartmentsWorkspaceScreenState
                     for (final department in list)
                       _DepartmentCard(
                         department: department,
-                        rank: ranked.indexOf(department) + 1,
                         staffCount: store.staffForDepartment(department).length,
                         onDelete: () => _delete(department),
                       ),
@@ -17806,12 +18156,10 @@ class _DepartmentsWorkspaceScreenState
 
 class _DepartmentCard extends StatelessWidget {
   final DepartmentRecord department;
-  final int rank;
   final int staffCount;
   final VoidCallback onDelete;
   const _DepartmentCard({
     required this.department,
-    required this.rank,
     required this.staffCount,
     required this.onDelete,
   });
@@ -17844,14 +18192,7 @@ class _DepartmentCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(11),
                 ),
                 alignment: Alignment.center,
-                child: Text(
-                  '#$rank',
-                  style: RefType.mono(
-                    size: 12,
-                    weight: FontWeight.w800,
-                    color: c.primary,
-                  ),
-                ),
+                child: Icon(Icons.domain_rounded, color: c.primary, size: 21),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -17876,31 +18217,14 @@ class _DepartmentCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Icon(Icons.star_rounded, size: 13, color: c.accent),
-                        const SizedBox(width: 3),
-                        Text(
-                          department.rating == 0
-                              ? 'Yangi'
-                              : department.rating.toStringAsFixed(1),
-                          style: RefType.mono(
-                            size: 9.5,
-                            weight: FontWeight.w800,
-                            color: c.ink,
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                        Text(
-                          department.status == 'active' ? 'Faol' : 'Nofaol',
-                          style: RefType.eyebrow(
-                            size: 8,
-                            color: department.status == 'active'
-                                ? c.success
-                                : c.muted,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      department.status == 'active' ? 'Faol' : 'Nofaol',
+                      style: RefType.eyebrow(
+                        size: 8,
+                        color: department.status == 'active'
+                            ? c.success
+                            : c.muted,
+                      ),
                     ),
                   ],
                 ),
@@ -18119,7 +18443,6 @@ class _DepartmentCreateScreenState extends State<DepartmentCreateScreen> {
                       status: _status,
                       responsible: _responsible,
                       createdAt: createdAt.text.trim(),
-                      rating: 0,
                       initialStaffUsernames: _staffUsernames.toList(),
                     ),
                   );
@@ -18361,46 +18684,6 @@ class _DepartmentDetailScreenState extends State<DepartmentDetailScreen> {
                     widget.department.status == 'active' ? 'Faol' : 'Nofaol',
                   ),
                   _InfoRow('Tavsif', widget.department.description, last: true),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            _setSec(c, 'DEPARTAMENT REYTINGI'),
-            const SizedBox(height: 6),
-            RefSurfaceCard(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: c.accentSoft,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(Icons.star_rounded, color: c.accent),
-                  ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${widget.department.rating.toStringAsFixed(1)} / 5.0',
-                          style: RefType.mono(
-                            size: 18,
-                            weight: FontWeight.w800,
-                            color: c.ink,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Davomat, o‘zlashtirish, to‘lov intizomi va saqlab qolish bo‘yicha umumiy baho',
-                          style: RefType.ui(size: 10.5, color: c.muted),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -18724,7 +19007,7 @@ class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
       status: MeetingStatus.today,
       confirmedParticipants: 12,
       agenda: [
-        'Davomat va to‘lovlar bo‘yicha yakun',
+        'Итоги по посещаемости и платежам',
         'Xavf ostidagi guruhlar',
         'Keyingi haftaga mas’ullar',
       ],
@@ -18770,7 +19053,7 @@ class _MeetingsWorkspaceScreenState extends State<MeetingsWorkspaceScreen> {
       confirmedParticipants: 6,
       agenda: [
         'Platformaga kirish',
-        'Davomat standarti',
+        'Посещаемость standarti',
         'Ota-ona bilan aloqa',
       ],
       owner: 'Dilnoza Yo‘ldosheva',
@@ -21509,12 +21792,21 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       if (attachment == null || !mounted) return;
       var prepared = attachment;
-      if (attachment.messageKind != null) {
-        final localPath = await _saveAttachment(
-          attachment.path,
-          attachment.messageKind == ChatMessageKind.video ? 'video' : 'image',
+      if (prepared.messageKind != null) {
+        final confirmed = await _previewChatAttachment(
+          context: context,
+          colors: widget.colors,
+          attachment: prepared,
         );
-        prepared = attachment.copyWith(path: localPath);
+        if (confirmed == null || !mounted) return;
+        prepared = confirmed;
+      }
+      if (prepared.messageKind != null) {
+        final localPath = await _saveAttachment(
+          prepared.path,
+          prepared.messageKind == ChatMessageKind.video ? 'video' : 'image',
+        );
+        prepared = prepared.copyWith(path: localPath);
       }
       if (!mounted) return;
       _queueUpload(prepared, (uploaded) {
@@ -21524,7 +21816,7 @@ class _ChatScreenState extends State<ChatScreen> {
             widget.threadIdx,
             kind: uploaded.messageKind!,
             path: uploaded.path,
-            label: uploaded.name,
+            label: uploaded.caption,
           );
         } else {
           store.sendMessage(widget.threadIdx, '📎 ${uploaded.name}');
@@ -24246,19 +24538,23 @@ class _PreparedChatAttachment {
     required this.name,
     required this.choice,
     this.messageKind,
+    this.caption = '',
   });
 
   final String path;
   final String name;
   final _AttachmentChoice choice;
   final ChatMessageKind? messageKind;
+  final String caption;
 
-  _PreparedChatAttachment copyWith({String? path}) => _PreparedChatAttachment(
-    path: path ?? this.path,
-    name: name,
-    choice: choice,
-    messageKind: messageKind,
-  );
+  _PreparedChatAttachment copyWith({String? path, String? caption}) =>
+      _PreparedChatAttachment(
+        path: path ?? this.path,
+        name: name,
+        choice: choice,
+        messageKind: messageKind,
+        caption: caption ?? this.caption,
+      );
 }
 
 class _PendingChatUpload {
@@ -24424,6 +24720,166 @@ String _portableFileName(String path) {
   final normalized = path.replaceAll('\\', '/');
   final slash = normalized.lastIndexOf('/');
   return slash == -1 ? normalized : normalized.substring(slash + 1);
+}
+
+Future<_PreparedChatAttachment?> _previewChatAttachment({
+  required BuildContext context,
+  required SfColors colors,
+  required _PreparedChatAttachment attachment,
+}) {
+  return showModalBottomSheet<_PreparedChatAttachment>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => SfTheme(
+      colors: colors,
+      child: _ChatAttachmentPreview(attachment: attachment),
+    ),
+  );
+}
+
+class _ChatAttachmentPreview extends StatefulWidget {
+  const _ChatAttachmentPreview({required this.attachment});
+
+  final _PreparedChatAttachment attachment;
+
+  @override
+  State<_ChatAttachmentPreview> createState() => _ChatAttachmentPreviewState();
+}
+
+class _ChatAttachmentPreviewState extends State<_ChatAttachmentPreview> {
+  late final TextEditingController _caption;
+
+  @override
+  void initState() {
+    super.initState();
+    _caption = TextEditingController(text: widget.attachment.caption);
+  }
+
+  @override
+  void dispose() {
+    _caption.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    Navigator.of(
+      context,
+    ).pop(widget.attachment.copyWith(caption: _caption.text.trim()));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * .86,
+      ),
+      padding: EdgeInsets.fromLTRB(14, 10, 14, 14 + bottom),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                IconButton(
+                  tooltip: 'Отменить',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+                Expanded(
+                  child: Text(
+                    'Предпросмотр',
+                    textAlign: TextAlign.center,
+                    style: RefType.ui(
+                      size: 15,
+                      weight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  key: const ValueKey('chat-attachment-send'),
+                  onPressed: _send,
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Отправить'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ClipRRect(
+                borderRadius: RefRadius.lg,
+                child: widget.attachment.messageKind == ChatMessageKind.image
+                    ? (kIsWeb
+                          ? Image.network(
+                              widget.attachment.path,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, _, _) =>
+                                  const _AttachmentPreviewFallback(
+                                    icon: Icons.image_not_supported_rounded,
+                                  ),
+                            )
+                          : Image.file(
+                              File(widget.attachment.path),
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, _, _) =>
+                                  const _AttachmentPreviewFallback(
+                                    icon: Icons.image_not_supported_rounded,
+                                  ),
+                            ))
+                    : const _AttachmentPreviewFallback(
+                        icon: Icons.play_circle_fill_rounded,
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('chat-attachment-caption'),
+              controller: _caption,
+              autofocus: true,
+              minLines: 1,
+              maxLines: 4,
+              textInputAction: TextInputAction.newline,
+              decoration: InputDecoration(
+                hintText: 'Добавить описание…',
+                prefixIcon: const Icon(Icons.edit_rounded),
+                suffixIcon: IconButton(
+                  tooltip: 'Отправить',
+                  onPressed: _send,
+                  icon: const Icon(Icons.send_rounded),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentPreviewFallback extends StatelessWidget {
+  const _AttachmentPreviewFallback({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Container(
+      height: 260,
+      width: double.infinity,
+      color: c.surface2,
+      alignment: Alignment.center,
+      child: Icon(icon, size: 72, color: c.primary),
+    );
+  }
 }
 
 class _AttachmentGridOption extends StatelessWidget {
@@ -24873,7 +25329,13 @@ class _VoiceMessageState extends State<_VoiceMessage> {
     super.initState();
     _player = AudioPlayer();
     _player.playerStateStream.listen((state) {
-      if (mounted) setState(() => _playing = state.playing);
+      if (mounted) {
+        setState(
+          () => _playing =
+              state.playing &&
+              state.processingState != ProcessingState.completed,
+        );
+      }
     });
     _player.positionStream.listen((position) {
       if (mounted) setState(() => _position = position);
@@ -24901,6 +25363,13 @@ class _VoiceMessageState extends State<_VoiceMessage> {
     if (_playing) {
       await _player.pause();
     } else {
+      final duration = _player.duration;
+      final atEnd =
+          _player.processingState == ProcessingState.completed ||
+          (duration != null &&
+              duration > Duration.zero &&
+              _player.position >= duration - const Duration(milliseconds: 80));
+      if (atEnd) await _player.seek(Duration.zero);
       await _player.play();
     }
   }
@@ -25005,14 +25474,36 @@ class ProfileScreen extends StatelessWidget {
     final api = ApiScope.maybeOf(context)?.notifier;
     final live = api?.authenticated == true;
     void openDesign() => showDesignPanel(context, cfg.role);
-    void openEdit() => Navigator.of(context).push(
-      sfPageRoute(
-        SfTheme(
-          colors: c,
-          child: EditProfileScreen(cfg: cfg, colors: c),
+    void openEdit() {
+      final liveProfile = api?.me;
+      if (live && liveProfile != null) {
+        Navigator.of(context).push(
+          sfPageRoute(
+            LiveRecordDetailPage(
+              resource: 'users',
+              initial: liveProfile,
+              title: tx(
+                context,
+                uz: 'Mening server profilim',
+                ru: 'Мой серверный профиль',
+                en: 'My server profile',
+              ),
+              colors: c,
+            ),
+          ),
+        );
+        return;
+      }
+      Navigator.of(context).push(
+        sfPageRoute(
+          SfTheme(
+            colors: c,
+            child: EditProfileScreen(cfg: cfg, colors: c),
+          ),
         ),
-      ),
-    );
+      );
+    }
+
     Future<void> logout() async {
       try {
         if (live) await api!.logout();
@@ -25024,13 +25515,46 @@ class ProfileScreen extends StatelessWidget {
       }
     }
 
-    final who = store.nameOverride ?? cfg.who;
-    final title = store.titleOverride ?? cfg.roleTitle;
+    final profile = api?.me;
+    final who = live
+        ? apiText(
+            apiValue(profile ?? const {}, const [
+              'full_name',
+              'display_name',
+              'name',
+              'username',
+            ]),
+            fallback: cfg.who,
+          )
+        : store.nameOverride ?? cfg.who;
+    final title = live
+        ? apiText(
+            apiValue(profile ?? const {}, const [
+              'position',
+              'job_title',
+              'role_name',
+              'role',
+            ]),
+            fallback: configLabel(context, cfg.roleTitle),
+          )
+        : store.titleOverride ?? configLabel(context, cfg.roleTitle);
+    final scope = live
+        ? apiText(
+            apiValue(profile ?? const {}, const [
+              'branch_name',
+              'branch',
+              'department_name',
+              'department',
+              'scope',
+            ]),
+            fallback: configLabel(context, cfg.scope),
+          )
+        : configLabel(context, cfg.scope);
     // (label, value, onTap) — theme/lang/currency change inline, instantly.
     final rows = <(String, String, VoidCallback)>[
       (
         tr(context, 'set_role'),
-        cfg.label,
+        configLabel(context, cfg.label),
         () {
           final allowed = [
             for (final group in menuFor(cfg.role))
@@ -25038,21 +25562,41 @@ class ProfileScreen extends StatelessWidget {
           ];
           _showDetailsSheet(
             context,
-            title: cfg.roleTitle,
-            subtitle: '${cfg.label} · ${cfg.scope}',
+            title: configLabel(context, cfg.roleTitle),
+            subtitle: '${configLabel(context, cfg.label)} · $scope',
             icon: Icons.admin_panel_settings_rounded,
             fields: [
-              (icon: Icons.badge_outlined, label: 'Роль', value: cfg.label),
-              (icon: Icons.public_rounded, label: 'Область', value: cfg.scope),
+              (
+                icon: Icons.badge_outlined,
+                label: tx(context, uz: 'Rol', ru: 'Роль', en: 'Role'),
+                value: configLabel(context, cfg.label),
+              ),
+              (
+                icon: Icons.public_rounded,
+                label: tx(context, uz: 'Qamrov', ru: 'Область', en: 'Scope'),
+                value: scope,
+              ),
               (
                 icon: Icons.apps_rounded,
-                label: 'Доступных разделов',
+                label: tx(
+                  context,
+                  uz: 'Mavjud bo‘limlar',
+                  ru: 'Доступных разделов',
+                  en: 'Available sections',
+                ),
                 value: '${allowed.length}',
               ),
               (
                 icon: Icons.verified_user_outlined,
-                label: 'Права',
-                value: allowed.join(', '),
+                label: tx(
+                  context,
+                  uz: 'Ruxsatlar',
+                  ru: 'Права',
+                  en: 'Permissions',
+                ),
+                value: allowed
+                    .map((label) => menuLabel(context, label))
+                    .join(', '),
               ),
             ],
           );
@@ -25148,7 +25692,7 @@ class ProfileScreen extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              '$title · ${cfg.scope}',
+                              '$title · $scope',
                               style: TextStyle(
                                 fontFamily: SfType.ui,
                                 fontSize: 11,
@@ -25496,7 +26040,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               Icons.badge_rounded,
             ),
             Text(
-              '${tr(context, 'set_role')}: ${widget.cfg.label} · ${widget.cfg.scope}',
+              '${tr(context, 'set_role')}: '
+              '${configLabel(context, widget.cfg.label)} · '
+              '${configLabel(context, widget.cfg.scope)}',
               style: TextStyle(
                 fontFamily: SfType.ui,
                 fontSize: 11,
@@ -25839,9 +26385,33 @@ class ReportScreen extends StatelessWidget {
     final audit = role == SfRole.audit;
     final ceo = role == SfRole.ceo;
     final reportRevenue = store.scopedRevenue(store.stats.revenue);
-    final reportStudents = store.scopedStudents(
+    final baseStudents = store.scopedStudents(
       int.tryParse(store.stats.students.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
     );
+    final reportStudents = (baseStudents * store.rangeFactor).round().clamp(
+      0,
+      baseStudents * 12,
+    );
+    final reportAttendance =
+        (store.scopedAttendance(91) *
+                (.92 + store.rangeFactor.clamp(.1, 1.8) * .08))
+            .clamp(0, 100)
+            .toStringAsFixed(1);
+    final reportDebt = (store.stats.debt * store.rangeFactor).round();
+    final ledger = store.ledger
+        .where((entry) => _groupDateInRange(entry.date, store.selectedRange))
+        .toList();
+    final reportInflow = ledger
+        .where((entry) => entry.inflow)
+        .fold<num>(0, (sum, entry) => sum + entry.amount);
+    final reportOutflow = ledger
+        .where((entry) => !entry.inflow)
+        .fold<num>(0, (sum, entry) => sum + entry.amount);
+    final auditSignals = (12 * store.rangeFactor).round().clamp(0, 144);
+    final auditCases = (8 * store.rangeFactor).round().clamp(0, 96);
+    final periodLabel =
+        '${_groupDateLabel(store.selectedRange.start)} — '
+        '${_groupDateLabel(store.selectedRange.end)}';
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -25909,7 +26479,7 @@ class ReportScreen extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    tr(context, 'report_period'),
+                    periodLabel,
                     style: TextStyle(
                       fontFamily: SfType.ui,
                       fontSize: 12,
@@ -25925,18 +26495,26 @@ class ReportScreen extends StatelessWidget {
               SfCard(
                 child: Column(
                   children: [
-                    _kv(context, tr(context, 'kpi_open_flags'), '12'),
-                    _kv(context, tr(context, 'kpi_active_cases'), '8'),
+                    _kv(
+                      context,
+                      tr(context, 'kpi_open_flags'),
+                      '$auditSignals',
+                    ),
+                    _kv(
+                      context,
+                      tr(context, 'kpi_active_cases'),
+                      '$auditCases',
+                    ),
                     _kv(
                       context,
                       tr(context, 'kpi_anom_score'),
-                      '2.4%',
+                      '${(2.4 * store.rangeFactor.clamp(.2, 2)).toStringAsFixed(1)}%',
                       vColor: c.warn,
                     ),
                     _kv(
                       context,
                       tr(context, 'kpi_compliance'),
-                      '96.8%',
+                      '${(99 - store.rangeFactor.clamp(.1, 4) * 2.2).toStringAsFixed(1)}%',
                       vColor: c.success,
                       last: true,
                     ),
@@ -25976,13 +26554,13 @@ class ReportScreen extends StatelessWidget {
                     _kv(
                       context,
                       tr(context, 'kpi_attendance'),
-                      '91.2%',
+                      '$reportAttendance%',
                       vColor: c.primary,
                     ),
                     _kv(
                       context,
                       tr(context, 'kpi_debt'),
-                      fmtMoneyMln(store.stats.debt),
+                      fmtMoneyMln(reportDebt),
                       vColor: c.warn,
                       last: true,
                     ),
@@ -25996,19 +26574,19 @@ class ReportScreen extends StatelessWidget {
                     _kv(
                       context,
                       tr(context, 'tx_inflow'),
-                      fmtMoneyMln(store.inflowTotal),
+                      fmtMoneyMln(reportInflow),
                       vColor: c.success,
                     ),
                     _kv(
                       context,
                       tr(context, 'tx_outflow'),
-                      fmtMoneyMln(store.outflowTotal),
+                      fmtMoneyMln(reportOutflow),
                       vColor: c.danger,
                     ),
                     _kv(
                       context,
                       'JORIY QOLDIQ',
-                      fmtMoneyMln(store.balance),
+                      fmtMoneyMln(reportInflow - reportOutflow),
                       last: true,
                     ),
                   ],
@@ -26025,8 +26603,10 @@ class ReportScreen extends StatelessWidget {
                         for (final b in store.branches)
                           HBarRow(
                             b.name,
-                            b.revenue.toDouble(),
-                            fmtMoneyMln(b.revenue),
+                            b.revenue.toDouble() * store.rangeFactor,
+                            fmtMoneyMln(
+                              (b.revenue * store.rangeFactor).round(),
+                            ),
                             b.mark,
                             mark: true,
                           ),
@@ -26222,9 +26802,27 @@ Future<void> _exportReport(
       ? 'Barcha filiallar'
       : store.selectedBranch;
   final revenue = store.scopedRevenue(store.stats.revenue);
-  final students = store.scopedStudents(
+  final baseStudents = store.scopedStudents(
     int.tryParse(store.stats.students.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
   );
+  final students = (baseStudents * store.rangeFactor).round().clamp(
+    0,
+    baseStudents * 12,
+  );
+  final attendance =
+      (store.scopedAttendance(91) *
+              (.92 + store.rangeFactor.clamp(.1, 1.8) * .08))
+          .clamp(0, 100)
+          .toStringAsFixed(1);
+  final entries = store.ledger
+      .where((entry) => _groupDateInRange(entry.date, store.selectedRange))
+      .toList();
+  final inflow = entries
+      .where((entry) => entry.inflow)
+      .fold<num>(0, (sum, entry) => sum + entry.amount);
+  final outflow = entries
+      .where((entry) => !entry.inflow)
+      .fold<num>(0, (sum, entry) => sum + entry.amount);
   final rows = <(String, String)>[
     ('Scope', scope),
     (
@@ -26233,7 +26831,11 @@ Future<void> _exportReport(
     ),
     ('Revenue', '$revenue'),
     ('Students', '$students'),
-    ('Attendance', '${store.scopedAttendance(91)}%'),
+    ('Attendance', '$attendance%'),
+    ('Debt', '${(store.stats.debt * store.rangeFactor).round()}'),
+    ('Inflow', '$inflow'),
+    ('Outflow', '$outflow'),
+    ('Balance', '${inflow - outflow}'),
     ('Generated', now.toIso8601String()),
   ];
   try {
@@ -27718,7 +28320,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     });
     AppScope.of(context).logActivity(
       icon: Icons.fact_check_rounded,
-      title: 'Davomat saqlandi',
+      title: 'Посещаемость сохранена',
       detail:
           '${scope.branch} · ${scope.group} · ${roster.length - saved.length} bor · ${saved.length} yo‘q',
       kind: 'attendance',
@@ -27850,7 +28452,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               });
               AppScope.of(context).logActivity(
                 icon: Icons.drafts_outlined,
-                title: 'Davomat eslatmalari tayyorlandi',
+                title: 'Напоминания о посещаемости подготовлены',
                 detail: '${scope.group} · ${drafts.length} ta lokal qoralama',
                 kind: 'message',
               );
@@ -27896,7 +28498,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           iconTheme: IconThemeData(color: c.ink),
           shape: Border(bottom: BorderSide(color: c.border)),
           title: Text(
-            'Davomat',
+            'Посещаемость',
             style: TextStyle(
               fontFamily: SfType.ui,
               fontSize: 16,
@@ -27956,12 +28558,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           size: 78,
                           thickness: 12,
                           segments: [
-                            DonutSegment(present.toDouble(), c.success),
+                            DonutSegment(
+                              present.toDouble(),
+                              c.success,
+                              label: tr(context, 'attendance_present'),
+                              display: '$present',
+                            ),
                             DonutSegment(
                               absentInGroup.toDouble() == 0 && present == 0
                                   ? 1
                                   : absentInGroup.toDouble(),
                               c.danger,
+                              label: tr(context, 'attendance_absent'),
+                              display: '$absentInGroup',
                             ),
                           ],
                           center: _mono(
@@ -27974,9 +28583,21 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         Expanded(
                           child: Column(
                             children: [
-                              LegendRow(c.success, 'Hozir', '$present'),
-                              LegendRow(c.danger, "Yo'q", '$absentInGroup'),
-                              LegendRow(c.ink2, 'Jami', '${roster.length}'),
+                              LegendRow(
+                                c.success,
+                                tr(context, 'attendance_present'),
+                                '$present',
+                              ),
+                              LegendRow(
+                                c.danger,
+                                tr(context, 'attendance_absent'),
+                                '$absentInGroup',
+                              ),
+                              LegendRow(
+                                c.ink2,
+                                tr(context, 'chart_total'),
+                                '${roster.length}',
+                              ),
                             ],
                           ),
                         ),
@@ -28055,7 +28676,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 ),
                 child: SfButton(
                   icon: Icons.insights_rounded,
-                  label: 'Davomat hisoboti',
+                  label: 'Отчёт о посещаемости',
                   primary: true,
                   onTap: () => Navigator.of(context).push(
                     sfPageRoute(
@@ -28132,7 +28753,7 @@ class _ReferenceAttendancePage extends StatelessWidget {
           children: [
             RefLargeHeader(
               eyebrow: canEdit ? 'OPERATSION DAVOMAT' : 'FAOLIYAT TAHLILI',
-              title: 'Davomat',
+              title: 'Посещаемость',
               subtitle: canEdit
                   ? 'Guruhni belgilang va ro‘yxatni yangilang'
                   : 'Faqat tahlil va hisobotlar',
@@ -28322,7 +28943,7 @@ class _ReferenceAttendancePage extends StatelessWidget {
                       ],
                     )
                   : RefButton(
-                      label: 'Davomat hisoboti',
+                      label: 'Отчёт о посещаемости',
                       block: true,
                       leading: Icons.insights_rounded,
                       onPressed: () => Navigator.of(context).push(
@@ -29043,7 +29664,7 @@ class _ReferenceAttendanceInsight extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const RefSectionHeader(
-          title: 'Davomat tahlili',
+          title: 'Посещаемость tahlili',
           subtitle: 'Oxirgi 30 kun',
         ),
         const SizedBox(height: 8),
@@ -29062,7 +29683,7 @@ class _ReferenceAttendanceInsight extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                'O‘rtacha davomat · oxirgi 30 kun',
+                'Средняя посещаемость · последние 30 дней',
                 style: RefType.ui(size: 11.5, color: c.muted),
               ),
               const SizedBox(height: 10),
@@ -29456,7 +30077,7 @@ class ModulesHub extends StatelessWidget {
     final modules = <(IconData, String, bool, Widget Function()?)>[
       (
         Icons.fact_check_rounded,
-        'Davomat',
+        'Посещаемость',
         true,
         () => AttendanceScreen(colors: c),
       ),

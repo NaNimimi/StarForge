@@ -126,7 +126,6 @@ class DepartmentRecord {
   String status;
   String responsible;
   String createdAt;
-  double rating;
   final List<String> initialStaffUsernames;
   final List<DepartmentChange> history;
 
@@ -138,7 +137,6 @@ class DepartmentRecord {
     this.status = 'active',
     this.responsible = 'Tayinlanmagan',
     this.createdAt = '—',
-    this.rating = 0,
     List<String>? initialStaffUsernames,
     List<DepartmentChange>? history,
   }) : initialStaffUsernames = initialStaffUsernames ?? <String>[],
@@ -359,7 +357,6 @@ class AppStore extends ChangeNotifier {
       branch: 'Yunusobod',
       responsible: 'Sardor Rashidov',
       createdAt: '12.08.2021',
-      rating: 4.9,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -376,7 +373,6 @@ class AppStore extends ChangeNotifier {
       branch: 'Chilonzor',
       responsible: 'Dilnoza Yo‘ldosheva',
       createdAt: '03.02.2022',
-      rating: 4.7,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -393,7 +389,6 @@ class AppStore extends ChangeNotifier {
       branch: 'Mirobod',
       responsible: 'Sardor Rashidov',
       createdAt: '18.05.2023',
-      rating: 4.5,
       history: [
         const DepartmentChange(
           icon: Icons.account_circle_rounded,
@@ -478,7 +473,7 @@ class AppStore extends ChangeNotifier {
     const ActivityEvent(
       icon: Icons.flag_rounded,
       title: 'Audit flag ochildi',
-      detail: 'Mirobod · davomat tekshiruvi',
+      detail: 'Mirobod · проверка посещаемости',
       time: '2 soat',
       kind: 'audit',
     ),
@@ -617,6 +612,80 @@ class AppStore extends ChangeNotifier {
     required this.cases,
     required this.threads,
   });
+
+  /// Replaces only the collections that were actually published by the live
+  /// session. Product pages keep their original design, while authenticated
+  /// workspaces never have to render seeded showcase records as server data.
+  void replaceServerSnapshot({
+    List<Student>? students,
+    List<Branch>? branches,
+    List<Approval>? approvals,
+    List<LedgerEntry>? ledger,
+    List<Anomaly>? anomalies,
+    List<AuditCase>? cases,
+    List<ChatThread>? threads,
+    List<ManagedGroup>? groups,
+    List<DepartmentRecord>? departments,
+    List<StaffMember>? staff,
+    List<ActivityEvent>? activities,
+  }) {
+    if (students != null) {
+      this.students
+        ..clear()
+        ..addAll(students);
+    }
+    if (branches != null) {
+      this.branches
+        ..clear()
+        ..addAll(branches);
+    }
+    if (approvals != null) {
+      this.approvals
+        ..clear()
+        ..addAll(approvals);
+    }
+    if (ledger != null) {
+      this.ledger
+        ..clear()
+        ..addAll(ledger);
+    }
+    if (anomalies != null) {
+      this.anomalies
+        ..clear()
+        ..addAll(anomalies);
+    }
+    if (cases != null) {
+      this.cases
+        ..clear()
+        ..addAll(cases);
+    }
+    if (threads != null) {
+      this.threads
+        ..clear()
+        ..addAll(threads);
+    }
+    if (groups != null) {
+      extraGroups
+        ..clear()
+        ..addAll(groups);
+    }
+    if (departments != null) {
+      this.departments
+        ..clear()
+        ..addAll(departments);
+    }
+    if (staff != null) {
+      this.staff
+        ..clear()
+        ..addAll(staff);
+    }
+    if (activities != null) {
+      this.activities
+        ..clear()
+        ..addAll(activities);
+    }
+    notifyListeners();
+  }
 
   /// Headline KPI numbers for this console's dashboard.
   DashStats get stats => kDashStats[role]!;
@@ -813,9 +882,6 @@ class AppStore extends ChangeNotifier {
         })
         .toList(growable: false);
   }
-
-  List<DepartmentRecord> get departmentRanking =>
-      [...departments]..sort((a, b) => b.rating.compareTo(a.rating));
 
   void addDepartment(DepartmentRecord department) {
     departments.add(department);
@@ -1052,6 +1118,27 @@ class AppStore extends ChangeNotifier {
       role,
     ).map((t) => ChatThread(t, [ChatMsg(t.last, mine: false)])).toList(),
   );
+
+  /// Empty authenticated state used before the first API snapshot arrives.
+  /// This prevents a flash of demo people, money or audit events after login.
+  factory AppStore.empty(SfRole role) {
+    final value = AppStore(
+      role: role,
+      students: <Student>[],
+      branches: <Branch>[],
+      approvals: <Approval>[],
+      ledger: <LedgerEntry>[],
+      anomalies: <Anomaly>[],
+      cases: <AuditCase>[],
+      threads: <ChatThread>[],
+    );
+    value
+      ..extraGroups.clear()
+      ..departments.clear()
+      ..staff.clear()
+      ..activities.clear();
+    return value;
+  }
 
   int get pendingCount => approvals.length;
 

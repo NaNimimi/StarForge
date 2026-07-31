@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'theme.dart';
 import 'data.dart';
+import 'i18n.dart';
 import 'widgets.dart';
 import 'screens.dart'
     show
@@ -560,7 +561,7 @@ class BranchesAdminPage extends StatelessWidget {
                     _bstat(
                       context,
                       '${b.$6}%',
-                      'davomat',
+                      'посещаемость',
                       color: b.$6 >= 92 ? c.success : c.warn,
                       border: true,
                     ),
@@ -774,7 +775,7 @@ class StudentsAdminPage extends StatelessWidget {
                   'Riskli',
                   if (ceo) 'Filial',
                   'Guruh',
-                  'Davomat',
+                  'Посещаемость',
                 ],
                 items: students,
                 match: (s, chip) {
@@ -786,7 +787,7 @@ class StudentsAdminPage extends StatelessWidget {
                     case 'Riskli':
                       return s.$4 < 85;
                     default:
-                      return true; // Filial / Guruh / Davomat are grouping chips
+                      return true; // Filial / Guruh / Посещаемость are grouping chips
                   }
                 },
                 row: (context, s, last) {
@@ -818,7 +819,7 @@ class StudentsAdminPage extends StatelessWidget {
                       fields: {
                         'Guruh': s.$2,
                         'Filial': s.$3,
-                        'Davomat': '$att%',
+                        'Посещаемость': '$att%',
                         'To‘lov': payLabel,
                         'Qarzdorlik': s.$6 > 0 ? fmtMoney(s.$6) : 'Yo‘q',
                         'Mas’ul': s.$7,
@@ -1262,7 +1263,7 @@ class TeachersAdminPage extends StatelessWidget {
                         'Lavozim': t.$2,
                         'Fan': t.$3,
                         'Filial': t.$4,
-                        'Davomat': '${t.$5}%',
+                        'Посещаемость': '${t.$5}%',
                         'Up / Down': '${t.$6} / ${t.$7}',
                         'Ko‘rsatkich': '${t.$8}',
                         'Maosh': fmtMoney(t.$9),
@@ -1385,7 +1386,14 @@ class PaymentsAdminPage extends StatelessWidget {
               SfCard(
                 child: Column(
                   children: [
-                    SfCardHeader('To‘lov usullari'),
+                    SfCardHeader(
+                      tx(
+                        context,
+                        uz: 'To‘lov usullari',
+                        ru: 'Способы оплаты',
+                        en: 'Payment methods',
+                      ),
+                    ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                       child: Row(
@@ -1394,10 +1402,35 @@ class PaymentsAdminPage extends StatelessWidget {
                             size: 92,
                             thickness: 14,
                             segments: [
-                              DonutSegment(42, c.primary),
-                              DonutSegment(28, c.accent),
-                              DonutSegment(18, c.success),
-                              DonutSegment(12, c.ink2),
+                              DonutSegment(
+                                42,
+                                c.primary,
+                                label: 'Click',
+                                display: '42%',
+                              ),
+                              DonutSegment(
+                                28,
+                                c.accent,
+                                label: 'Payme',
+                                display: '28%',
+                              ),
+                              DonutSegment(
+                                18,
+                                c.success,
+                                label: 'Uzcard',
+                                display: '18%',
+                              ),
+                              DonutSegment(
+                                12,
+                                c.ink2,
+                                label: tx(
+                                  context,
+                                  uz: 'Naqd',
+                                  ru: 'Наличные',
+                                  en: 'Cash',
+                                ),
+                                display: '12%',
+                              ),
                             ],
                             center: _mono(context, '94%', size: 16),
                           ),
@@ -1408,7 +1441,16 @@ class PaymentsAdminPage extends StatelessWidget {
                                 LegendRow(c.primary, 'Click', '42%'),
                                 LegendRow(c.accent, 'Payme', '28%'),
                                 LegendRow(c.success, 'Uzcard', '18%'),
-                                LegendRow(c.ink2, 'Naqd', '12%'),
+                                LegendRow(
+                                  c.ink2,
+                                  tx(
+                                    context,
+                                    uz: 'Naqd',
+                                    ru: 'Наличные',
+                                    en: 'Cash',
+                                  ),
+                                  '12%',
+                                ),
                               ],
                             ),
                           ),
@@ -2970,13 +3012,55 @@ class HrAdminPage extends StatelessWidget {
 // ════════════════════════════════════════════════════════════════════════
 // PAYROLL
 // ════════════════════════════════════════════════════════════════════════
-class PayrollAdminPage extends StatelessWidget {
+class PayrollAdminPage extends StatefulWidget {
   final SfColors colors;
   final bool ceo;
   const PayrollAdminPage({super.key, required this.colors, required this.ceo});
+
+  @override
+  State<PayrollAdminPage> createState() => _PayrollAdminPageState();
+}
+
+class _PayrollAdminPageState extends State<PayrollAdminPage> {
+  String _month = 'Июль 2026';
+  bool _approved = false;
+
+  Future<void> _selectMonth() async {
+    final value = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('Расчётный период'),
+              subtitle: Text('Выберите месяц зарплаты'),
+            ),
+            for (final month in const ['Май 2026', 'Июнь 2026', 'Июль 2026'])
+              ListTile(
+                leading: Icon(
+                  month == _month
+                      ? Icons.check_circle_rounded
+                      : Icons.calendar_month_outlined,
+                ),
+                title: Text(month),
+                onTap: () => Navigator.of(context).pop(month),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (value != null && mounted) {
+      setState(() {
+        _month = value;
+        _approved = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
     final rows = [
       ('Nigora Karimova', 'Matematika', 6000000, 900000, 600000, 900000),
       ('Aziz Tursunov', 'Ingliz tili', 5500000, 1100000, 600000, 600000),
@@ -2988,17 +3072,85 @@ class PayrollAdminPage extends StatelessWidget {
     final tot = rows.fold<num>(0, (a, r) => a + r.$3 + r.$4 + r.$5 + r.$6);
     return SfTheme(
       colors: c,
-      child: _page(c, 'Oyliklar', [
+      child: _page(c, 'Зарплаты', [
         _head(
           context,
-          'May 2026 · hisoblanmoqda',
-          'Oyliklar',
-          'Asos + bonuslar avtomatik hisoblanadi',
+          '$_month · ${_approved ? 'утверждено' : 'черновик'}',
+          'Зарплаты',
+          'Оклад, бонусы и итоговая сумма по каждому сотруднику',
         ),
         Padding(
           padding: _pad,
           child: Column(
             children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('payroll-period'),
+                      onPressed: _selectMonth,
+                      icon: const Icon(Icons.date_range_rounded),
+                      label: Text(_month),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.icon(
+                      key: const ValueKey('payroll-approve'),
+                      onPressed: () {
+                        setState(() => _approved = true);
+                        _showRecordDetails(
+                          context,
+                          title: 'Зарплаты утверждены',
+                          icon: Icons.verified_rounded,
+                          fields: {
+                            'Период': _month,
+                            'Сотрудников': '${rows.length}',
+                            'Общий фонд': fmtMoneyMln(tot),
+                            'Статус': 'Утверждено',
+                            'Утвердил': widget.ceo
+                                ? 'CEO'
+                                : 'Ответственный менеджер',
+                          },
+                        );
+                      },
+                      icon: const Icon(Icons.verified_rounded),
+                      label: Text(_approved ? 'Утверждено' : 'Утвердить'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('payroll-recalculate'),
+                  onPressed: () => _showRecordDetails(
+                    context,
+                    title: 'Проверка расчёта',
+                    icon: Icons.calculate_outlined,
+                    fields: {
+                      'Период': _month,
+                      'Оклад': fmtMoneyMln(
+                        rows.fold<num>(0, (sum, row) => sum + row.$3),
+                      ),
+                      'Бонус за KPI': fmtMoneyMln(
+                        rows.fold<num>(0, (sum, row) => sum + row.$4),
+                      ),
+                      'Бонус за посещаемость': fmtMoneyMln(
+                        rows.fold<num>(0, (sum, row) => sum + row.$5),
+                      ),
+                      'Доплаты': fmtMoneyMln(
+                        rows.fold<num>(0, (sum, row) => sum + row.$6),
+                      ),
+                      'Итого': fmtMoneyMln(tot),
+                    },
+                  ),
+                  icon: const Icon(Icons.calculate_outlined),
+                  label: const Text('Пересчитать и проверить фонд'),
+                ),
+              ),
+              const SizedBox(height: 12),
               sfKpiGrid([
                 SfKpi(
                   label: 'Jami fond',
@@ -3016,13 +3168,13 @@ class PayrollAdminPage extends StatelessWidget {
                     rows.fold<num>(0, (a, r) => a + r.$4 + r.$5 + r.$6),
                   ),
                   color: c.accent,
-                  sub: 'karta+davomat',
+                  sub: 'KPI + посещаемость',
                 ),
                 SfKpi(
                   label: 'Holat',
-                  value: 'Qoralama',
+                  value: _approved ? 'Готово' : 'Черновик',
                   color: c.warn,
-                  sub: 'tasdiq kutmoqda',
+                  sub: _approved ? 'утверждено' : 'ожидает утверждения',
                 ),
               ]),
               const SizedBox(height: 12),
@@ -3044,6 +3196,23 @@ class PayrollAdminPage extends StatelessWidget {
                             fmtMoneyShort(total),
                             size: 12,
                             color: c.success,
+                          ),
+                          onTap: () => _showRecordDetails(
+                            context,
+                            title: r.$1,
+                            icon: Icons.receipt_long_rounded,
+                            fields: {
+                              'Период': _month,
+                              'Сотрудник': r.$1,
+                              'Должность / предмет': r.$2,
+                              'Оклад': fmtMoneyShort(r.$3),
+                              'Бонус за KPI': fmtMoneyShort(r.$4),
+                              'Бонус за посещаемость': fmtMoneyShort(r.$5),
+                              'Другие доплаты': fmtMoneyShort(r.$6),
+                              'Итого начислено': fmtMoneyShort(total),
+                              'Способ выплаты': 'Банковская карта',
+                              'Статус': _approved ? 'Утверждено' : 'Черновик',
+                            },
                           ),
                         );
                       },
@@ -3262,7 +3431,7 @@ class _PermissionMatrixDetailPage extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              config.roleTitle,
+                              configLabel(context, config.roleTitle),
                               style: TextStyle(
                                 fontFamily: SfType.ui,
                                 fontSize: 15,
@@ -4213,8 +4382,8 @@ class AnomaliesAdminPage extends StatelessWidget {
     final c = colors;
     final rows = [
       (
-        'Davomat 100% · 21 kun ketma-ket',
-        'Davomat',
+        'Посещаемость 100% · 21 kun ketma-ket',
+        'Посещаемость',
         'Sebzor · Fizika DTM',
         94,
         'high',
@@ -4294,7 +4463,7 @@ class AnomaliesAdminPage extends StatelessWidget {
               >(
                 chips: [
                   'Hammasi',
-                  'Davomat',
+                  'Посещаемость',
                   'Karta',
                   'Moliya',
                   'Kirish',
@@ -4305,7 +4474,7 @@ class AnomaliesAdminPage extends StatelessWidget {
                   switch (chip) {
                     case 'Yuqori':
                       return r.$5 == 'high';
-                    case 'Davomat':
+                    case 'Посещаемость':
                     case 'Karta':
                     case 'Moliya':
                     case 'Kirish':
@@ -4898,7 +5067,7 @@ class CasesAdminPage extends StatelessWidget {
       ),
       (
         'C-0040',
-        'Davomat anomaliyasi · Fizika DTM',
+        'Посещаемость anomaliyasi · Fizika DTM',
         'high',
         'open',
         'Tayinlanmagan',
@@ -5096,7 +5265,7 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Boshqaruv paneli', Icons.home_rounded),
-          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
+          MenuItem('tools', 'Tezkor amallar', Icons.bolt_rounded),
           MenuItem('branches', 'Filiallar', Icons.public_rounded),
           MenuItem(
             'comparison',
@@ -5110,7 +5279,7 @@ List<MenuGroup> menuFor(SfRole role) {
           MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded),
           MenuItem('teachers', 'O‘qituvchilar', Icons.badge_rounded),
           MenuItem('parents', 'Ota-onalar', Icons.chat_bubble_outline_rounded),
-          MenuItem('attendance', 'Davomat', Icons.fact_check_outlined),
+          MenuItem('attendance', 'Посещаемость', Icons.fact_check_outlined),
         ]),
         MenuGroup('Tashkilot', [
           MenuItem('departments', 'Bo‘limlar', Icons.folder_rounded),
@@ -5151,14 +5320,14 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Boshqaruv paneli', Icons.home_rounded),
-          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
+          MenuItem('tools', 'Tezkor amallar', Icons.bolt_rounded),
         ]),
         MenuGroup('Odamlar', [
           MenuItem('students', 'O‘quvchilar', Icons.groups_rounded),
           MenuItem('groups', 'Guruhlar', Icons.workspaces_rounded),
           MenuItem('teachers', 'Xodimlar', Icons.badge_rounded),
           MenuItem('parents', 'Ota-onalar', Icons.chat_bubble_outline_rounded),
-          MenuItem('attendance', 'Davomat', Icons.fact_check_outlined),
+          MenuItem('attendance', 'Посещаемость', Icons.fact_check_outlined),
           MenuItem('leads', 'Lidlar · Qabul', Icons.flag_rounded),
           MenuItem('enroll', 'Qabul · Test', Icons.fact_check_rounded),
         ]),
@@ -5197,7 +5366,7 @@ List<MenuGroup> menuFor(SfRole role) {
       return const [
         MenuGroup('Asosiy', [
           MenuItem('dash', 'Audit paneli', Icons.shield_rounded),
-          MenuItem('tools', 'Buyruqlar markazi', Icons.bolt_rounded),
+          MenuItem('tools', 'Tezkor amallar', Icons.bolt_rounded),
         ]),
         MenuGroup('Nazorat', [
           MenuItem('anomalies', 'Anomaliyalar', Icons.flag_rounded),

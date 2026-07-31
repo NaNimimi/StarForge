@@ -609,6 +609,236 @@ class _SparkPainter extends CustomPainter {
       old.data != data || old.color != color;
 }
 
+/// Compact line chart with point selection for narrow detail pages.
+///
+/// A tap or horizontal drag selects the nearest sample and exposes its label
+/// and formatted value above the drawing. The last sample is selected first so
+/// the chart is understandable without requiring an initial gesture.
+class InteractiveSparkline extends StatefulWidget {
+  const InteractiveSparkline({
+    super.key,
+    required this.data,
+    required this.color,
+    required this.labels,
+    required this.valueFormatter,
+    this.height = 58,
+    this.selectionLabelBuilder,
+  }) : assert(data.length == labels.length);
+
+  final List<double> data;
+  final Color color;
+  final List<String> labels;
+  final String Function(double value) valueFormatter;
+  final String Function(int index, String label, double value)?
+  selectionLabelBuilder;
+  final double height;
+
+  @override
+  State<InteractiveSparkline> createState() => _InteractiveSparklineState();
+}
+
+class _InteractiveSparklineState extends State<InteractiveSparkline> {
+  late int _selectedIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedIndex = math.max(0, widget.data.length - 1);
+  }
+
+  @override
+  void didUpdateWidget(InteractiveSparkline oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.data.length != oldWidget.data.length ||
+        _selectedIndex >= widget.data.length) {
+      _selectedIndex = math.max(0, widget.data.length - 1);
+    }
+  }
+
+  void _select(double dx, double width) {
+    if (widget.data.isEmpty || width <= 0) return;
+    final index = widget.data.length == 1
+        ? 0
+        : (dx.clamp(0, width) / width * (widget.data.length - 1)).round().clamp(
+            0,
+            widget.data.length - 1,
+          );
+    if (index != _selectedIndex) setState(() => _selectedIndex = index);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.data.isEmpty) return const SizedBox.shrink();
+    final c = SfTheme.of(context);
+    final value = widget.data[_selectedIndex];
+    final label = widget.labels[_selectedIndex];
+    final summary =
+        widget.selectionLabelBuilder?.call(_selectedIndex, label, value) ??
+        '$label · ${widget.valueFormatter(value)}';
+    return Semantics(
+      label: summary,
+      value: widget.valueFormatter(value),
+      increasedValue: _selectedIndex < widget.data.length - 1
+          ? widget.valueFormatter(widget.data[_selectedIndex + 1])
+          : null,
+      decreasedValue: _selectedIndex > 0
+          ? widget.valueFormatter(widget.data[_selectedIndex - 1])
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            child: Text(
+              summary,
+              key: ValueKey(_selectedIndex),
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: SfType.mono,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: c.ink2,
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          LayoutBuilder(
+            builder: (context, constraints) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (details) =>
+                  _select(details.localPosition.dx, constraints.maxWidth),
+              onHorizontalDragStart: (details) =>
+                  _select(details.localPosition.dx, constraints.maxWidth),
+              onHorizontalDragUpdate: (details) =>
+                  _select(details.localPosition.dx, constraints.maxWidth),
+              child: SizedBox(
+                height: math.max(widget.height, 44),
+                child: CustomPaint(
+                  size: Size(double.infinity, widget.height),
+                  painter: _InteractiveSparkPainter(
+                    widget.data,
+                    widget.color,
+                    c.border,
+                    c.surface,
+                    _selectedIndex,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Row(
+            children: [
+              Text(
+                widget.labels.first,
+                style: TextStyle(
+                  fontFamily: SfType.mono,
+                  fontSize: 9,
+                  color: c.muted,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                widget.labels.last,
+                style: TextStyle(
+                  fontFamily: SfType.mono,
+                  fontSize: 9,
+                  color: c.muted,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InteractiveSparkPainter extends CustomPainter {
+  const _InteractiveSparkPainter(
+    this.data,
+    this.color,
+    this.grid,
+    this.surface,
+    this.selectedIndex,
+  );
+
+  final List<double> data;
+  final Color color;
+  final Color grid;
+  final Color surface;
+  final int selectedIndex;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+    final lo = data.reduce(math.min);
+    final hi = data.reduce(math.max);
+    final range = hi == lo ? 1.0 : hi - lo;
+    final usableHeight = math.max(1, size.height - 8);
+    Offset point(int index) => Offset(
+      data.length == 1
+          ? size.width / 2
+          : index / (data.length - 1) * size.width,
+      4 + usableHeight - (data[index] - lo) / range * usableHeight,
+    );
+
+    for (var row = 1; row <= 2; row++) {
+      final y = size.height / 3 * row;
+      canvas.drawLine(
+        Offset(0, y),
+        Offset(size.width, y),
+        Paint()
+          ..color = grid.withValues(alpha: 0.7)
+          ..strokeWidth = 1,
+      );
+    }
+
+    if (data.length >= 2) {
+      final path = Path()..moveTo(point(0).dx, point(0).dy);
+      for (var index = 1; index < data.length; index++) {
+        path.lineTo(point(index).dx, point(index).dy);
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color
+          ..strokeWidth = 2.5
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+
+    final selected = point(selectedIndex);
+    canvas.drawLine(
+      Offset(selected.dx, 0),
+      Offset(selected.dx, size.height),
+      Paint()
+        ..color = color.withValues(alpha: 0.35)
+        ..strokeWidth = 1,
+    );
+    canvas.drawCircle(selected, 5.5, Paint()..color = surface);
+    canvas.drawCircle(
+      selected,
+      4,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_InteractiveSparkPainter oldDelegate) =>
+      oldDelegate.data != data ||
+      oldDelegate.color != color ||
+      oldDelegate.grid != grid ||
+      oldDelegate.surface != surface ||
+      oldDelegate.selectedIndex != selectedIndex;
+}
+
 class AreaChart extends StatelessWidget {
   final List<double> data;
   final Color color;
@@ -741,36 +971,176 @@ class _AreaPainter extends CustomPainter {
 class DonutSegment {
   final double value;
   final Color color;
-  const DonutSegment(this.value, this.color);
+  final String? label;
+  final String? display;
+
+  const DonutSegment(this.value, this.color, {this.label, this.display});
 }
 
-class Donut extends StatelessWidget {
+/// A shared, touch-aware donut used by every analytics surface.
+///
+/// Tapping a segment replaces the centre total with that segment's name,
+/// value and share. Tapping the centre restores the original summary.
+class Donut extends StatefulWidget {
   final double size;
   final double thickness;
   final List<DonutSegment> segments;
   final Widget center;
+  final ValueChanged<int?>? onSelected;
+
   const Donut({
     super.key,
     required this.size,
     required this.thickness,
     required this.segments,
     required this.center,
+    this.onSelected,
   });
+
+  @override
+  State<Donut> createState() => _DonutState();
+}
+
+class _DonutState extends State<Donut> {
+  int? _selectedIndex;
+
+  double get _total => widget.segments.fold<double>(
+    0,
+    (total, segment) => total + math.max(0, segment.value),
+  );
+
+  void _selectAt(Offset position) {
+    if (widget.segments.isEmpty || _total <= 0) return;
+    final center = Offset(widget.size / 2, widget.size / 2);
+    final delta = position - center;
+    final distance = delta.distance;
+    final innerRadius = math.max(0, widget.size / 2 - widget.thickness - 5);
+    if (distance <= innerRadius) {
+      if (_selectedIndex != null) {
+        setState(() => _selectedIndex = null);
+        widget.onSelected?.call(null);
+      }
+      return;
+    }
+    if (distance > widget.size / 2 + 8) return;
+
+    // The painter starts at twelve o'clock; normalise the pointer angle to
+    // that same clockwise [0, 2π) coordinate system.
+    var angle = math.atan2(delta.dy, delta.dx) + math.pi / 2;
+    if (angle < 0) angle += math.pi * 2;
+    var end = 0.0;
+    for (var index = 0; index < widget.segments.length; index++) {
+      end += math.max(0, widget.segments[index].value) / _total * math.pi * 2;
+      if (angle <= end || index == widget.segments.length - 1) {
+        if (_selectedIndex != index) {
+          setState(() => _selectedIndex = index);
+          widget.onSelected?.call(index);
+        }
+        return;
+      }
+    }
+  }
+
+  String _number(double value) => value == value.roundToDouble()
+      ? '${value.round()}'
+      : value.toStringAsFixed(1);
+
+  Widget _selectedCenter(BuildContext context) {
+    final c = SfTheme.of(context);
+    final segment = widget.segments[_selectedIndex!];
+    final percent = _total <= 0
+        ? '0%'
+        : '${(segment.value / _total * 100).round()}%';
+    final value = segment.display ?? _number(segment.value);
+    final detail = value == percent ? value : '$value · $percent';
+    final innerSize = math
+        .max(28, widget.size - widget.thickness * 2 - 8)
+        .toDouble();
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      child: SizedBox.square(
+        key: ValueKey(_selectedIndex),
+        dimension: innerSize,
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: innerSize),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    segment.label ?? 'Segment ${_selectedIndex! + 1}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 10,
+                      height: 1.05,
+                      fontWeight: FontWeight.w700,
+                      color: c.ink2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontFamily: SfType.mono,
+                      fontSize: 11,
+                      height: 1,
+                      fontWeight: FontWeight.w800,
+                      color: segment.color,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          CustomPaint(
-            size: Size.square(size),
-            painter: _DonutPainter(segments, thickness, c.surface2),
+    final selected = _selectedIndex;
+    final semantics = selected == null
+        ? 'Circular chart. Tap a segment for details.'
+        : '${widget.segments[selected].label ?? 'Segment ${selected + 1}'}, '
+              '${widget.segments[selected].display ?? _number(widget.segments[selected].value)}';
+    return Semantics(
+      button: true,
+      label: semantics,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (details) => _selectAt(details.localPosition),
+        child: SizedBox(
+          width: widget.size,
+          height: widget.size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              AnimatedScale(
+                scale: selected == null ? 1 : 1.025,
+                duration: const Duration(milliseconds: 180),
+                child: CustomPaint(
+                  size: Size.square(widget.size),
+                  painter: _DonutPainter(
+                    widget.segments,
+                    widget.thickness,
+                    c.surface2,
+                    selected,
+                  ),
+                ),
+              ),
+              selected == null ? widget.center : _selectedCenter(context),
+            ],
           ),
-          center,
-        ],
+        ),
       ),
     );
   }
@@ -780,10 +1150,12 @@ class _DonutPainter extends CustomPainter {
   final List<DonutSegment> segments;
   final double thickness;
   final Color track;
-  _DonutPainter(this.segments, this.thickness, this.track);
+  final int? selectedIndex;
+  _DonutPainter(this.segments, this.thickness, this.track, this.selectedIndex);
   @override
   void paint(Canvas canvas, Size size) {
     final total = segments.fold<double>(0, (a, s) => a + s.value);
+    if (total <= 0) return;
     final rect = Rect.fromLTWH(
       thickness / 2,
       thickness / 2,
@@ -801,16 +1173,20 @@ class _DonutPainter extends CustomPainter {
         ..style = PaintingStyle.stroke,
     );
     double start = -math.pi / 2;
-    for (final s in segments) {
+    for (var index = 0; index < segments.length; index++) {
+      final s = segments[index];
       final sweep = (s.value / total) * math.pi * 2;
+      final selected = selectedIndex == index;
       canvas.drawArc(
         rect,
         start,
-        sweep - 0.04,
+        math.max(0, sweep - 0.04),
         false,
         Paint()
-          ..color = s.color
-          ..strokeWidth = thickness
+          ..color = selectedIndex == null || selected
+              ? s.color
+              : s.color.withValues(alpha: 0.28)
+          ..strokeWidth = selected ? thickness + 3 : thickness
           ..strokeCap = StrokeCap.round
           ..style = PaintingStyle.stroke,
       );
@@ -819,7 +1195,11 @@ class _DonutPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_DonutPainter old) => old.segments != segments;
+  bool shouldRepaint(_DonutPainter old) =>
+      old.segments != segments ||
+      old.thickness != thickness ||
+      old.track != track ||
+      old.selectedIndex != selectedIndex;
 }
 
 class HBarRow {

@@ -52,17 +52,31 @@ Widget _host(AppStore store, Widget child, {ApiSession? api}) {
 
 void main() {
   group('AI honesty and backend contract', () {
-    test('a connected session returns the real endpoint answer', () async {
-      final client = _AiClient({'answer': 'Server tahlili'});
-      client.configure(token: 'test-session');
-      final session = ApiSession(client: client);
-      addTearDown(session.dispose);
+    test(
+      'connected AI fails honestly when prompt POST is not published',
+      () async {
+        final client = _AiClient({'answer': 'Server tahlili'});
+        client.configure(token: 'test-session');
+        final session = ApiSession(client: client);
+        addTearDown(session.dispose);
 
-      expect(await session.requestAi('Daromadni tahlil qil'), 'Server tahlili');
-      expect(client.method, 'POST');
-      expect(client.path, '/api/v1/ai/requests/');
-      expect(client.body, {'prompt': 'Daromadni tahlil qil'});
-    });
+        await expectLater(
+          session.requestAi('Daromadni tahlil qil'),
+          throwsA(
+            isA<ApiException>()
+                .having((error) => error.status, 'status', 501)
+                .having(
+                  (error) => error.code,
+                  'code',
+                  'ai_prompt_endpoint_not_published',
+                ),
+          ),
+        );
+        expect(client.method, isNull);
+        expect(client.path, isNull);
+        expect(client.body, isNull);
+      },
+    );
 
     test('offline store never invents an AI answer', () {
       final store = AppStore.seed(SfRole.ceo);

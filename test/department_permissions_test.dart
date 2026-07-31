@@ -67,7 +67,7 @@ void main() {
       find.text('CEO ko‘rinishi · faqat tahlil va hisobotlar'),
       findsOneWidget,
     );
-    expect(find.text('Davomat hisoboti'), findsOneWidget);
+    expect(find.text('Отчёт о посещаемости'), findsOneWidget);
     expect(find.text('Saqlash'), findsNothing);
 
     await tester.dragUntilVisible(

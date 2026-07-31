@@ -1,6 +1,7 @@
 import 'package:ceo_manager/api_client.dart';
 import 'package:ceo_manager/data.dart';
 import 'package:ceo_manager/live_pages.dart';
+import 'package:ceo_manager/settings.dart';
 import 'package:ceo_manager/store.dart';
 import 'package:ceo_manager/theme.dart';
 import 'package:flutter/material.dart';
@@ -101,27 +102,33 @@ class _NotificationClient extends StarforgeApiClient {
   }
 }
 
-Widget _host(ApiSession session, Widget child) => ApiScope(
-  session: session,
-  child: MaterialApp(
-    theme: sfMaterialTheme(SfColors.light, dark: false),
-    home: SfTheme(
-      colors: SfColors.light,
-      child: Scaffold(body: child),
+Widget _host(ApiSession session, Widget child) => SettingsScope(
+  settings: AppSettings(),
+  child: ApiScope(
+    session: session,
+    child: MaterialApp(
+      theme: sfMaterialTheme(SfColors.light, dark: false),
+      home: SfTheme(
+        colors: SfColors.light,
+        child: Scaffold(body: child),
+      ),
     ),
   ),
 );
 
 Widget _notificationHost(ApiSession session, AppStore store, Widget child) =>
-    AppScope(
-      store: store,
-      child: ApiScope(
-        session: session,
-        child: MaterialApp(
-          theme: sfMaterialTheme(SfColors.light, dark: false),
-          home: SfTheme(
-            colors: SfColors.light,
-            child: Scaffold(body: child),
+    SettingsScope(
+      settings: AppSettings(),
+      child: AppScope(
+        store: store,
+        child: ApiScope(
+          session: session,
+          child: MaterialApp(
+            theme: sfMaterialTheme(SfColors.light, dark: false),
+            home: SfTheme(
+              colors: SfColors.light,
+              child: Scaffold(body: child),
+            ),
           ),
         ),
       ),
@@ -221,57 +228,221 @@ void main() {
     },
   );
 
-  testWidgets('live collection paginates and search resets to first page', (
+  testWidgets(
+    'live collection shows all data without pagination and searches',
+    (tester) async {
+      _surface(tester);
+      final records = [
+        for (var index = 1; index <= 45; index++)
+          {'full_name': 'Parent $index', 'id': index, 'status': 'active'},
+      ];
+      final session = ApiSession(client: _PagingClient(records: records))
+        ..collections['parents'] = records;
+      addTearDown(session.dispose);
+
+      await tester.pumpWidget(
+        _host(
+          session,
+          const LiveCollectionPage(
+            resource: 'parents',
+            title: 'Ota-onalar',
+            icon: Icons.family_restroom_rounded,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Parent 1'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('pagination-parents-next')),
+        findsNothing,
+      );
+
+      await tester.enterText(find.byType(TextField).first, 'Parent 45');
+      await tester.pumpAndSettle();
+
+      // One match is the query inside EditableText and one is the result card.
+      expect(find.text('Parent 45'), findsNWidgets(2));
+      expect(
+        find.byKey(const ValueKey('pagination-parents-previous')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('live API collections keep product cards and business copy', (
     tester,
   ) async {
     _surface(tester);
-    final records = [
-      for (var index = 1; index <= 45; index++)
-        {'full_name': 'Parent $index', 'id': index, 'status': 'active'},
-    ];
-    final session = ApiSession(client: _PagingClient(records: records))
-      ..collections['parents'] = records;
-    addTearDown(session.dispose);
+    tester.view.physicalSize = const Size(430, 1600);
+    final cases =
+        <
+          ({
+            String resource,
+            String title,
+            IconData icon,
+            Map<String, dynamic> record,
+            List<String> visibleFacts,
+          })
+        >[
+          (
+            resource: 'branches',
+            title: 'Филиалы',
+            icon: Icons.apartment_rounded,
+            record: const {
+              'id': 101,
+              'name': 'API Chilonzor',
+              'address': 'Bunyodkor 21',
+              'phone': '+998712000002',
+              'max_students': 180,
+              'is_active': true,
+            },
+            visibleFacts: const [
+              'API Chilonzor',
+              'Bunyodkor 21',
+              '+998712000002',
+            ],
+          ),
+          (
+            resource: 'groups',
+            title: 'Группы',
+            icon: Icons.workspaces_rounded,
+            record: const {
+              'id': 102,
+              'name': 'API IELTS Evening',
+              'teacher_name': 'Dilshod Karimov',
+              'branch_name': 'Yunusobod',
+              'student_count': 14,
+              'status': 'active',
+            },
+            visibleFacts: const [
+              'API IELTS Evening',
+              'Dilshod Karimov',
+              'Yunusobod',
+            ],
+          ),
+          (
+            resource: 'parents',
+            title: 'Родители',
+            icon: Icons.family_restroom_rounded,
+            record: const {
+              'id': 103,
+              'full_name': 'API Parent Unique',
+              'child_name': 'API Child Unique',
+              'teacher_name': 'API Teacher Unique',
+              'education_started': '2026-01-10',
+              'last_call_at': '2026-07-20',
+            },
+            visibleFacts: const [
+              'API Parent Unique',
+              'API Child Unique',
+              'API Teacher Unique',
+              '2026-01-10',
+            ],
+          ),
+          (
+            resource: 'departments',
+            title: 'Департаменты',
+            icon: Icons.account_tree_rounded,
+            record: const {
+              'id': 104,
+              'name': 'API Sales Department',
+              'branch_name': 'Sergeli',
+              'manager_name': 'API Head Unique',
+              'responsible_name': 'API Owner Unique',
+              'status': 'active',
+            },
+            visibleFacts: const [
+              'API Sales Department',
+              'Sergeli',
+              'API Head Unique',
+              'API Owner Unique',
+            ],
+          ),
+          (
+            resource: 'studentRisk',
+            title: 'Риски',
+            icon: Icons.warning_amber_rounded,
+            record: const {
+              'id': 105,
+              'student_name': 'API Risk Student',
+              'risk_level': 'high',
+              'reason': 'Attendance below target',
+              'group_name': 'API Group Risk',
+            },
+            visibleFacts: const [
+              'API Risk Student',
+              'Attendance below target',
+              'API Group Risk',
+            ],
+          ),
+          (
+            resource: 'audit',
+            title: 'Аудит',
+            icon: Icons.policy_outlined,
+            record: const {
+              'id': 106,
+              'action': 'payment.approved',
+              'actor_name': 'API Auditor Unique',
+              'entity_type': 'payment',
+              'created_at': '2026-07-31T10:00:00Z',
+            },
+            visibleFacts: const [
+              'payment.approved',
+              'API Auditor Unique',
+              'payment',
+            ],
+          ),
+        ];
 
-    await tester.pumpWidget(
-      _host(
-        session,
-        const LiveCollectionPage(
-          resource: 'parents',
-          title: 'Ota-onalar',
-          icon: Icons.family_restroom_rounded,
+    for (final item in cases) {
+      final client = _PagingClient(records: [item.record]);
+      final session = ApiSession(client: client)
+        ..collections[item.resource] = [item.record];
+      addTearDown(session.dispose);
+
+      await tester.pumpWidget(
+        _host(
+          session,
+          LiveCollectionPage(
+            resource: item.resource,
+            title: item.title,
+            icon: item.icon,
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Parent 1'), findsOneWidget);
-    expect(find.text('Parent 21'), findsNothing);
-    final next = find.byKey(const ValueKey('pagination-parents-next'));
-    final list = find.byType(ListView);
-    for (var attempt = 0; attempt < 30 && next.evaluate().isEmpty; attempt++) {
-      await tester.drag(list, const Offset(0, -500));
-      await tester.pump();
+      expect(tester.takeException(), isNull, reason: item.resource);
+      expect(
+        session.records(item.resource).single['id'],
+        item.record['id'],
+        reason: 'API cache ${item.resource}',
+      );
+      final cardFinder = find.byKey(
+        ValueKey('live-${item.resource}-${item.record['id']}'),
+      );
+      await tester.scrollUntilVisible(
+        cardFinder,
+        280,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      final cardTexts = tester
+          .widgetList<Text>(
+            find.descendant(of: cardFinder, matching: find.byType(Text)),
+          )
+          .map((widget) => widget.data)
+          .whereType<String>()
+          .toList();
+      for (final fact in item.visibleFacts) {
+        expect(cardTexts, contains(fact), reason: item.resource);
+      }
+      expect(find.textContaining('LIVE API'), findsNothing);
+      expect(find.textContaining(' fields'), findsNothing);
+      expect(cardFinder, findsOneWidget);
     }
-    expect(next, findsOneWidget);
-    expect(tester.getSize(next), const Size(44, 44));
-
-    await tester.tap(next);
-    await tester.pumpAndSettle();
-    await tester.drag(list, const Offset(0, 10000));
-    await tester.pumpAndSettle();
-    expect(find.text('Parent 21'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField).first, 'Parent 45');
-    await tester.pumpAndSettle();
-
-    // One match is the query inside EditableText and one is the result card.
-    expect(find.text('Parent 45'), findsNWidgets(2));
-    expect(
-      find.byKey(const ValueKey('pagination-parents-previous')),
-      findsNothing,
-    );
-    expect(tester.takeException(), isNull);
   });
 
   testWidgets('live notification opens payment route and leaves new list', (

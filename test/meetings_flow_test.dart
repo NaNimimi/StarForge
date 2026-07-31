@@ -34,7 +34,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(MeetingDetailScreen), findsOneWidget);
     expect(find.text('KUN TARTIBI'), findsOneWidget);
-    expect(find.text('Davomat va to‘lovlar bo‘yicha yakun'), findsOneWidget);
+    expect(find.text('Итоги по посещаемости и платежам'), findsOneWidget);
 
     await tester.tap(find.text('Подготовить напоминание'));
     await tester.pumpAndSettle();

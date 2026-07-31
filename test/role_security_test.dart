@@ -20,6 +20,50 @@ void main() {
         );
         expect(sfRoleFromApiProfile({'role': 'student'}), isNull);
         expect(sfRoleFromApiProfile(null), isNull);
+        expect(
+          sfRoleFromApiProfile({
+            'username': 'admin',
+            'role_memberships': [
+              {
+                'account_type_name': 'Director',
+                'account_type_slug': 'director',
+              },
+            ],
+          }),
+          SfRole.ceo,
+        );
+        expect(
+          sfRoleFromApiProfile({
+            'role_memberships': [
+              {'account_type_slug': 'manager'},
+            ],
+          }),
+          SfRole.manager,
+        );
+        expect(
+          sfRoleFromApiProfile({
+            'role_memberships': [
+              {'account_type_slug': 'head_of_dept'},
+            ],
+          }),
+          SfRole.manager,
+        );
+        expect(
+          sfRoleFromApiProfile({
+            'role_memberships': [
+              {'account_type_slug': 'auditor'},
+            ],
+          }),
+          SfRole.audit,
+        );
+        expect(
+          sfRoleFromApiProfile({
+            'role_memberships': [
+              {'account_type_slug': 'director', 'is_active': false},
+            ],
+          }),
+          isNull,
+        );
       },
     );
   });

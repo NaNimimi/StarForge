@@ -299,28 +299,27 @@ void main() {
     }
   }
 
-  final unavailableRoutes = <SfRole, String>{
-    SfRole.ceo: 'payroll',
-    SfRole.manager: 'leads',
-    SfRole.audit: 'cases',
+  final newlyConnectedRoutes = <SfRole, List<String>>{
+    SfRole.ceo: ['payroll', 'leads', 'enroll', 'chats'],
+    SfRole.manager: ['payroll', 'leads', 'enroll', 'chats'],
+    SfRole.audit: ['fairness', 'surveys', 'cases'],
   };
-  for (final entry in unavailableRoutes.entries) {
-    testWidgets(
-      '${entry.key.name}: authenticated static route is honestly unavailable',
-      (tester) async {
+  for (final entry in newlyConnectedRoutes.entries) {
+    for (final route in entry.value) {
+      testWidgets('${entry.key.name}: $route is connected in live mode', (
+        tester,
+      ) async {
         await _pumpConsole(tester, entry.key, phone, authenticated: true);
         final item = _itemsFor(
           entry.key,
-        ).singleWhere((candidate) => candidate.id == entry.value);
+        ).singleWhere((candidate) => candidate.id == route);
         await _openMenuItem(tester, item, compact: true);
 
-        expect(find.text('Интеграция ещё не подключена'), findsOneWidget);
-        expect(
-          find.textContaining('не подменяет серверные данные'),
-          findsOneWidget,
-        );
+        expect(find.text('Интеграция ещё не подключена'), findsNothing);
+        expect(find.textContaining('LIVE API'), findsNothing);
+        expect(find.textContaining('backend'), findsNothing);
         expect(tester.takeException(), isNull);
-      },
-    );
+      });
+    }
   }
 }

@@ -5,7 +5,7 @@ import 'theme.dart';
 ///
 /// Keep this in one shared place instead of scattering stale version strings
 /// across screens.
-const kAppDisplayVersion = '1.1.5';
+const kAppDisplayVersion = '1.5.5';
 
 /// Display currency for all money formatting. Switchable from the design panel.
 enum SfCurrency { uzs, usd, eur, rub }
@@ -193,6 +193,16 @@ class Student {
   final String? branch;
   final String? username;
   final String? gender;
+  final String? level;
+  final String? enrolledAt;
+  final int? age;
+  final String? motherName;
+  final String? motherPhone;
+
+  /// True for a record projected from the authenticated API. Missing profile
+  /// fields must then stay visibly unavailable instead of being synthesised
+  /// from the student's name as the offline showcase does.
+  final bool serverBacked;
   const Student(
     this.name,
     this.group,
@@ -208,6 +218,12 @@ class Student {
     this.branch,
     this.username,
     this.gender,
+    this.level,
+    this.enrolledAt,
+    this.age,
+    this.motherName,
+    this.motherPhone,
+    this.serverBacked = false,
   });
 }
 
@@ -314,21 +330,28 @@ StudentProfile studentProfile(Student s) {
   final enrYear = 2023 + h % 3;
   final enrMonth = (1 + (h ~/ 5) % 12).toString().padLeft(2, '0');
   final enrDay = (1 + (h ~/ 11) % 28).toString().padLeft(2, '0');
+  final unavailable = s.serverBacked ? '—' : null;
   return StudentProfile(
     firstName: first.isEmpty ? s.name : first,
     lastName: last,
-    level: _kLevels[h % _kLevels.length],
-    phone: s.phone ?? _phoneFrom(h),
+    level: s.level ?? unavailable ?? _kLevels[h % _kLevels.length],
+    phone: s.phone ?? unavailable ?? _phoneFrom(h),
     fatherName:
-        s.parentName ?? '${stem}ov ${_kMaleNames[h % _kMaleNames.length]}',
-    fatherPhone: s.parentPhone ?? _phoneFrom(h ~/ 2 + 41),
-    motherName: '${stem}ova ${_kFemaleNames[(h ~/ 3) % _kFemaleNames.length]}',
-    motherPhone: _phoneFrom(h ~/ 4 + 77),
-    age: 13 + h % 6,
-    studentId: s.studentNumber ?? 'SF-${10000 + h % 89999}',
-    enrolled: '$enrDay.$enrMonth.$enrYear',
+        s.parentName ??
+        unavailable ??
+        '${stem}ov ${_kMaleNames[h % _kMaleNames.length]}',
+    fatherPhone: s.parentPhone ?? unavailable ?? _phoneFrom(h ~/ 2 + 41),
+    motherName:
+        s.motherName ??
+        unavailable ??
+        '${stem}ova ${_kFemaleNames[(h ~/ 3) % _kFemaleNames.length]}',
+    motherPhone: s.motherPhone ?? unavailable ?? _phoneFrom(h ~/ 4 + 77),
+    age: s.age ?? (s.serverBacked ? -1 : 13 + h % 6),
+    studentId: s.studentNumber ?? unavailable ?? 'SF-${10000 + h % 89999}',
+    enrolled: s.enrolledAt ?? unavailable ?? '$enrDay.$enrMonth.$enrYear',
     branch:
         s.branch ??
+        unavailable ??
         (s.group.contains('·')
             ? s.group.split('·').first.trim()
             : _kDistricts[h % _kDistricts.length]),
@@ -587,7 +610,7 @@ class Anomaly {
 }
 
 const List<Anomaly> kAnomalies = [
-  Anomaly('Davomat 100% · 21 kun', 'Davomat', 'Sebzor', 94, 'high'),
+  Anomaly('Посещаемость 100% · 21 день', 'Посещаемость', 'Sebzor', 94, 'high'),
   Anomaly('48 Up karta/hafta', 'Karta', 'Mirobod', 72, 'med'),
   Anomaly('Naqd · kvitansiyasiz', 'Moliya', 'Sebzor', 88, 'high'),
   Anomaly("Tungi profil o'zgarishi", 'Kirish', 'Chilonzor', 34, 'low'),
@@ -605,7 +628,7 @@ class AuditCase {
 const List<AuditCase> kCases = [
   AuditCase('C-0042', 'Sebzor · kvitansiyasiz naqd', 'high', 'open'),
   AuditCase('C-0041', 'Mirobod · karta nomutanosibligi', 'med', 'review'),
-  AuditCase('C-0040', 'Davomat anomaliyasi · Fizika', 'high', 'open'),
+  AuditCase('C-0040', 'Аномалия посещаемости · Физика', 'high', 'open'),
   AuditCase('C-0039', "So'rovnoma yaxlitligi", 'med', 'review'),
   AuditCase('C-0038', "Tungi profil o'zgarishi", 'low', 'closed'),
 ];

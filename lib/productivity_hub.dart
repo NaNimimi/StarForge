@@ -119,9 +119,9 @@ class _ProductivityHubState extends State<ProductivityHub> {
           SliverToBoxAdapter(
             child: RefLargeHeader(
               eyebrow: kRoleConfigs[widget.role]!.label,
-              title: 'Buyruqlar markazi',
+              title: menuLabel(context, 'Tezkor amallar'),
               subtitle:
-                  '${commands.length} ta ruxsat etilgan bo‘lim · tezkor kirish',
+                  '${commands.length} ${tr(context, 'quick_actions_subtitle')}',
               actions: [
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -150,13 +150,13 @@ class _ProductivityHubState extends State<ProductivityHub> {
               child: RefSearchField(
                 key: const ValueKey('productivity-search'),
                 controller: _search,
-                hint: 'Bo‘lim yoki amalni qidiring',
+                hint: tr(context, 'quick_actions_search'),
                 onChanged: (value) => setState(() => _query = value),
                 suffix: _query.isEmpty
                     ? null
                     : IconButton(
                         key: const ValueKey('productivity-search-clear'),
-                        tooltip: 'Tozalash',
+                        tooltip: tr(context, 'quick_actions_clear'),
                         onPressed: () {
                           _search.clear();
                           setState(() => _query = '');
@@ -175,7 +175,7 @@ class _ProductivityHubState extends State<ProductivityHub> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 children: [
                   _CategoryChip(
-                    label: 'Barchasi',
+                    label: tr(context, 'quick_actions_all'),
                     selected: _category == null,
                     onSelected: () => setState(() => _category = null),
                   ),
@@ -194,8 +194,8 @@ class _ProductivityHubState extends State<ProductivityHub> {
           if (showingQuickSections && favorites.isNotEmpty)
             _CommandSection(
               sectionId: 'favorite',
-              title: 'Tanlanganlar',
-              subtitle: 'Eng kerakli bo‘limlar',
+              title: tr(context, 'quick_actions_favorites'),
+              subtitle: tr(context, 'quick_actions_favorites_sub'),
               commands: favorites,
               store: store,
               onOpen: (command) => _open(store, command),
@@ -203,8 +203,8 @@ class _ProductivityHubState extends State<ProductivityHub> {
           if (showingQuickSections && recent.isNotEmpty)
             _CommandSection(
               sectionId: 'recent',
-              title: 'Yaqinda ochilgan',
-              subtitle: 'Ishni davom ettiring',
+              title: tr(context, 'quick_actions_recent'),
+              subtitle: tr(context, 'quick_actions_recent_sub'),
               commands: recent,
               store: store,
               onOpen: (command) => _open(store, command),
@@ -225,7 +225,7 @@ class _ProductivityHubState extends State<ProductivityHub> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Buyruq topilmadi',
+                        tr(context, 'quick_actions_empty'),
                         style: RefType.ui(
                           size: 17,
                           weight: FontWeight.w800,
@@ -234,7 +234,7 @@ class _ProductivityHubState extends State<ProductivityHub> {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        'Qidiruv yoki kategoriya filtrini o‘zgartiring.',
+                        tr(context, 'quick_actions_empty_sub'),
                         textAlign: TextAlign.center,
                         style: RefType.ui(size: 12, color: c.muted),
                       ),
@@ -406,8 +406,8 @@ class _CommandTile extends StatelessWidget {
                     'productivity-favorite-${command.item.id}-$sectionId',
                   ),
                   tooltip: favorite
-                      ? 'Tanlanganlardan olib tashlash'
-                      : 'Tanlanganlarga qo‘shish',
+                      ? tr(context, 'quick_actions_remove_favorite')
+                      : tr(context, 'quick_actions_add_favorite'),
                   onPressed: onFavorite,
                   icon: Icon(
                     favorite ? Icons.star_rounded : Icons.star_border_rounded,

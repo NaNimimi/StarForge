@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'api_client.dart';
+import 'api_connection.dart';
+import 'api_store_adapter.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
@@ -31,33 +36,68 @@ Future<void> main() async {
 /// a more privileged local role.
 SfRole? sfRoleFromApiProfile(Map<String, dynamic>? profile) {
   if (profile == null) return null;
-  final raw = apiValue(profile, const [
+
+  SfRole? mapValue(Object? value) {
+    if (value is Map) {
+      final role = Map<String, dynamic>.from(value);
+      for (final key in const [
+        'account_type_slug',
+        'account_type_name',
+        'role_slug',
+        'role_name',
+        'slug',
+        'name',
+        'code',
+      ]) {
+        final mapped = mapValue(role[key]);
+        if (mapped != null) return mapped;
+      }
+      return null;
+    }
+    final normalized = apiText(
+      value,
+    ).toLowerCase().replaceAll(RegExp(r'[^a-zа-яё0-9]+'), '_');
+    if (normalized.contains('audit') ||
+        normalized.contains('auditor') ||
+        normalized.contains('compliance')) {
+      return SfRole.audit;
+    }
+    if (normalized.contains('manager') ||
+        normalized.contains('administrator') ||
+        normalized == 'admin' ||
+        normalized.contains('head_of_dept') ||
+        normalized.contains('head_of_department') ||
+        normalized.contains('branch_head')) {
+      return SfRole.manager;
+    }
+    if (normalized.contains('ceo') ||
+        normalized.contains('owner') ||
+        normalized.contains('director') ||
+        normalized.contains('superadmin') ||
+        normalized.contains('super_admin')) {
+      return SfRole.ceo;
+    }
+    return null;
+  }
+
+  for (final key in const [
     'role',
     'role_name',
     'role_slug',
     'user_role',
     'position',
-  ]);
-  final normalized = apiText(
-    raw,
-  ).toLowerCase().replaceAll(RegExp(r'[^a-zа-яё0-9]+'), '_');
-  if (normalized.contains('audit') ||
-      normalized.contains('auditor') ||
-      normalized.contains('compliance')) {
-    return SfRole.audit;
+  ]) {
+    final mapped = mapValue(profile[key]);
+    if (mapped != null) return mapped;
   }
-  if (normalized.contains('manager') ||
-      normalized.contains('administrator') ||
-      normalized == 'admin' ||
-      normalized.contains('branch_head')) {
-    return SfRole.manager;
-  }
-  if (normalized.contains('ceo') ||
-      normalized.contains('owner') ||
-      normalized.contains('director') ||
-      normalized.contains('superadmin') ||
-      normalized.contains('super_admin')) {
-    return SfRole.ceo;
+
+  final memberships = profile['role_memberships'];
+  if (memberships is Iterable) {
+    for (final membership in memberships) {
+      if (membership is Map && membership['is_active'] == false) continue;
+      final mapped = mapValue(membership);
+      if (mapped != null) return mapped;
+    }
   }
   return null;
 }
@@ -84,15 +124,39 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   // console's StoreProvider, so a successful connection can hydrate all pages
   // without passing credentials through widgets.
   late final ApiSession apiSession = ApiSession();
-  void _onSettings() => setState(() {});
+  bool _hadLiveSession = false;
+  void _onSettings() {
+    // Keep server-generated labels/errors and all subsequent requests aligned
+    // with the language currently visible in the app.
+    apiSession.client.configure(language: settings.lang.name);
+    setState(() {});
+  }
 
   SfRole? _roleFromLiveProfile() => sfRoleFromApiProfile(apiSession.me);
 
   void _onApiSession() {
-    if (!mounted || !apiSession.authenticated) return;
+    if (!mounted) return;
+    if (!apiSession.authenticated) {
+      if (_hadLiveSession) {
+        _hadLiveSession = false;
+        setState(() => role = null);
+      }
+      return;
+    }
+    _hadLiveSession = true;
     final liveRole = _roleFromLiveProfile();
+    if (apiSession.me != null && liveRole == null) {
+      // Never preserve a locally selected CEO workspace for an unknown API
+      // role. Revoke the session and return to the neutral workspace picker.
+      setState(() => role = null);
+      unawaited(apiSession.logout().catchError((_) {}));
+      return;
+    }
     if (liveRole != null && liveRole != role) {
       _openWorkspace(liveRole);
+    }
+    if (liveRole != null) {
+      syncProductStoreFromApi(apiSession, store);
     }
   }
 
@@ -100,6 +164,7 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   void initState() {
     super.initState();
     settings = widget.initialSettings ?? AppSettings();
+    apiSession.client.configure(language: settings.lang.name);
     settings.addListener(_onSettings);
     apiSession.addListener(_onApiSession);
   }
@@ -115,7 +180,7 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
 
   void _openWorkspace(SfRole r) => setState(() {
     role = r;
-    store = AppStore.seed(r);
+    store = apiSession.authenticated ? AppStore.empty(r) : AppStore.seed(r);
   });
 
   @override
@@ -131,6 +196,13 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
             title: 'StarForge EDU · CEO Manager',
             debugShowCheckedModeBanner: false,
             theme: sfMaterialTheme(c, dark: settings.dark),
+            locale: Locale(settings.lang.name),
+            supportedLocales: const [Locale('uz'), Locale('ru'), Locale('en')],
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
             // Apply the live density (text-scale) tweak globally and paint the
             // chosen background pattern behind every route.
             builder: (context, child) {
@@ -192,10 +264,7 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
                 );
               },
               child: role == null
-                  ? LoginScreen(
-                      key: const ValueKey('workspace-picker'),
-                      onLogin: _openWorkspace,
-                    )
+                  ? const ApiLoginScreen(key: ValueKey('api-login-screen'))
                   : Console(
                       key: ValueKey('console-${role!.name}'),
                       cfg: kRoleConfigs[role]!,

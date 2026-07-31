@@ -167,11 +167,14 @@ void main() {
     expect(find.textContaining('Ничего не отправляется'), findsOneWidget);
     await tester.tap(find.textContaining('Сохранить черновики'));
     await tester.pumpAndSettle();
-    expect(store.activities.first.title, 'Davomat eslatmalari tayyorlandi');
+    expect(
+      store.activities.first.title,
+      'Напоминания о посещаемости подготовлены',
+    );
 
     await tester.tap(find.text('Saqlash'));
     await tester.pumpAndSettle();
-    expect(store.activities.first.title, 'Davomat saqlandi');
+    expect(store.activities.first.title, 'Посещаемость сохранена');
     expect(tester.takeException(), isNull);
   });
 

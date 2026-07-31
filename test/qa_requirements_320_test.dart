@@ -146,7 +146,7 @@ void main() {
     expect(find.text('CEO ANALITIKA', skipOffstage: false), findsOneWidget);
     expect(find.text('Guruh daromadi', skipOffstage: false), findsOneWidget);
     expect(find.text('O‘zlashtirish', skipOffstage: false), findsOneWidget);
-    expect(find.text('Davomat', skipOffstage: false), findsWidgets);
+    expect(find.text('Посещаемость', skipOffstage: false), findsWidgets);
     expect(find.text('To‘lov', skipOffstage: false), findsOneWidget);
     expect(find.text('Imtihon', skipOffstage: false), findsOneWidget);
     expect(find.text('Tarix', skipOffstage: false), findsOneWidget);

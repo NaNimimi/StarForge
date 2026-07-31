@@ -1,9 +1,35 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
+import 'package:http/http.dart' as http;
+
+import 'api_catalog.dart';
+
+/// Native builds can be pointed at another server without changing source:
+/// `flutter build apk --dart-define=STARFORGE_API_BASE_URL=http://192.168.1.30:8000`.
+/// Web keeps using its own origin so the local preview proxy can attach the
+/// tenant Host header and avoid browser CORS restrictions.
+const String _configuredApiBaseUrl = String.fromEnvironment(
+  'STARFORGE_API_BASE_URL',
+  defaultValue: 'https://starforge.78.111.91.113.nip.io',
+);
+
+String get kDefaultApiBaseUrl =>
+    kIsWeb ? Uri.base.origin : _configuredApiBaseUrl;
+
+abstract final class _HttpStatus {
+  static const int badRequest = 400;
+  static const int paymentRequired = 402;
+  static const int unauthorized = 401;
+  static const int forbidden = 403;
+  static const int notFound = 404;
+  static const int tooManyRequests = 429;
+  static const int badGateway = 502;
+  static const int notImplemented = 501;
+}
 
 /// StarForge v1 transport, ported from the web project's `src/api` layer.
 ///
@@ -28,7 +54,7 @@ class ApiException implements Exception {
     this.retryAfter,
   });
 
-  bool get isUnauthorized => status == HttpStatus.unauthorized;
+  bool get isUnauthorized => status == _HttpStatus.unauthorized;
   bool get isTimeout => status == 0 && message == 'Request timed out';
 
   @override
@@ -99,11 +125,35 @@ int _asInt(Object? value, [int fallback = 0]) =>
 
 String _trimUrl(String value) => value.trim().replaceAll(RegExp(r'/+$'), '');
 
-String _requestId() =>
-    'sf-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-${Random.secure().nextInt(1 << 32).toRadixString(16)}';
+String _requestId() {
+  final random = Random.secure();
+  final high = random.nextInt(1 << 16).toRadixString(16).padLeft(4, '0');
+  final low = random.nextInt(1 << 16).toRadixString(16).padLeft(4, '0');
+  return 'sf-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-$high$low';
+}
 
 Map<String, dynamic>? _asMap(Object? value) =>
     value is Map ? Map<String, dynamic>.from(value) : null;
+
+String? _errorScalarText(Object? value) {
+  if (value is! String && value is! num && value is! bool) return null;
+  final text = '$value'.trim();
+  return text.isEmpty ? null : text;
+}
+
+Map<String, dynamic>? _structuredApiErrors(Map<String, dynamic>? payload) {
+  if (payload == null) return null;
+  final result = <String, dynamic>{...?_asMap(payload['errors'])};
+  for (final key in const ['message', 'error']) {
+    final value = payload[key];
+    if (value is Map) {
+      result.addAll(Map<String, dynamic>.from(value));
+    } else if (value is Iterable && value is! String) {
+      result.putIfAbsent('detail', () => value.toList(growable: false));
+    }
+  }
+  return result.isEmpty ? null : result;
+}
 
 List<Map<String, dynamic>> _asMapList(Object? value) {
   if (value is! List) return const [];
@@ -118,10 +168,14 @@ List<Map<String, dynamic>> _asMapList(Object? value) {
 /// aliases at this boundary prevents individual screens from inventing their
 /// own parsing rules.
 Object? apiValue(Map<String, dynamic> row, Iterable<String> keys) {
-  final wanted = keys.map((key) => key.toLowerCase()).toSet();
-  for (final entry in row.entries) {
-    if (wanted.contains(entry.key.toLowerCase()) && entry.value != null) {
-      return entry.value;
+  for (final key in keys) {
+    final exact = row[key];
+    if (exact != null) return exact;
+    final normalized = key.toLowerCase();
+    for (final entry in row.entries) {
+      if (entry.key.toLowerCase() == normalized && entry.value != null) {
+        return entry.value;
+      }
     }
   }
   return null;
@@ -129,6 +183,22 @@ Object? apiValue(Map<String, dynamic> row, Iterable<String> keys) {
 
 String apiText(Object? value, {String fallback = ''}) {
   if (value == null) return fallback;
+  if (value is String) {
+    final source = value.trim();
+    final structured =
+        (source.startsWith('{') && source.endsWith('}')) ||
+        (source.startsWith('[') && source.endsWith(']'));
+    if (structured) {
+      try {
+        final decoded = jsonDecode(source);
+        if (decoded is Map || decoded is List) {
+          return apiText(decoded, fallback: fallback);
+        }
+      } on FormatException {
+        // Ordinary text that merely contains brackets remains unchanged.
+      }
+    }
+  }
   if (value is Map) {
     final row = Map<String, dynamic>.from(value);
     return apiText(
@@ -650,11 +720,11 @@ class StarforgeApiClient {
   String _baseUrl;
   String _language;
   String? _token;
+  VoidCallback? onUnauthorized;
 
-  StarforgeApiClient({
-    String baseUrl = 'https://starforge.78.111.91.113.nip.io',
-  }) : _baseUrl = _trimUrl(baseUrl),
-       _language = 'uz';
+  StarforgeApiClient({String? baseUrl})
+    : _baseUrl = _trimUrl(baseUrl ?? kDefaultApiBaseUrl),
+      _language = 'uz';
 
   String get baseUrl => _baseUrl;
   String? get token => _token;
@@ -739,18 +809,30 @@ class StarforgeApiClient {
     required String username,
     required String password,
   }) async {
+    final body = {
+      'username': username.trim(),
+      'password': password,
+      'platform': 'mobile',
+    };
     final data = await request(
       'POST',
       '/api/v1/auth/login/',
-      body: {
-        'username': username.trim(),
-        'password': password,
-        'platform': 'mobile',
-      },
+      body: body,
       authenticate: false,
     );
     final session = _asMap(data) ?? const <String, dynamic>{};
-    final access = session['access']?.toString().trim();
+    final access =
+        [
+              session['access'],
+              session['token'],
+              session['session_key'],
+              session['session'],
+              session['key'],
+            ]
+            .whereType<Object>()
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty)
+            .firstOrNull;
     if (access == null || access.isEmpty) {
       throw ApiException(
         status: 0,
@@ -762,9 +844,46 @@ class StarforgeApiClient {
     return session;
   }
 
+  Future<dynamic> requestPasswordReset(String phone) => request(
+    'POST',
+    '/api/v1/auth/password/reset/request/',
+    body: {'phone': phone.trim()},
+    authenticate: false,
+  );
+
+  Future<dynamic> confirmPasswordReset({
+    required String phone,
+    required String code,
+    required String newPassword,
+  }) => request(
+    'POST',
+    '/api/v1/auth/password/reset/confirm/',
+    body: {
+      'phone': phone.trim(),
+      'code': code.trim(),
+      'new_password': newPassword,
+    },
+    authenticate: false,
+  );
+
+  Future<dynamic> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) => request(
+    'POST',
+    '/api/v1/auth/password/change/',
+    body: {'current_password': currentPassword, 'new_password': newPassword},
+  );
+
   Future<void> logout() async {
     try {
-      if (hasSession) await request('POST', '/api/v1/auth/logout/');
+      if (hasSession) {
+        await request(
+          'POST',
+          '/api/v1/auth/logout/',
+          body: const <String, Object?>{},
+        );
+      }
     } finally {
       clearSession();
     }
@@ -779,32 +898,49 @@ class StarforgeApiClient {
     Duration timeout = const Duration(seconds: 15),
   }) async {
     final id = _requestId();
-    final client = HttpClient();
-    client.connectionTimeout = timeout;
+    final client = http.Client();
     try {
-      final request = await client
-          .openUrl(method.toUpperCase(), _uri(path, query))
-          .timeout(timeout);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set('Accept-Language', _language);
-      request.headers.set('X-Request-ID', id);
+      final uri = _uri(path, query);
+      final verb = method.toUpperCase();
+      final encodedBody = body == null ? null : utf8.encode(jsonEncode(body));
+      late final http.BaseRequest request;
+      if (kIsWeb) {
+        // BrowserClient must not set the forbidden Content-Length header
+        // itself. A StreamedRequest leaves it unset, while fetch still sends
+        // the buffered Uint8Array with the browser-calculated length.
+        final streamed = http.StreamedRequest(verb, uri);
+        if (encodedBody != null) streamed.sink.add(encodedBody);
+        unawaited(streamed.sink.close());
+        request = streamed;
+      } else {
+        final buffered = http.Request(verb, uri);
+        if (encodedBody != null) buffered.bodyBytes = encodedBody;
+        request = buffered;
+      }
+      request.headers['Accept'] = 'application/json';
+      request.headers['Accept-Language'] = _language;
+      request.headers['X-Request-ID'] = id;
       if (authenticate && hasSession) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_token');
+        request.headers['Authorization'] = 'Bearer $_token';
       }
       if (body != null) {
-        request.headers.contentType = ContentType.json;
-        request.write(jsonEncode(body));
+        request.headers['Content-Type'] = 'application/json';
       }
-      final response = await request.close().timeout(timeout);
-      final text = await utf8.decoder.bind(response).join().timeout(timeout);
+      final response = await client.send(request).timeout(timeout);
+      final responseBytes = await response.stream.toBytes().timeout(timeout);
+      final text = utf8.decode(responseBytes, allowMalformed: false);
       final decoded = text.trim().isEmpty ? null : _decode(text);
-      final responseId = response.headers.value('X-Request-ID') ?? id;
+      final responseId = response.headers['x-request-id'] ?? id;
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (authenticate && response.statusCode == _HttpStatus.unauthorized) {
+          clearSession();
+          onUnauthorized?.call();
+        }
         throw _errorFrom(
           status: response.statusCode,
           payload: decoded,
           requestId: responseId,
-          retryAfter: response.headers.value(HttpHeaders.retryAfterHeader),
+          retryAfter: response.headers['retry-after'],
           fallback: response.reasonPhrase,
         );
       }
@@ -815,20 +951,29 @@ class StarforgeApiClient {
         message: 'Request timed out',
         requestId: id,
       );
-    } on SocketException catch (error) {
+    } on http.ClientException catch (error) {
       throw ApiException(
         status: 0,
-        message: 'Network error: ${error.message}',
+        message: 'HTTP transport failed: ${error.message}',
+        code: 'transport_error',
         requestId: id,
       );
-    } on HandshakeException catch (error) {
+    } on FormatException {
       throw ApiException(
         status: 0,
-        message: 'Secure connection failed: ${error.message}',
+        message: 'The server returned an invalid response.',
+        code: 'invalid_response',
+        requestId: id,
+      );
+    } on TypeError {
+      throw ApiException(
+        status: 0,
+        message: 'The server returned an unexpected response shape.',
+        code: 'invalid_response',
         requestId: id,
       );
     } finally {
-      client.close(force: true);
+      client.close();
     }
   }
 
@@ -867,12 +1012,12 @@ class StarforgeApiClient {
     return ApiException(
       status: status,
       message:
-          map?['message']?.toString() ??
-          map?['error']?.toString() ??
+          _errorScalarText(map?['message']) ??
+          _errorScalarText(map?['error']) ??
           fallback ??
           'Request failed ($status)',
-      code: map?['code']?.toString(),
-      errors: _asMap(map?['errors']),
+      code: _errorScalarText(map?['code']),
+      errors: _structuredApiErrors(map),
       requestId: requestId,
       retryAfter: seconds == null ? null : Duration(seconds: seconds),
     );
@@ -973,32 +1118,341 @@ class StarforgeApiClient {
 /// Endpoint registry deliberately mirrors the web project's API resources.
 /// Collections lacking a published API operation are not faked as live data.
 const Map<String, String> kApiResources = {
+  'users': '/api/v1/users/',
+  'devices': '/api/v1/users/devices/',
   'students': '/api/v1/students/',
   'teachers': '/api/v1/teachers/',
   'groups': '/api/v1/cohorts/',
   'parents': '/api/v1/parents/',
+  'guardians': '/api/v1/parents/guardians/',
+  'pickups': '/api/v1/parents/pickups/',
+  'enrollmentReasons': '/api/v1/students/enrollment-reasons/',
   'payments': '/api/v1/payments/',
   'attendanceRecords': '/api/v1/attendance/records/',
   'staff': '/api/v1/org/staff/',
   'departments': '/api/v1/org/departments/',
   'branches': '/api/v1/org/branches/',
+  'rooms': '/api/v1/org/rooms/',
+  'transfers': '/api/v1/org/transfers/',
   'approvals': '/api/v1/approvals/requests/',
   'approvalLedger': '/api/v1/approvals/ledger/',
   'meetings': '/api/v1/meetings/',
+  'meetingsUpcoming': '/api/v1/meetings/upcoming/',
   'threads': '/api/v1/messaging/threads/',
   'schedule': '/api/v1/schedule/lessons/',
+  'terms': '/api/v1/schedule/terms/',
+  'timeslots': '/api/v1/schedule/timeslots/',
+  'lessonTypes': '/api/v1/schedule/lesson-types/',
+  'scheduleRules': '/api/v1/schedule/rules/',
+  'subjects': '/api/v1/academics/subjects/',
+  'examTypes': '/api/v1/academics/exam-types/',
+  'exams': '/api/v1/academics/exams/',
+  'grades': '/api/v1/academics/grades/',
+  'transcripts': '/api/v1/academics/transcripts/',
+  'assignments': '/api/v1/assignments/',
+  'submissions': '/api/v1/assignments/submissions/',
+  'contentLibraries': '/api/v1/content/libraries/',
+  'contentCourses': '/api/v1/content/courses/',
+  'contentModules': '/api/v1/content/modules/',
+  'contentLessons': '/api/v1/content/lessons/',
+  'contentFolders': '/api/v1/content/folders/',
+  'contentFiles': '/api/v1/content/files/',
+  'contentMaterials': '/api/v1/content/materials/',
+  'printJobs': '/api/v1/printing/jobs/',
+  'printers': '/api/v1/printing/printers/',
+  'printAgents': '/api/v1/printing/agents/',
   'invoices': '/api/v1/finance/invoices/',
   'expenses': '/api/v1/finance/expenses/',
-  'refunds': '/api/v1/finance/refunds/',
+  'discounts': '/api/v1/finance/discounts/',
+  'cashierShifts': '/api/v1/finance/cashier-shifts/',
   'paymentMethods': '/api/v1/finance/payment-methods/',
   'feeSchedules': '/api/v1/finance/fee-schedules/',
+  'paymentProviders': '/api/v1/payments/provider-configs/',
+  'notificationTemplates': '/api/v1/notifications/templates/',
   'teacherIntelligence': '/api/v1/intelligence/teachers/',
   'studentRisk': '/api/v1/intelligence/risk/',
+  'riskRules': '/api/v1/intelligence/rules/',
   'notifications': '/api/v1/notifications/',
   'audit': '/api/v1/audit/',
   'aiRequests': '/api/v1/ai/requests/',
+  'reports': '/api/v1/reports/',
+  'reportRuns': '/api/v1/reports/runs/',
+  'reportSchedules': '/api/v1/reports/schedules/',
+  'rules': '/api/v1/rulebook/rules/',
+  'rulesMine': '/api/v1/rulebook/rules/mine/',
+  'rulesPending': '/api/v1/rulebook/rules/pending/',
+  'penalties': '/api/v1/rulebook/penalties/',
   'accessRoles': '/api/v1/access/roles/',
   'accessPermissions': '/api/v1/access/permissions/',
+  'accessOverrides': '/api/v1/access/overrides/',
+  'forms': '/api/v1/forms/',
+  'taskGrades': '/api/v1/tasks/grades/',
+  'tasks': '/api/v1/tasks/',
+  'tasksMine': '/api/v1/tasks/mine/',
+  'achievements': '/api/v1/achievements/',
+  'achievementsMine': '/api/v1/achievements/mine/',
+  'rewardTypes': '/api/v1/rewards/types/',
+  'rewardGrants': '/api/v1/rewards/grants/',
+  'rewardGrantsMine': '/api/v1/rewards/grants/mine/',
+  'covers': '/api/v1/cover/',
+  'coverPool': '/api/v1/cover/pool/',
+  'loans': '/api/v1/loans/',
+  'procurement': '/api/v1/procurement/',
+  'doNotContact': '/api/v1/campaigns/do-not-contact/',
+  'campaignTemplates': '/api/v1/campaigns/templates/',
+  'campaigns': '/api/v1/campaigns/',
+  'sales': '/api/v1/sales/',
+  'placementTests': '/api/v1/placement/tests/',
+  'placementAttempts': '/api/v1/placement/attempts/',
+  'placementProposals': '/api/v1/placement/proposals/',
+  'cardTypes': '/api/v1/cards/types/',
+  'cards': '/api/v1/cards/',
+};
+
+/// A successful login only warms the collections used by the three home
+/// dashboards. Every remaining documented collection is loaded lazily by its
+/// page. This avoids launching dozens of permission-scoped requests at once
+/// while keeping the complete OpenAPI catalogue available through [refresh].
+const Set<String> kApiBootstrapResources = {
+  'students',
+  'teachers',
+  'groups',
+  'parents',
+  'payments',
+  'invoices',
+  'attendanceRecords',
+  'staff',
+  'departments',
+  'branches',
+  'approvals',
+  'meetings',
+  'threads',
+  'schedule',
+  'notifications',
+  'audit',
+};
+
+/// Append-only feeds can grow while they are being read. Loading every audit
+/// page during sign-in is therefore both unnecessary and unsafe: each API
+/// request can itself create another audit event and keep `has_next` true.
+/// Product pages start with the newest backend page and use filters/export for
+/// deeper history.
+const Set<String> kApiSinglePageResources = {'audit'};
+
+/// Verb capabilities copied from the supplied OpenAPI paths. Generic screens
+/// consult these sets before exposing a mutation, so read-only collections can
+/// never receive an invented POST/PATCH/DELETE request.
+const Set<String> kApiCreatableResources = {
+  'devices',
+  'staff',
+  'branches',
+  'departments',
+  'rooms',
+  'enrollmentReasons',
+  'students',
+  'guardians',
+  'pickups',
+  'parents',
+  'teachers',
+  'groups',
+  'terms',
+  'timeslots',
+  'lessonTypes',
+  'scheduleRules',
+  'schedule',
+  'subjects',
+  'examTypes',
+  'exams',
+  'transcripts',
+  'assignments',
+  'contentFiles',
+  'contentMaterials',
+  'printJobs',
+  'printers',
+  'printAgents',
+  'feeSchedules',
+  'invoices',
+  'discounts',
+  'paymentMethods',
+  'expenses',
+  'cashierShifts',
+  'paymentProviders',
+  'notificationTemplates',
+  'notifications',
+  'reportRuns',
+  'reportSchedules',
+  'approvals',
+  'rules',
+  'penalties',
+  'accessOverrides',
+  'forms',
+  'taskGrades',
+  'tasks',
+  'threads',
+  'achievements',
+  'rewardTypes',
+  'rewardGrants',
+  'covers',
+  'loans',
+  'procurement',
+  'doNotContact',
+  'campaignTemplates',
+  'campaigns',
+  'sales',
+  'meetings',
+  'placementTests',
+  'placementAttempts',
+  'placementProposals',
+  'cardTypes',
+  'cards',
+};
+
+const Set<String> kApiUpdatableResources = {
+  'staff',
+  'branches',
+  'departments',
+  'rooms',
+  'enrollmentReasons',
+  'students',
+  'pickups',
+  'parents',
+  'teachers',
+  'groups',
+  'terms',
+  'timeslots',
+  'lessonTypes',
+  'scheduleRules',
+  'subjects',
+  'examTypes',
+  'exams',
+  'assignments',
+  'contentMaterials',
+  'printers',
+  'feeSchedules',
+  'paymentMethods',
+  'paymentProviders',
+  'notificationTemplates',
+  'reportSchedules',
+  'rules',
+  'accessOverrides',
+  'forms',
+  'taskGrades',
+  'rewardTypes',
+  'campaignTemplates',
+  'placementTests',
+  'cardTypes',
+};
+
+const Set<String> kApiDeletableResources = {
+  'devices',
+  'staff',
+  'branches',
+  'departments',
+  'rooms',
+  'enrollmentReasons',
+  'students',
+  'guardians',
+  'pickups',
+  'parents',
+  'teachers',
+  'groups',
+  'terms',
+  'timeslots',
+  'lessonTypes',
+  'scheduleRules',
+  'subjects',
+  'examTypes',
+  'exams',
+  'assignments',
+  'feeSchedules',
+  'paymentMethods',
+  'paymentProviders',
+  'notificationTemplates',
+  'rules',
+  'accessOverrides',
+  'forms',
+  'taskGrades',
+  'doNotContact',
+  'placementTests',
+};
+
+const Set<String> kApiDetailResources = {
+  'users',
+  'students',
+  'teachers',
+  'groups',
+  'parents',
+  'guardians',
+  'pickups',
+  'enrollmentReasons',
+  'payments',
+  'attendanceRecords',
+  'staff',
+  'departments',
+  'branches',
+  'rooms',
+  'transfers',
+  'approvals',
+  'approvalLedger',
+  'meetings',
+  'threads',
+  'schedule',
+  'terms',
+  'timeslots',
+  'lessonTypes',
+  'scheduleRules',
+  'subjects',
+  'examTypes',
+  'exams',
+  'grades',
+  'transcripts',
+  'assignments',
+  'submissions',
+  'contentLibraries',
+  'contentCourses',
+  'contentModules',
+  'contentLessons',
+  'contentFolders',
+  'contentFiles',
+  'contentMaterials',
+  'printJobs',
+  'printers',
+  'printAgents',
+  'invoices',
+  'expenses',
+  'discounts',
+  'cashierShifts',
+  'paymentMethods',
+  'feeSchedules',
+  'paymentProviders',
+  'notificationTemplates',
+  'studentRisk',
+  'audit',
+  'aiRequests',
+  'reports',
+  'reportRuns',
+  'reportSchedules',
+  'rules',
+  'penalties',
+  'accessOverrides',
+  'forms',
+  'taskGrades',
+  'tasks',
+  'achievements',
+  'rewardTypes',
+  'rewardGrants',
+  'covers',
+  'loans',
+  'procurement',
+  'doNotContact',
+  'campaignTemplates',
+  'campaigns',
+  'sales',
+  'placementTests',
+  'placementAttempts',
+  'placementProposals',
+  'cardTypes',
+  'cards',
 };
 
 /// Read-only endpoints whose response is an object/summary rather than a
@@ -1016,26 +1470,238 @@ const Map<String, String> kApiDocuments = {
   'aiUsage': '/api/v1/ai/usage-report/',
   'aiBudget': '/api/v1/ai/budget/',
   'unreadNotifications': '/api/v1/notifications/unread-count/',
+  'notificationPreferences': '/api/v1/notifications/preferences/',
   'organizationSettings': '/api/v1/org/settings/',
+  'systemApps': '/api/v1/org/system/apps/',
+  'studentDashboard': '/api/v1/students/me/dashboard/',
+  'studentReport': '/api/v1/students/me/report/',
+  'studentBirthdays': '/api/v1/students/birthdays/',
+  'attendanceExport': '/api/v1/attendance/export/',
+  'honorRoll': '/api/v1/academics/honor-roll/',
+  'academicWarnings': '/api/v1/academics/warnings/',
+  'walletMe': '/api/v1/cards/wallets/me/',
+  'parentMyChildren': '/api/v1/parents/me/children/',
+  'auditExport': '/api/v1/audit/export/',
+  'scheduleIcalUrl': '/api/v1/schedule/ical-url/',
+};
+
+const Set<String> kApiBootstrapDocuments = {
+  'studentStats',
+  'unreadNotifications',
+};
+
+/// Minimum read capability for resources that are warmed automatically.
+///
+/// This is intentionally limited to resources used by bootstrap/dashboard.
+/// Purpose-built pages still let the backend be authoritative, while startup
+/// no longer probes endpoints a read-only role cannot access.
+const Map<String, String> _apiResourceReadPermissions = {
+  'students': 'students:read',
+  'studentStats': 'students:read',
+  'teachers': 'teachers:read',
+  'groups': 'cohorts:read',
+  'parents': 'parents:read',
+  'payments': 'payments:read',
+  'invoices': 'finance:read',
+  'attendanceRecords': 'attendance:read',
+  'staff': 'users:read',
+  'departments': 'org:read',
+  'branches': 'org:read',
+  'approvals': 'approvals:read',
+  'meetings': 'meeting:read',
+  'threads': 'messaging:read',
+  'schedule': 'schedule:read',
+  'notifications': 'notifications:read',
+  'unreadNotifications': 'notifications:read',
+  'studentRisk': 'intelligence:read',
+  'audit': 'audit:read',
 };
 
 /// App-level authenticated session and live resource cache. It keeps no demo
 /// data: after login, each page reads this exact server snapshot and mutations
 /// reload only the affected resources.
 class ApiSession extends ChangeNotifier {
+  static const Duration _resourceFreshness = Duration(seconds: 30);
+
   final StarforgeApiClient client;
   final Map<String, List<Map<String, dynamic>>> collections = {};
   final Map<String, Map<String, dynamic>> collectionPagination = {};
   final Map<String, ApiException> lastResourceErrors = {};
   final Map<String, dynamic> documents = {};
+  final Map<String, DateTime> _loadedAt = {};
+  final Map<String, Future<void>> _refreshInFlight = {};
+  DateTime? _rateLimitedUntil;
+  ApiException? _rateLimitCause;
   Map<String, dynamic>? me;
   bool loading = false;
   String? lastError;
 
   ApiSession({StarforgeApiClient? client})
-    : client = client ?? StarforgeApiClient();
+    : client = client ?? StarforgeApiClient() {
+    this.client.onUnauthorized = _expireSession;
+  }
 
   bool get authenticated => client.hasSession;
+
+  Set<String> get grantedPermissions {
+    final profile = me;
+    if (profile == null) return const {};
+    final collected = <String>{};
+
+    void addValue(Object? value) {
+      if (value is String) {
+        final permission = value.trim().toLowerCase();
+        if (permission.isNotEmpty) collected.add(permission);
+        return;
+      }
+      if (value is Iterable) {
+        for (final item in value) {
+          addValue(item);
+        }
+        return;
+      }
+      final map = _asMap(value);
+      if (map == null) return;
+      final direct = apiValue(map, const [
+        'code',
+        'slug',
+        'permission',
+        'name',
+      ]);
+      if (direct != null) addValue(direct);
+      for (final key in const [
+        'permissions',
+        'permission_codes',
+        'capabilities',
+        'grants',
+      ]) {
+        addValue(map[key]);
+      }
+    }
+
+    for (final key in const [
+      'permissions',
+      'permission_codes',
+      'capabilities',
+      'grants',
+      'role',
+      'roles',
+    ]) {
+      final value = profile[key];
+      if (key == 'role' && value is String) continue;
+      addValue(value);
+    }
+    return Set.unmodifiable(collected);
+  }
+
+  Set<String> get revokedPermissions {
+    final profile = me;
+    if (profile == null) return const {};
+    final collected = <String>{};
+
+    void addValue(Object? value) {
+      if (value is String) {
+        final permission = value.trim().toLowerCase();
+        if (permission.isNotEmpty) collected.add(permission);
+      } else if (value is Iterable) {
+        for (final item in value) {
+          addValue(item);
+        }
+      }
+    }
+
+    addValue(profile['revoked_permissions']);
+    addValue(profile['revoked_permission_codes']);
+    return Set.unmodifiable(collected);
+  }
+
+  bool hasPermission(String permission) {
+    final granted = grantedPermissions;
+    if (granted.isEmpty) {
+      final profile = me;
+      final serverPublishedCapabilities =
+          profile != null &&
+          const [
+            'permissions',
+            'permission_codes',
+            'capabilities',
+            'grants',
+          ].any(profile.containsKey);
+      // Compatibility for older profiles that genuinely omit capabilities.
+      // Once the backend publishes an empty list it is authoritative and the
+      // UI fails closed instead of probing every endpoint with 403 requests.
+      return !serverPublishedCapabilities;
+    }
+    final wanted = permission.trim().toLowerCase();
+    final namespace = wanted.split(':').first;
+    final revoked = revokedPermissions;
+    if (revoked.contains(wanted) || revoked.contains('$namespace:*')) {
+      return false;
+    }
+    return granted.contains(wanted) ||
+        granted.contains('*') ||
+        granted.contains('*:*') ||
+        granted.contains('$namespace:*');
+  }
+
+  bool _mayReadResource(String resource) {
+    final permission = _apiResourceReadPermissions[resource];
+    return permission == null || hasPermission(permission);
+  }
+
+  bool _isFresh(String resource) {
+    final loadedAt = _loadedAt[resource];
+    return loadedAt != null &&
+        DateTime.now().difference(loadedAt) < _resourceFreshness;
+  }
+
+  ApiException? _activeRateLimit() {
+    final until = _rateLimitedUntil;
+    final cause = _rateLimitCause;
+    if (until == null || cause == null) return null;
+    final remaining = until.difference(DateTime.now());
+    if (remaining <= Duration.zero) {
+      _rateLimitedUntil = null;
+      _rateLimitCause = null;
+      return null;
+    }
+    return ApiException(
+      status: _HttpStatus.tooManyRequests,
+      code: cause.code ?? 'throttled',
+      message: cause.message,
+      requestId: cause.requestId,
+      errors: cause.errors,
+      retryAfter: remaining,
+    );
+  }
+
+  void _rememberRateLimit(ApiException error) {
+    if (error.status != _HttpStatus.tooManyRequests) return;
+    final retryAfter = error.retryAfter ?? const Duration(seconds: 60);
+    final candidate = DateTime.now().add(retryAfter);
+    if (_rateLimitedUntil == null || candidate.isAfter(_rateLimitedUntil!)) {
+      _rateLimitedUntil = candidate;
+      _rateLimitCause = error;
+    }
+  }
+
+  void _clearRequestState() {
+    _loadedAt.clear();
+    _refreshInFlight.clear();
+    _rateLimitedUntil = null;
+    _rateLimitCause = null;
+  }
+
+  void _expireSession() {
+    collections.clear();
+    collectionPagination.clear();
+    lastResourceErrors.clear();
+    documents.clear();
+    me = null;
+    _clearRequestState();
+    lastError = 'Session expired. Sign in again.';
+    notifyListeners();
+  }
 
   List<Map<String, dynamic>> records(String name) =>
       collections[name] ?? const [];
@@ -1211,7 +1877,13 @@ class ApiSession extends ChangeNotifier {
       0,
       (sum, row) =>
           sum +
-          (apiNumber(row, const ['amount', 'paid_amount', 'total', 'value']) ??
+          (apiNumber(row, const [
+                'amount_uzs',
+                'amount',
+                'paid_amount',
+                'total',
+                'value',
+              ]) ??
               0),
     );
     final debt = students.fold<num>(
@@ -1326,18 +1998,6 @@ class ApiSession extends ChangeNotifier {
     relationKeys: const ['department_id', 'department_name', 'department'],
   );
 
-  List<Map<String, dynamic>> get departmentRanking {
-    final result = [...records('departments')];
-    result.sort((a, b) {
-      final aRating =
-          apiNumber(a, const ['rating', 'score', 'performance_score']) ?? 0;
-      final bRating =
-          apiNumber(b, const ['rating', 'score', 'performance_score']) ?? 0;
-      return bRating.compareTo(aRating);
-    });
-    return result;
-  }
-
   ApiPaymentDetails? paymentDetails(Object? id) {
     final record = recordById('payments', id);
     return record == null ? null : ApiPaymentDetails(record);
@@ -1369,20 +2029,77 @@ class ApiSession extends ChangeNotifier {
       await client.login(username: username, password: password);
       final profile = await client.request('GET', '/api/v1/users/me/');
       me = _asMap(profile);
+      if (me == null) {
+        throw ApiException(
+          status: _HttpStatus.badGateway,
+          message: 'The server returned an invalid account profile.',
+          code: 'invalid_profile_response',
+          requestId: _requestId(),
+        );
+      }
       await reloadAll();
     } on ApiException catch (error) {
-      client.clearSession();
-      collections.clear();
-      collectionPagination.clear();
-      lastResourceErrors.clear();
-      documents.clear();
-      me = null;
+      _clearLoginState();
       lastError = error.message;
       rethrow;
+    } catch (error) {
+      _clearLoginState();
+      final wrapped = ApiException(
+        status: 0,
+        message: 'Unexpected login failure (${error.runtimeType}).',
+        code: 'login_client_error',
+        requestId: _requestId(),
+      );
+      lastError = wrapped.message;
+      throw wrapped;
     } finally {
       loading = false;
       notifyListeners();
     }
+  }
+
+  void _clearLoginState() {
+    client.clearSession();
+    collections.clear();
+    collectionPagination.clear();
+    lastResourceErrors.clear();
+    documents.clear();
+    me = null;
+    _clearRequestState();
+  }
+
+  Future<void> requestPasswordReset({
+    required String endpoint,
+    required String phone,
+    String language = 'uz',
+  }) async {
+    client.configure(baseUrl: endpoint, language: language);
+    await client.requestPasswordReset(phone);
+  }
+
+  Future<void> confirmPasswordReset({
+    required String endpoint,
+    required String phone,
+    required String code,
+    required String newPassword,
+    String language = 'uz',
+  }) async {
+    client.configure(baseUrl: endpoint, language: language);
+    await client.confirmPasswordReset(
+      phone: phone,
+      code: code,
+      newPassword: newPassword,
+    );
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await client.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
   }
 
   Future<String> resolveTenant(String slug) async {
@@ -1401,24 +2118,47 @@ class ApiSession extends ChangeNotifier {
   }
 
   Future<void> reloadAll() async {
-    final entries = kApiResources.entries.toList(growable: false);
+    final entries = kApiResources.entries
+        .where(
+          (entry) =>
+              kApiBootstrapResources.contains(entry.key) &&
+              _mayReadResource(entry.key),
+        )
+        .toList(growable: false);
     final resourceErrors = <String, ApiException>{};
     final values = await Future.wait(
       entries.map((entry) async {
         try {
-          return MapEntry(entry.key, await client.list(entry.value));
+          return MapEntry(
+            entry.key,
+            await _loadCollection(entry.key, entry.value),
+          );
         } on ApiException catch (error) {
-          // Permission-scoped resources may correctly be forbidden for a role;
-          // preserve the rest of the console and surface that page's state.
-          if (error.status == HttpStatus.forbidden ||
-              error.status == HttpStatus.notFound) {
-            resourceErrors[entry.key] = error;
-            return MapEntry(
-              entry.key,
-              const ApiPage(items: <Map<String, dynamic>>[]),
-            );
+          _rememberRateLimit(error);
+          // `/auth/login` and `/users/me` are the session boundary. Once both
+          // succeeded, a role-scoped or temporarily unhealthy optional
+          // collection must not throw the user back to the login screen.
+          // Preserve the error for the owning page and keep loading the rest.
+          if (error.isUnauthorized ||
+              error.status == _HttpStatus.paymentRequired) {
+            rethrow;
           }
-          rethrow;
+          resourceErrors[entry.key] = error;
+          return MapEntry(
+            entry.key,
+            const ApiPage(items: <Map<String, dynamic>>[]),
+          );
+        } catch (_) {
+          resourceErrors[entry.key] = ApiException(
+            status: 0,
+            message: 'The server returned invalid ${entry.key} data.',
+            code: 'invalid_resource_response',
+            requestId: _requestId(),
+          );
+          return MapEntry(
+            entry.key,
+            const ApiPage(items: <Map<String, dynamic>>[]),
+          );
         }
       }),
     );
@@ -1437,34 +2177,94 @@ class ApiSession extends ChangeNotifier {
     lastResourceErrors
       ..clear()
       ..addAll(resourceErrors);
+    final loadedAt = DateTime.now();
+    for (final entry in values) {
+      if (!resourceErrors.containsKey(entry.key)) {
+        _loadedAt[entry.key] = loadedAt;
+      }
+    }
     await _reloadDocuments();
     notifyListeners();
   }
 
+  Future<ApiPage> _loadCollection(String name, String path) =>
+      kApiSinglePageResources.contains(name)
+      ? client.listPage(path, page: 1, pageSize: 200)
+      : client.list(path);
+
   Future<void> _reloadDocuments() async {
     final values = await Future.wait(
-      kApiDocuments.entries.map((entry) async {
-        try {
-          return MapEntry(entry.key, await client.request('GET', entry.value));
-        } on ApiException catch (error) {
-          if (error.status == HttpStatus.forbidden ||
-              error.status == HttpStatus.notFound) {
-            return MapEntry(entry.key, null);
-          }
-          rethrow;
-        }
-      }),
+      kApiDocuments.entries
+          .where(
+            (entry) =>
+                kApiBootstrapDocuments.contains(entry.key) &&
+                _mayReadResource(entry.key),
+          )
+          .map((entry) async {
+            try {
+              return MapEntry(
+                entry.key,
+                await client.request('GET', entry.value),
+              );
+            } on ApiException catch (error) {
+              _rememberRateLimit(error);
+              if (error.isUnauthorized ||
+                  error.status == _HttpStatus.paymentRequired) {
+                rethrow;
+              }
+              lastResourceErrors[entry.key] = error;
+              return MapEntry(entry.key, null);
+            } catch (_) {
+              lastResourceErrors[entry.key] = ApiException(
+                status: 0,
+                message: 'The server returned invalid ${entry.key} data.',
+                code: 'invalid_resource_response',
+                requestId: _requestId(),
+              );
+              return MapEntry(entry.key, null);
+            }
+          }),
     );
     documents
       ..clear()
       ..addEntries(values);
+    final loadedAt = DateTime.now();
+    for (final entry in values) {
+      if (!lastResourceErrors.containsKey(entry.key)) {
+        _loadedAt[entry.key] = loadedAt;
+      }
+    }
   }
 
-  Future<void> refresh(String collection) async {
+  Future<void> refresh(String collection, {bool force = false}) {
+    final inFlight = _refreshInFlight[collection];
+    if (inFlight != null) return inFlight;
+    if (!force && _isFresh(collection)) return Future<void>.value();
+    final rateLimit = _activeRateLimit();
+    if (rateLimit != null) return Future<void>.error(rateLimit);
+
+    final future = _refreshNow(collection);
+    _refreshInFlight[collection] = future;
+    future.then<void>(
+      (_) {
+        if (identical(_refreshInFlight[collection], future)) {
+          _refreshInFlight.remove(collection);
+        }
+      },
+      onError: (Object _, StackTrace _) {
+        if (identical(_refreshInFlight[collection], future)) {
+          _refreshInFlight.remove(collection);
+        }
+      },
+    );
+    return future;
+  }
+
+  Future<void> _refreshNow(String collection) async {
     final path = kApiResources[collection];
     if (path != null) {
       try {
-        final page = await client.list(path);
+        final page = await _loadCollection(collection, path);
         collections[collection] = page.items;
         if (page.pagination == null) {
           collectionPagination.remove(collection);
@@ -1472,8 +2272,10 @@ class ApiSession extends ChangeNotifier {
           collectionPagination[collection] = page.pagination!;
         }
         lastResourceErrors.remove(collection);
+        _loadedAt[collection] = DateTime.now();
         notifyListeners();
       } on ApiException catch (error) {
+        _rememberRateLimit(error);
         lastResourceErrors[collection] = error;
         notifyListeners();
         rethrow;
@@ -1482,8 +2284,17 @@ class ApiSession extends ChangeNotifier {
     }
     final documentPath = kApiDocuments[collection];
     if (documentPath == null) return;
-    documents[collection] = await client.request('GET', documentPath);
-    notifyListeners();
+    try {
+      documents[collection] = await client.request('GET', documentPath);
+      lastResourceErrors.remove(collection);
+      _loadedAt[collection] = DateTime.now();
+      notifyListeners();
+    } on ApiException catch (error) {
+      _rememberRateLimit(error);
+      lastResourceErrors[collection] = error;
+      notifyListeners();
+      rethrow;
+    }
   }
 
   /// Refreshes the exact resources used by the dashboard.  This is deliberately
@@ -1492,6 +2303,7 @@ class ApiSession extends ChangeNotifier {
   Future<void> refreshDashboard() async {
     const resources = <String>[
       'payments',
+      'invoices',
       'students',
       'staff',
       'teachers',
@@ -1499,19 +2311,18 @@ class ApiSession extends ChangeNotifier {
       'attendanceRecords',
       'studentRisk',
       'audit',
-      'attendanceSummary',
       'unreadNotifications',
     ];
     await Future.wait(
-      resources.map((resource) async {
+      resources.where(_mayReadResource).map((resource) async {
         try {
           await refresh(resource);
         } on ApiException catch (error) {
           // A role can legitimately be unable to read a dashboard dimension.
           // Keep the rest of the cards fresh and let its dedicated page show the
           // permission state instead of failing the whole dashboard.
-          if (error.status != HttpStatus.forbidden &&
-              error.status != HttpStatus.notFound) {
+          if (error.status != _HttpStatus.forbidden &&
+              error.status != _HttpStatus.notFound) {
             rethrow;
           }
         }
@@ -1530,12 +2341,72 @@ class ApiSession extends ChangeNotifier {
       ? (await client.list(path, query: query)).items
       : client.request('GET', path, query: query);
 
+  /// Executes one operation from the generated OpenAPI catalogue.
+  ///
+  /// Path templates are resolved only from declared parameters, and the
+  /// operation itself must match the immutable generated registry. This gives
+  /// the advanced API centre full schema coverage without accepting arbitrary
+  /// operator-entered URLs.
+  Future<dynamic> executePublishedOperation(
+    ApiOperationSpec operation, {
+    Map<String, String> pathParameters = const {},
+    Map<String, Object?> query = const {},
+    Object? body,
+  }) async {
+    final published = kPublishedApiOperations.any(
+      (candidate) =>
+          candidate.operationId == operation.operationId &&
+          candidate.method == operation.method &&
+          candidate.path == operation.path,
+    );
+    if (!published) {
+      throw ArgumentError.value(
+        operation.operationId,
+        'operation',
+        'Operation is not present in the published OpenAPI catalogue',
+      );
+    }
+    var path = operation.path;
+    for (final name in operation.pathParameters) {
+      final value = pathParameters[name]?.trim() ?? '';
+      if (value.isEmpty) {
+        throw ArgumentError.value(
+          value,
+          name,
+          'Required API path parameter is empty',
+        );
+      }
+      path = path.replaceAll('{$name}', Uri.encodeComponent(value));
+    }
+    if (RegExp(r'\{[^}]+\}').hasMatch(path)) {
+      throw ArgumentError.value(path, 'path', 'Unresolved path parameter');
+    }
+    final cleanQuery = <String, Object?>{
+      for (final entry in query.entries)
+        if (entry.value != null && '${entry.value}'.trim().isNotEmpty)
+          entry.key: entry.value,
+    };
+    if (operation.method == 'GET') {
+      return client.request('GET', path, query: cleanQuery);
+    }
+    return action(
+      operation.method,
+      path,
+      body: operation.acceptsBody ? body : null,
+    );
+  }
+
   /// Fetches one detail response for a listed resource. This lets profile
   /// pages display all backend fields even when list serializers are compact.
   Future<Map<String, dynamic>?> detail(String resource, Object? id) async {
     final path = kApiResources[resource];
     final value = id?.toString().trim();
-    if (path == null || value == null || value.isEmpty) return null;
+    if (path == null ||
+        value == null ||
+        value.isEmpty ||
+        !kApiDetailResources.contains(resource)) {
+      return null;
+    }
     final safeId = Uri.encodeComponent(value);
     final data = await client.request('GET', '$path$safeId/');
     return _asMap(data);
@@ -1547,9 +2418,156 @@ class ApiSession extends ChangeNotifier {
     Object? body,
     Iterable<String> refreshResources = const [],
   }) async {
-    final result = await client.request(method, path, body: body);
-    await Future.wait(refreshResources.map(refresh));
+    final normalizedMethod = method.toUpperCase();
+    final requestBody =
+        body ??
+        (normalizedMethod == 'POST' ||
+                normalizedMethod == 'PUT' ||
+                normalizedMethod == 'PATCH'
+            ? const <String, Object?>{}
+            : null);
+    final result = await client.request(
+      normalizedMethod,
+      path,
+      body: requestBody,
+    );
+    try {
+      await Future.wait(
+        refreshResources.map((resource) => refresh(resource, force: true)),
+      );
+    } on ApiException catch (error) {
+      // The mutation has already succeeded. A failed follow-up GET must not
+      // invite the operator to repeat a payment or approval command.
+      lastError =
+          'Action completed, but fresh data could not be loaded: '
+          '${error.message}';
+      notifyListeners();
+    }
     return result;
+  }
+
+  Future<Map<String, dynamic>?> create(
+    String resource,
+    Map<String, Object?> body,
+  ) async {
+    final path = kApiResources[resource];
+    if (path == null) {
+      throw ArgumentError.value(resource, 'resource', 'Unknown API resource');
+    }
+    if (!kApiCreatableResources.contains(resource)) {
+      throw UnsupportedError('POST is not published for $resource');
+    }
+    final result = await action(
+      'POST',
+      path,
+      body: body,
+      refreshResources: [resource],
+    );
+    return _asMap(result);
+  }
+
+  Future<Map<String, dynamic>?> update(
+    String resource,
+    Object id,
+    Map<String, Object?> body, {
+    bool replace = false,
+  }) async {
+    final path = kApiResources[resource];
+    final value = id.toString().trim();
+    if (path == null || value.isEmpty) {
+      throw ArgumentError.value(resource, 'resource', 'Unknown API resource');
+    }
+    if (!kApiUpdatableResources.contains(resource)) {
+      throw UnsupportedError('PATCH/PUT is not published for $resource');
+    }
+    final result = await action(
+      replace ? 'PUT' : 'PATCH',
+      '$path${Uri.encodeComponent(value)}/',
+      body: body,
+      refreshResources: [resource],
+    );
+    return _asMap(result);
+  }
+
+  Future<void> remove(String resource, Object id) async {
+    final path = kApiResources[resource];
+    final value = id.toString().trim();
+    if (path == null || value.isEmpty) {
+      throw ArgumentError.value(resource, 'resource', 'Unknown API resource');
+    }
+    if (!kApiDeletableResources.contains(resource)) {
+      throw UnsupportedError('DELETE is not published for $resource');
+    }
+    await action(
+      'DELETE',
+      '$path${Uri.encodeComponent(value)}/',
+      refreshResources: [resource],
+    );
+  }
+
+  Future<dynamic> resourceAction(
+    String resource,
+    Object id,
+    String operation, {
+    Object? body,
+    Iterable<String> refreshResources = const [],
+  }) {
+    final path = kApiResources[resource];
+    final value = id.toString().trim();
+    final actionName = operation.trim().replaceAll(RegExp(r'^/+|/+$'), '');
+    if (path == null || value.isEmpty || actionName.isEmpty) {
+      throw ArgumentError.value(resource, 'resource', 'Invalid API action');
+    }
+    return action(
+      'POST',
+      '$path${Uri.encodeComponent(value)}/$actionName/',
+      body: body ?? const <String, Object?>{},
+      refreshResources: {resource, ...refreshResources},
+    );
+  }
+
+  Future<Map<String, dynamic>?> teacherPayoutPolicy(Object teacherId) async {
+    final id = Uri.encodeComponent(teacherId.toString().trim());
+    if (id.isEmpty) {
+      throw ArgumentError.value(teacherId, 'teacherId', 'Missing teacher id');
+    }
+    final result = await client.request(
+      'GET',
+      '/api/v1/teachers/$id/payout-policy/',
+    );
+    return _asMap(result);
+  }
+
+  Future<Map<String, dynamic>?> saveTeacherPayoutPolicy(
+    Object teacherId,
+    Map<String, Object?> body,
+  ) async {
+    final id = Uri.encodeComponent(teacherId.toString().trim());
+    if (id.isEmpty) {
+      throw ArgumentError.value(teacherId, 'teacherId', 'Missing teacher id');
+    }
+    final result = await action(
+      'PUT',
+      '/api/v1/teachers/$id/payout-policy/',
+      body: body,
+      refreshResources: const ['teachers'],
+    );
+    return _asMap(result);
+  }
+
+  Future<ApiPage> threadMessages(Object threadId) {
+    final id = Uri.encodeComponent(threadId.toString().trim());
+    return client.list('/api/v1/messaging/threads/$id/messages/');
+  }
+
+  Future<void> sendThreadMessage(Object threadId, String text) async {
+    final id = Uri.encodeComponent(threadId.toString().trim());
+    await action(
+      'POST',
+      '/api/v1/messaging/threads/$id/messages/',
+      body: {'text': text.trim()},
+      refreshResources: const ['threads'],
+    );
   }
 
   /// Sends a prompt only to the published AI endpoint. There is deliberately
@@ -1559,16 +2577,30 @@ class ApiSession extends ChangeNotifier {
     final value = prompt.trim();
     if (!authenticated) {
       throw ApiException(
-        status: HttpStatus.unauthorized,
+        status: _HttpStatus.unauthorized,
         message: 'AI backend is not connected.',
         requestId: 'local-ai-unavailable',
       );
     }
-    final result = await client.request(
-      'POST',
-      kApiResources['aiRequests']!,
-      body: {'prompt': value},
+    if (value.isEmpty) {
+      throw ApiException(
+        status: _HttpStatus.badRequest,
+        message: 'Enter a prompt.',
+        requestId: 'local-ai-empty',
+      );
+    }
+    // The supplied OpenAPI contract publishes AI request history (GET) and
+    // exam generation (POST), but no general assistant prompt operation.
+    // Never invent a POST to the read-only history collection.
+    throw const ApiException(
+      status: _HttpStatus.notImplemented,
+      code: 'ai_prompt_endpoint_not_published',
+      message:
+          'AI prompt endpoint is not published by this backend yet. '
+          'Request history remains available in AI monitoring.',
+      requestId: 'openapi-ai-prompt-missing',
     );
+    /*
     if (result is String && result.trim().isNotEmpty) return result.trim();
     final payload = _asMap(result);
     final nested = _asMap(payload?['data']) ?? _asMap(payload?['result']);
@@ -1599,6 +2631,7 @@ class ApiSession extends ChangeNotifier {
       );
     }
     return text;
+    */
   }
 
   Future<void> logout() async {
@@ -1616,9 +2649,16 @@ class ApiSession extends ChangeNotifier {
       lastResourceErrors.clear();
       documents.clear();
       me = null;
+      _clearRequestState();
       loading = false;
       notifyListeners();
     }
+  }
+
+  @override
+  void dispose() {
+    client.onUnauthorized = null;
+    super.dispose();
   }
 }
 

@@ -1,6 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'data.dart';
+import 'i18n.dart';
 import 'reference_ui.dart';
 import 'screens.dart';
 import 'store.dart';
@@ -22,8 +25,12 @@ class _WebGroupsPageState extends State<WebGroupsPage> {
   final _search = TextEditingController();
   String _query = '';
   int _status = 0;
-  int _page = 1;
-  int _pageSize = 5;
+  String _branch = '';
+  String _teacher = '';
+  String _level = '';
+  int _attendance = 0;
+  int _debt = 0;
+  DateTimeRange? _range;
 
   @override
   void dispose() {
@@ -31,11 +38,419 @@ class _WebGroupsPageState extends State<WebGroupsPage> {
     super.dispose();
   }
 
+  bool _groupMatchesRange(AppStore store, GroupInfo group) {
+    final range = _range;
+    if (range == null) return true;
+    final end = DateTime(
+      range.end.year,
+      range.end.month,
+      range.end.day,
+      23,
+      59,
+      59,
+    );
+    return store.students
+        .where((student) => student.group == group.name)
+        .map((student) => _webDate(studentProfile(student).enrolled))
+        .whereType<DateTime>()
+        .any((date) => !date.isBefore(range.start) && !date.isAfter(end));
+  }
+
+  Future<void> _pickRange() async {
+    final value = await showRefDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now(),
+      initialDateRange: _range,
+      title: tx(
+        context,
+        uz: 'O‘quvchilar boshlagan davr',
+        ru: 'Период начала обучения',
+        en: 'Education start period',
+      ),
+    );
+    if (value != null && mounted) setState(() => _range = value);
+  }
+
+  Future<void> _openFilters({
+    required List<String> branches,
+    required List<String> teachers,
+    required List<String> levels,
+  }) async {
+    final c = SfTheme.of(context);
+    var status = _status;
+    var branch = _branch;
+    var teacher = _teacher;
+    var level = _level;
+    var attendance = _attendance;
+    var debt = _debt;
+
+    final shouldApply = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => SfTheme(
+        colors: c,
+        child: StatefulBuilder(
+          builder: (context, updateSheet) {
+            InputDecoration decoration(String label) => InputDecoration(
+              labelText: label,
+              filled: true,
+              fillColor: c.surface2,
+              border: OutlineInputBorder(
+                borderRadius: RefRadius.md,
+                borderSide: BorderSide(color: c.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: RefRadius.md,
+                borderSide: BorderSide(color: c.border),
+              ),
+            );
+
+            return SafeArea(
+              top: false,
+              child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .88,
+                ),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(26),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 8, 8),
+                      child: RefSectionHeader(
+                        title: tx(
+                          context,
+                          uz: 'Guruh filtrlari',
+                          ru: 'Фильтры групп',
+                          en: 'Group filters',
+                        ),
+                        subtitle: tx(
+                          context,
+                          uz: 'Kerakli parametrlarni tanlang',
+                          ru: 'Выберите нужные параметры',
+                          en: 'Choose the required parameters',
+                        ),
+                        trailing: IconButton(
+                          tooltip: tx(
+                            context,
+                            uz: 'Yopish',
+                            ru: 'Закрыть',
+                            en: 'Close',
+                          ),
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+                        children: [
+                          DropdownButtonFormField<int>(
+                            key: const ValueKey('groups-filter-status'),
+                            initialValue: status,
+                            decoration: decoration(
+                              tx(
+                                context,
+                                uz: 'Holat',
+                                ru: 'Статус',
+                                en: 'Status',
+                              ),
+                            ),
+                            items: [
+                              DropdownMenuItem(
+                                value: 0,
+                                child: Text(tr(context, 'f_all')),
+                              ),
+                              DropdownMenuItem(
+                                value: 1,
+                                child: Text(tr(context, 'status_active')),
+                              ),
+                              DropdownMenuItem(
+                                value: 2,
+                                child: Text(tr(context, 'status_paused')),
+                              ),
+                              DropdownMenuItem(
+                                value: 3,
+                                child: Text(tr(context, 'f_debtor')),
+                              ),
+                            ],
+                            onChanged: (value) =>
+                                updateSheet(() => status = value ?? 0),
+                          ),
+                          const SizedBox(height: 12),
+                          _WebFilterDropdown(
+                            label: tr(context, 'filter_branch'),
+                            value: branch,
+                            values: branches,
+                            decoration: decoration(
+                              tr(context, 'filter_branch'),
+                            ),
+                            onChanged: (value) =>
+                                updateSheet(() => branch = value),
+                          ),
+                          const SizedBox(height: 12),
+                          _WebFilterDropdown(
+                            label: tr(context, 'group_teacher'),
+                            value: teacher,
+                            values: teachers,
+                            decoration: decoration(
+                              tr(context, 'group_teacher'),
+                            ),
+                            onChanged: (value) =>
+                                updateSheet(() => teacher = value),
+                          ),
+                          const SizedBox(height: 12),
+                          _WebFilterDropdown(
+                            label: tr(context, 'filter_level'),
+                            value: level,
+                            values: levels,
+                            decoration: decoration(tr(context, 'filter_level')),
+                            onChanged: (value) =>
+                                updateSheet(() => level = value),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<int>(
+                            key: const ValueKey('groups-filter-attendance'),
+                            initialValue: attendance,
+                            decoration: decoration(
+                              tr(context, 'stat_attendance'),
+                            ),
+                            items: [
+                              DropdownMenuItem(
+                                value: 0,
+                                child: Text(tr(context, 'f_all')),
+                              ),
+                              const DropdownMenuItem(
+                                value: 1,
+                                child: Text('90%+'),
+                              ),
+                              const DropdownMenuItem(
+                                value: 2,
+                                child: Text('75–89%'),
+                              ),
+                              DropdownMenuItem(
+                                value: 3,
+                                child: Text(
+                                  tx(
+                                    context,
+                                    uz: '75% gacha',
+                                    ru: 'До 75%',
+                                    en: 'Below 75%',
+                                  ),
+                                ),
+                              ),
+                            ],
+                            onChanged: (value) =>
+                                updateSheet(() => attendance = value ?? 0),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<int>(
+                            key: const ValueKey('groups-filter-debt'),
+                            initialValue: debt,
+                            decoration: decoration(tr(context, 'stat_debt')),
+                            items: [
+                              DropdownMenuItem(
+                                value: 0,
+                                child: Text(tr(context, 'f_all')),
+                              ),
+                              DropdownMenuItem(
+                                value: 1,
+                                child: Text(
+                                  tx(
+                                    context,
+                                    uz: 'Qarzsiz',
+                                    ru: 'Без долга',
+                                    en: 'No debt',
+                                  ),
+                                ),
+                              ),
+                              DropdownMenuItem(
+                                value: 2,
+                                child: Text(
+                                  tx(
+                                    context,
+                                    uz: 'Qarz bor',
+                                    ru: 'Есть долг',
+                                    en: 'Has debt',
+                                  ),
+                                ),
+                              ),
+                            ],
+                            onChanged: (value) =>
+                                updateSheet(() => debt = value ?? 0),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              key: const ValueKey('groups-reset-filters'),
+                              onPressed: () => updateSheet(() {
+                                status = 0;
+                                branch = '';
+                                teacher = '';
+                                level = '';
+                                attendance = 0;
+                                debt = 0;
+                              }),
+                              icon: const Icon(Icons.restart_alt_rounded),
+                              label: Text(
+                                tx(
+                                  context,
+                                  uz: 'Tiklash',
+                                  ru: 'Сбросить',
+                                  en: 'Reset',
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton.icon(
+                              key: const ValueKey('groups-apply-filters'),
+                              onPressed: () =>
+                                  Navigator.of(sheetContext).pop(true),
+                              icon: const Icon(Icons.check_rounded),
+                              label: Text(
+                                tx(
+                                  context,
+                                  uz: 'Qo‘llash',
+                                  ru: 'Применить',
+                                  en: 'Apply',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    if (shouldApply != true || !mounted) return;
+    setState(() {
+      _status = status;
+      _branch = branch;
+      _teacher = teacher;
+      _level = level;
+      _attendance = attendance;
+      _debt = debt;
+    });
+  }
+
+  Future<void> _openStudents(
+    AppStore store,
+    List<GroupInfo> selectedGroups,
+  ) async {
+    final names = selectedGroups.map((group) => group.name).toSet();
+    final students = store.students
+        .where((student) => names.contains(student.group))
+        .toList();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final c = SfTheme.of(context);
+        return SfTheme(
+          colors: c,
+          child: DraggableScrollableSheet(
+            initialChildSize: .72,
+            minChildSize: .45,
+            maxChildSize: .94,
+            expand: false,
+            builder: (_, controller) => Container(
+              decoration: BoxDecoration(
+                color: c.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(26),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 16, 8, 8),
+                    child: RefSectionHeader(
+                      title: tx(
+                        context,
+                        uz: 'Tanlangan guruh o‘quvchilari',
+                        ru: 'Ученики выбранных групп',
+                        en: 'Students in selected groups',
+                      ),
+                      subtitle:
+                          '${students.length} ${tr(context, 'unit_student')}',
+                      trailing: IconButton(
+                        tooltip: tx(
+                          context,
+                          uz: 'Yopish',
+                          ru: 'Закрыть',
+                          en: 'Close',
+                        ),
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.separated(
+                      controller: controller,
+                      padding: const EdgeInsets.fromLTRB(18, 6, 18, 24),
+                      itemCount: students.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 7),
+                      itemBuilder: (_, index) {
+                        final student = students[index];
+                        return RefStatusTile(
+                          icon: Icons.person_outline_rounded,
+                          title: student.name,
+                          subtitle:
+                              '${student.group} · ${tr(context, 'stat_attendance')} ${student.attendance}%',
+                          tone: student.debt > 0
+                              ? RefMetricTone.warning
+                              : RefMetricTone.success,
+                          onTap: () => Navigator.of(sheetContext).push(
+                            sfPageRoute(
+                              StudentDetailScreen(student: student, colors: c),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final store = AppScope.of(context);
     final groups = _groupRows(store);
+    final branches = groups.map((group) => group.branch).toSet().toList()
+      ..sort();
+    final teachers = groups.map((group) => group.teacher).toSet().toList()
+      ..sort();
+    final levels = groups.map((group) => group.level).toSet().toList()..sort();
     final filtered = groups.where((group) {
       final q = _query.toLowerCase();
       final statusOk = switch (_status) {
@@ -44,34 +459,57 @@ class _WebGroupsPageState extends State<WebGroupsPage> {
         3 => group.debtors > 0,
         _ => true,
       };
+      final attendanceOk = switch (_attendance) {
+        1 => group.avgAtt >= 90,
+        2 => group.avgAtt >= 75 && group.avgAtt < 90,
+        3 => group.avgAtt < 75,
+        _ => true,
+      };
+      final debtOk = switch (_debt) {
+        1 => group.debtors == 0,
+        2 => group.debtors > 0,
+        _ => true,
+      };
       return statusOk &&
+          (_branch.isEmpty || group.branch == _branch) &&
+          (_teacher.isEmpty || group.teacher == _teacher) &&
+          (_level.isEmpty || group.level == _level) &&
+          attendanceOk &&
+          debtOk &&
+          _groupMatchesRange(store, group) &&
           (q.isEmpty ||
               '${group.name} ${group.teacher} ${group.branch}'
                   .toLowerCase()
                   .contains(q));
     }).toList();
-    final active = groups.where((group) => group.status == 'active').length;
-    final seats = groups.fold<int>(0, (sum, group) => sum + group.count);
-    final pageCount = filtered.isEmpty
-        ? 1
-        : ((filtered.length + _pageSize - 1) ~/ _pageSize);
-    final currentPage = _page.clamp(1, pageCount).toInt();
-    final visible = filtered
-        .skip((currentPage - 1) * _pageSize)
-        .take(_pageSize)
-        .toList(growable: false);
+    final active = filtered.where((group) => group.status == 'active').length;
+    final seats = filtered.fold<int>(0, (sum, group) => sum + group.count);
+    final debtGroups = filtered.where((g) => g.debtors > 0).length;
+    final filterCount =
+        (_status == 0 ? 0 : 1) +
+        (_branch.isEmpty ? 0 : 1) +
+        (_teacher.isEmpty ? 0 : 1) +
+        (_level.isEmpty ? 0 : 1) +
+        (_attendance == 0 ? 0 : 1) +
+        (_debt == 0 ? 0 : 1);
     return Material(
       color: c.bg,
       child: Column(
         children: [
           RefLargeHeader(
-            eyebrow: '${groups.length} GURUH',
-            title: 'Guruhlar',
-            subtitle: 'Jadval, sig‘im va o‘quv jarayonini boshqaring',
+            eyebrow:
+                '${groups.length} ${tr(context, 'unit_group').toUpperCase()}',
+            title: tr(context, 'groups_title'),
+            subtitle: tx(
+              context,
+              uz: 'Jadval, sig‘im va o‘quv jarayonini boshqaring',
+              ru: 'Управляйте расписанием, местами и учебным процессом',
+              en: 'Manage schedules, capacity and the learning process',
+            ),
             actions: [
               RefIconAction(
                 icon: Icons.add_rounded,
-                tooltip: 'Yangi guruh',
+                tooltip: tr(context, 'create_group'),
                 onPressed: () => Navigator.of(
                   context,
                 ).push(sfPageRoute(GroupCreateScreen(colors: c))),
@@ -82,42 +520,71 @@ class _WebGroupsPageState extends State<WebGroupsPage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 26),
               children: [
-                RefAdaptiveGrid(
-                  minCellWidth: 132,
+                Row(
                   children: [
-                    RefMetricCard(
-                      label: 'Faol guruhlar',
-                      value: '$active',
-                      icon: Icons.workspaces_rounded,
-                      tone: RefMetricTone.primary,
-                      compact: true,
-                      uppercaseLabel: false,
+                    Expanded(
+                      child: RefMetricCard(
+                        key: const ValueKey('groups-active-metric'),
+                        label: tx(
+                          context,
+                          uz: 'Faol guruhlar',
+                          ru: 'Активные группы',
+                          en: 'Active groups',
+                        ),
+                        value: '$active',
+                        icon: Icons.workspaces_rounded,
+                        tone: RefMetricTone.primary,
+                        compact: true,
+                        uppercaseLabel: false,
+                        onTap: () => setState(() => _status = 1),
+                      ),
                     ),
-                    RefMetricCard(
-                      label: 'O‘quvchilar',
-                      value: '$seats',
-                      icon: Icons.groups_rounded,
-                      tone: RefMetricTone.success,
-                      compact: true,
-                      uppercaseLabel: false,
-                    ),
-                    RefMetricCard(
-                      label: 'Qarzli guruhlar',
-                      value: '${groups.where((g) => g.debtors > 0).length}',
-                      icon: Icons.flag_rounded,
-                      tone: RefMetricTone.warning,
-                      compact: true,
-                      uppercaseLabel: false,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: RefMetricCard(
+                        key: const ValueKey('groups-students-metric'),
+                        label: tr(context, 'branch_students'),
+                        value: '$seats',
+                        icon: Icons.groups_rounded,
+                        tone: RefMetricTone.success,
+                        compact: true,
+                        uppercaseLabel: false,
+                        onTap: () => _openStudents(store, filtered),
+                      ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: RefMetricCard(
+                    key: const ValueKey('groups-debt-metric'),
+                    label: tx(
+                      context,
+                      uz: 'Qarzli guruhlar',
+                      ru: 'Группы с долгом',
+                      en: 'Groups with debt',
+                    ),
+                    value: '$debtGroups',
+                    detail: tx(
+                      context,
+                      uz: 'Qarzli guruhlarni ko‘rish uchun bosing',
+                      ru: 'Нажмите, чтобы показать группы с задолженностью',
+                      en: 'Tap to show groups with outstanding debt',
+                    ),
+                    icon: Icons.flag_rounded,
+                    tone: RefMetricTone.warning,
+                    compact: true,
+                    uppercaseLabel: false,
+                    onTap: () => setState(() => _status = 3),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 RefSearchField(
                   controller: _search,
-                  hint: 'Guruh yoki o‘qituvchi qidirish',
+                  hint: tr(context, 'groups_search'),
                   onChanged: (value) => setState(() {
                     _query = value;
-                    _page = 1;
                   }),
                   suffix: _query.isEmpty
                       ? null
@@ -125,57 +592,160 @@ class _WebGroupsPageState extends State<WebGroupsPage> {
                           onPressed: () => setState(() {
                             _search.clear();
                             _query = '';
-                            _page = 1;
                           }),
                           icon: Icon(Icons.close_rounded, color: c.muted),
                         ),
                 ),
                 const SizedBox(height: 10),
-                RefSegmentedControl<int>(
-                  values: const [0, 1, 2, 3],
-                  selected: _status,
-                  labelOf: (value) =>
-                      const ['Hammasi', 'Faol', 'Pauzada', 'Qarzdor'][value],
-                  onChanged: (value) => setState(() {
-                    _status = value;
-                    _page = 1;
-                  }),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('groups-open-filters'),
+                        onPressed: () => _openFilters(
+                          branches: branches,
+                          teachers: teachers,
+                          levels: levels,
+                        ),
+                        icon: Icon(
+                          filterCount == 0
+                              ? Icons.tune_rounded
+                              : Icons.filter_alt_rounded,
+                        ),
+                        label: Text(
+                          filterCount == 0
+                              ? tx(
+                                  context,
+                                  uz: 'Filtrlar',
+                                  ru: 'Фильтры',
+                                  en: 'Filters',
+                                )
+                              : tx(
+                                  context,
+                                  uz: 'Filtrlar · $filterCount',
+                                  ru: 'Фильтры · $filterCount',
+                                  en: 'Filters · $filterCount',
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('groups-date-range'),
+                        onPressed: _pickRange,
+                        icon: const Icon(Icons.date_range_rounded),
+                        label: Text(
+                          _range == null
+                              ? tx(
+                                  context,
+                                  uz: 'Dan — gacha',
+                                  ru: 'От — до',
+                                  en: 'From — to',
+                                )
+                              : '${_webShort(_range!.start)} — ${_webShort(_range!.end)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    if (_range != null) ...[
+                      const SizedBox(width: 4),
+                      IconButton(
+                        key: const ValueKey('groups-reset-date-range'),
+                        tooltip: tx(
+                          context,
+                          uz: 'Davrni tiklash',
+                          ru: 'Сбросить период',
+                          en: 'Reset period',
+                        ),
+                        onPressed: () => setState(() => _range = null),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 20),
                 RefSectionHeader(
-                  title: 'Guruhlar ro‘yxati',
-                  subtitle: '${filtered.length} ta mos natija',
+                  title: tr(context, 'groups_title'),
+                  subtitle: tx(
+                    context,
+                    uz: '${filtered.length} ta mos natija',
+                    ru: '${filtered.length} результатов',
+                    en: '${filtered.length} matching results',
+                  ),
                 ),
                 const SizedBox(height: 8),
                 if (filtered.isEmpty)
                   _WebEmpty(
                     icon: Icons.workspaces_outline,
-                    text: 'Guruh topilmadi',
+                    text: tx(
+                      context,
+                      uz: 'Guruh topilmadi',
+                      ru: 'Группы не найдены',
+                      en: 'No groups found',
+                    ),
                   )
                 else
-                  for (var index = 0; index < visible.length; index++) ...[
+                  for (var index = 0; index < filtered.length; index++) ...[
                     RefStaggeredReveal(
                       order: index,
-                      child: _WebGroupCard(group: visible[index]),
+                      child: _WebGroupCard(group: filtered[index]),
                     ),
                     const SizedBox(height: 10),
                   ],
-                if (filtered.isNotEmpty)
-                  RefPaginationBar(
-                    page: currentPage,
-                    pages: pageCount,
-                    total: filtered.length,
-                    pageSize: _pageSize,
-                    onPageChanged: (value) => setState(() => _page = value),
-                    onPageSizeChanged: (value) => setState(() {
-                      _pageSize = value;
-                      _page = 1;
-                    }),
-                  ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+DateTime? _webDate(String value) {
+  final direct = DateTime.tryParse(value);
+  if (direct != null) return direct;
+  final parts = value.split('.');
+  if (parts.length != 3) return null;
+  final day = int.tryParse(parts[0]);
+  final month = int.tryParse(parts[1]);
+  final year = int.tryParse(parts[2]);
+  if (day == null || month == null || year == null) return null;
+  return DateTime(year, month, day);
+}
+
+String _webShort(DateTime value) =>
+    '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}';
+
+class _WebFilterDropdown extends StatelessWidget {
+  const _WebFilterDropdown({
+    required this.label,
+    required this.value,
+    required this.values,
+    required this.decoration,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String value;
+  final List<String> values;
+  final InputDecoration decoration;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: label,
+      child: DropdownButtonFormField<String>(
+        initialValue: value,
+        decoration: decoration,
+        items: [
+          DropdownMenuItem(value: '', child: Text(tr(context, 'f_all'))),
+          for (final item in values)
+            DropdownMenuItem(value: item, child: Text(item)),
+        ],
+        onChanged: (next) => onChanged(next ?? ''),
       ),
     );
   }
@@ -338,7 +908,12 @@ class _WebGroupCard extends StatelessWidget {
                 if (group.debtors > 0) ...[
                   const SizedBox(width: 7),
                   RefPill(
-                    label: '${group.debtors} qarz',
+                    label: tx(
+                      context,
+                      uz: '${group.debtors} qarz',
+                      ru: 'Долг: ${group.debtors}',
+                      en: '${group.debtors} debtors',
+                    ),
                     tone: RefPillTone.danger,
                   ),
                 ],
@@ -362,8 +937,7 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
   final _search = TextEditingController();
   String _query = '';
   int _filter = 0;
-  int _page = 1;
-  int _pageSize = 5;
+  DateTimeRange? _range;
 
   Future<void> _acceptPayment(AppStore store, SfColors colors) async {
     final entry = await showModalBottomSheet<LedgerEntry>(
@@ -395,7 +969,6 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
     );
     if (entry == null || !mounted) return;
     setState(() {
-      _page = 1;
       _filter = 1;
       _query = '';
       _search.clear();
@@ -403,6 +976,32 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
     await Navigator.of(
       context,
     ).push(sfPageRoute(LedgerEntryScreen(entry: entry, colors: colors)));
+  }
+
+  Future<void> _pickRange() async {
+    final value = await showRefDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now(),
+      initialDateRange: _range,
+      title: tx(context, uz: 'Davr', ru: 'Период', en: 'Period'),
+    );
+    if (value != null && mounted) setState(() => _range = value);
+  }
+
+  bool _inRange(LedgerEntry entry) {
+    if (_range == null) return true;
+    final date = _webDate(entry.date);
+    if (date == null) return false;
+    final end = DateTime(
+      _range!.end.year,
+      _range!.end.month,
+      _range!.end.day,
+      23,
+      59,
+      59,
+    );
+    return !date.isBefore(_range!.start) && !date.isAfter(end);
   }
 
   @override
@@ -420,37 +1019,51 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
       final filterOk =
           _filter == 0 || (_filter == 1 ? entry.inflow : !entry.inflow);
       return filterOk &&
+          _inRange(entry) &&
           (q.isEmpty ||
               '${entry.title} ${entry.who} ${entry.channel}'
                   .toLowerCase()
                   .contains(q));
     }).toList();
-    final pageCount = entries.isEmpty
-        ? 1
-        : ((entries.length + _pageSize - 1) ~/ _pageSize);
-    final currentPage = _page.clamp(1, pageCount).toInt();
-    final visibleEntries = entries
-        .skip((currentPage - 1) * _pageSize)
-        .take(_pageSize)
-        .toList(growable: false);
+    final inflow = entries
+        .where((entry) => entry.inflow)
+        .fold<num>(0, (sum, entry) => sum + entry.amount);
+    final outflow = entries
+        .where((entry) => !entry.inflow)
+        .fold<num>(0, (sum, entry) => sum + entry.amount);
     return Material(
       color: c.bg,
       child: Column(
         children: [
           RefLargeHeader(
-            eyebrow: 'MOLIYA · JORIY OY',
-            title: 'To‘lovlar',
-            subtitle: 'Tushum, xarajat va qarzdorlik nazorati',
+            eyebrow: tx(
+              context,
+              uz: 'MOLIYA · JORIY OY',
+              ru: 'ФИНАНСЫ · ТЕКУЩИЙ МЕСЯЦ',
+              en: 'FINANCE · CURRENT MONTH',
+            ),
+            title: tx(context, uz: 'To‘lovlar', ru: 'Платежи', en: 'Payments'),
+            subtitle: tx(
+              context,
+              uz: 'Tushum, xarajat va qarzdorlik nazorati',
+              ru: 'Контроль поступлений, расходов и задолженности',
+              en: 'Track income, expenses and outstanding debt',
+            ),
             actions: [
               if (store.role == SfRole.manager)
                 RefIconAction(
                   icon: Icons.add_card_rounded,
-                  tooltip: 'Принять платёж',
+                  tooltip: tx(
+                    context,
+                    uz: 'To‘lov qabul qilish',
+                    ru: 'Принять платёж',
+                    en: 'Accept payment',
+                  ),
                   onPressed: () => _acceptPayment(store, c),
                 ),
               RefIconAction(
                 icon: Icons.file_download_outlined,
-                tooltip: 'Hisobot',
+                tooltip: tr(context, 'btn_report'),
                 onPressed: () => Navigator.of(
                   context,
                 ).push(sfPageRoute(ReportScreen(colors: c, role: store.role))),
@@ -465,24 +1078,39 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
                   minCellWidth: 132,
                   children: [
                     RefMetricCard(
-                      label: 'Tushum',
-                      value: fmtMoneyMln(store.inflowTotal),
+                      label: tx(
+                        context,
+                        uz: 'Tushum',
+                        ru: 'Поступления',
+                        en: 'Income',
+                      ),
+                      value: fmtMoneyMln(inflow),
                       icon: Icons.south_west_rounded,
                       tone: RefMetricTone.success,
                       compact: true,
                       uppercaseLabel: false,
                     ),
                     RefMetricCard(
-                      label: 'Xarajat',
-                      value: fmtMoneyMln(store.outflowTotal),
+                      label: tx(
+                        context,
+                        uz: 'Xarajat',
+                        ru: 'Расходы',
+                        en: 'Expenses',
+                      ),
+                      value: fmtMoneyMln(outflow),
                       icon: Icons.north_east_rounded,
                       tone: RefMetricTone.danger,
                       compact: true,
                       uppercaseLabel: false,
                     ),
                     RefMetricCard(
-                      label: 'Balans',
-                      value: fmtMoneyMln(store.balance),
+                      label: tx(
+                        context,
+                        uz: 'Balans',
+                        ru: 'Баланс',
+                        en: 'Balance',
+                      ),
+                      value: fmtMoneyMln(inflow - outflow),
                       icon: Icons.account_balance_wallet_rounded,
                       tone: RefMetricTone.primary,
                       compact: true,
@@ -491,62 +1119,103 @@ class _WebPaymentsPageState extends State<WebPaymentsPage> {
                   ],
                 ),
                 const SizedBox(height: 14),
-                _PaymentChannels(entries: store.ledger),
+                _PaymentChannels(entries: entries),
                 const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('payments-date-range'),
+                        onPressed: _pickRange,
+                        icon: const Icon(Icons.date_range_rounded),
+                        label: Text(
+                          _range == null
+                              ? tx(
+                                  context,
+                                  uz: 'Dan — gacha',
+                                  ru: 'От — до',
+                                  en: 'From — to',
+                                )
+                              : '${_webShort(_range!.start)} — ${_webShort(_range!.end)}',
+                        ),
+                      ),
+                    ),
+                    if (_range != null) ...[
+                      const SizedBox(width: 8),
+                      IconButton.outlined(
+                        key: const ValueKey('payments-reset-range'),
+                        tooltip: tx(
+                          context,
+                          uz: 'Davrni tiklash',
+                          ru: 'Сбросить период',
+                          en: 'Reset period',
+                        ),
+                        onPressed: () => setState(() => _range = null),
+                        icon: const Icon(Icons.restart_alt_rounded),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 10),
                 RefSearchField(
                   controller: _search,
-                  hint: 'To‘lov yoki mijoz qidirish',
+                  hint: tx(
+                    context,
+                    uz: 'To‘lov yoki mijoz qidirish',
+                    ru: 'Поиск платежа или клиента',
+                    en: 'Search payment or customer',
+                  ),
                   onChanged: (value) => setState(() {
                     _query = value;
-                    _page = 1;
                   }),
                 ),
                 const SizedBox(height: 10),
                 RefSegmentedControl<int>(
                   values: const [0, 1, 2],
                   selected: _filter,
-                  labelOf: (value) =>
-                      const ['Hammasi', 'Tushum', 'Xarajat'][value],
+                  labelOf: (value) => [
+                    tr(context, 'f_all'),
+                    tx(context, uz: 'Tushum', ru: 'Поступления', en: 'Income'),
+                    tx(context, uz: 'Xarajat', ru: 'Расходы', en: 'Expenses'),
+                  ][value],
                   onChanged: (value) => setState(() {
                     _filter = value;
-                    _page = 1;
                   }),
                 ),
                 const SizedBox(height: 20),
                 RefSectionHeader(
-                  title: 'Operatsiyalar',
-                  subtitle: '${entries.length} ta yozuv',
+                  title: tx(
+                    context,
+                    uz: 'Operatsiyalar',
+                    ru: 'Операции',
+                    en: 'Transactions',
+                  ),
+                  subtitle: tx(
+                    context,
+                    uz: '${entries.length} ta yozuv',
+                    ru: '${entries.length} записей',
+                    en: '${entries.length} records',
+                  ),
                 ),
                 const SizedBox(height: 8),
                 if (entries.isEmpty)
                   _WebEmpty(
                     icon: Icons.payments_outlined,
-                    text: 'Operatsiya topilmadi',
+                    text: tx(
+                      context,
+                      uz: 'Operatsiya topilmadi',
+                      ru: 'Операции не найдены',
+                      en: 'No transactions found',
+                    ),
                   )
                 else
-                  for (
-                    var index = 0;
-                    index < visibleEntries.length;
-                    index++
-                  ) ...[
+                  for (var index = 0; index < entries.length; index++) ...[
                     RefStaggeredReveal(
                       order: index,
-                      child: _PaymentEntry(entry: visibleEntries[index]),
+                      child: _PaymentEntry(entry: entries[index]),
                     ),
                     const SizedBox(height: 9),
                   ],
-                if (entries.isNotEmpty)
-                  RefPaginationBar(
-                    page: currentPage,
-                    pages: pageCount,
-                    total: entries.length,
-                    pageSize: _pageSize,
-                    onPageChanged: (value) => setState(() => _page = value),
-                    onPageSizeChanged: (value) => setState(() {
-                      _pageSize = value;
-                      _page = 1;
-                    }),
-                  ),
               ],
             ),
           ),
@@ -658,16 +1327,36 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                   ),
                 ),
                 const SizedBox(height: 14),
-                const RefSectionHeader(
-                  title: 'Принять платёж',
-                  subtitle: 'Операция попадёт в ledger и откроется в деталях',
+                RefSectionHeader(
+                  title: tx(
+                    context,
+                    uz: 'To‘lov qabul qilish',
+                    ru: 'Принять платёж',
+                    en: 'Accept payment',
+                  ),
+                  subtitle: tx(
+                    context,
+                    uz: 'Operatsiya kassa daftariga yoziladi va tafsilotlarda ochiladi',
+                    ru: 'Операция попадёт в кассовую книгу и откроется в деталях',
+                    en: 'The transaction will be saved to the ledger and opened in detail',
+                  ),
                 ),
                 const SizedBox(height: 14),
                 if (widget.students.isEmpty)
                   RefStatusTile(
                     icon: Icons.person_search_outlined,
-                    title: 'Нет доступных учеников',
-                    subtitle: 'Сначала добавьте ученика',
+                    title: tx(
+                      context,
+                      uz: 'O‘quvchilar topilmadi',
+                      ru: 'Нет доступных учеников',
+                      en: 'No students available',
+                    ),
+                    subtitle: tx(
+                      context,
+                      uz: 'Avval o‘quvchi qo‘shing',
+                      ru: 'Сначала добавьте ученика',
+                      en: 'Add a student first',
+                    ),
                     tone: RefMetricTone.warning,
                   )
                 else ...[
@@ -675,9 +1364,9 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                     key: const ValueKey('payment-intake-student'),
                     initialValue: _student,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Ученик',
-                      prefixIcon: Icon(Icons.school_outlined),
+                    decoration: InputDecoration(
+                      labelText: tr(context, 'unit_student'),
+                      prefixIcon: const Icon(Icons.school_outlined),
                     ),
                     items: [
                       for (final student in widget.students)
@@ -710,12 +1399,22 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                   TextFormField(
                     key: const ValueKey('payment-intake-payer'),
                     controller: _payer,
-                    decoration: const InputDecoration(
-                      labelText: 'Кто оплатил',
-                      prefixIcon: Icon(Icons.person_outline_rounded),
+                    decoration: InputDecoration(
+                      labelText: tx(
+                        context,
+                        uz: 'Kim to‘ladi',
+                        ru: 'Кто оплатил',
+                        en: 'Paid by',
+                      ),
+                      prefixIcon: const Icon(Icons.person_outline_rounded),
                     ),
                     validator: (value) => value?.trim().isEmpty == true
-                        ? 'Укажите плательщика'
+                        ? tx(
+                            context,
+                            uz: 'To‘lovchini kiriting',
+                            ru: 'Укажите плательщика',
+                            en: 'Enter the payer',
+                          )
                         : null,
                   ),
                   const SizedBox(height: 10),
@@ -725,9 +1424,14 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    decoration: const InputDecoration(
-                      labelText: 'Сумма',
-                      prefixIcon: Icon(Icons.payments_outlined),
+                    decoration: InputDecoration(
+                      labelText: tx(
+                        context,
+                        uz: 'Summa',
+                        ru: 'Сумма',
+                        en: 'Amount',
+                      ),
+                      prefixIcon: const Icon(Icons.payments_outlined),
                       suffixText: 'UZS',
                     ),
                     validator: (value) {
@@ -735,7 +1439,12 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                         (value ?? '').replaceAll(RegExp(r'[^0-9.]'), ''),
                       );
                       return amount == null || amount <= 0
-                          ? 'Введите сумму больше нуля'
+                          ? tx(
+                              context,
+                              uz: 'Noldan katta summa kiriting',
+                              ru: 'Введите сумму больше нуля',
+                              en: 'Enter an amount greater than zero',
+                            )
                           : null;
                     },
                   ),
@@ -743,18 +1452,44 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                   DropdownButtonFormField<String>(
                     initialValue: _channel,
                     isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Способ оплаты',
-                      prefixIcon: Icon(Icons.credit_card_rounded),
+                    decoration: InputDecoration(
+                      labelText: tx(
+                        context,
+                        uz: 'To‘lov usuli',
+                        ru: 'Способ оплаты',
+                        en: 'Payment method',
+                      ),
+                      prefixIcon: const Icon(Icons.credit_card_rounded),
                     ),
-                    items: const [
-                      DropdownMenuItem(value: 'Naqd', child: Text('Наличные')),
-                      DropdownMenuItem(value: 'Click', child: Text('Click')),
-                      DropdownMenuItem(value: 'Payme', child: Text('Payme')),
-                      DropdownMenuItem(value: 'Uzum', child: Text('Uzum')),
+                    items: [
+                      DropdownMenuItem(
+                        value: 'Naqd',
+                        child: Text(
+                          tx(context, uz: 'Naqd', ru: 'Наличные', en: 'Cash'),
+                        ),
+                      ),
+                      const DropdownMenuItem(
+                        value: 'Click',
+                        child: Text('Click'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 'Payme',
+                        child: Text('Payme'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 'Uzum',
+                        child: Text('Uzum'),
+                      ),
                       DropdownMenuItem(
                         value: 'Bank',
-                        child: Text('Банковский перевод'),
+                        child: Text(
+                          tx(
+                            context,
+                            uz: 'Bank o‘tkazmasi',
+                            ru: 'Банковский перевод',
+                            en: 'Bank transfer',
+                          ),
+                        ),
                       ),
                     ],
                     onChanged: (value) =>
@@ -763,12 +1498,22 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _operation,
-                    decoration: const InputDecoration(
-                      labelText: 'Номер операции',
-                      prefixIcon: Icon(Icons.tag_rounded),
+                    decoration: InputDecoration(
+                      labelText: tx(
+                        context,
+                        uz: 'Operatsiya raqami',
+                        ru: 'Номер операции',
+                        en: 'Transaction number',
+                      ),
+                      prefixIcon: const Icon(Icons.tag_rounded),
                     ),
                     validator: (value) => value?.trim().isEmpty == true
-                        ? 'Укажите номер операции'
+                        ? tx(
+                            context,
+                            uz: 'Operatsiya raqamini kiriting',
+                            ru: 'Укажите номер операции',
+                            en: 'Enter the transaction number',
+                          )
                         : null,
                   ),
                   const SizedBox(height: 10),
@@ -776,14 +1521,24 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
                     controller: _comment,
                     minLines: 2,
                     maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Комментарий',
-                      prefixIcon: Icon(Icons.comment_outlined),
+                    decoration: InputDecoration(
+                      labelText: tx(
+                        context,
+                        uz: 'Izoh',
+                        ru: 'Комментарий',
+                        en: 'Comment',
+                      ),
+                      prefixIcon: const Icon(Icons.comment_outlined),
                     ),
                   ),
                   const SizedBox(height: 16),
                   RefButton(
-                    label: 'Сохранить платёж',
+                    label: tx(
+                      context,
+                      uz: 'To‘lovni saqlash',
+                      ru: 'Сохранить платёж',
+                      en: 'Save payment',
+                    ),
                     leading: Icons.check_circle_rounded,
                     block: true,
                     onPressed: _save,
@@ -798,36 +1553,127 @@ class _PaymentIntakeSheetState extends State<_PaymentIntakeSheet> {
   }
 }
 
-class _PaymentChannels extends StatelessWidget {
+class _PaymentChannels extends StatefulWidget {
   const _PaymentChannels({required this.entries});
 
   final List<LedgerEntry> entries;
 
   @override
+  State<_PaymentChannels> createState() => _PaymentChannelsState();
+}
+
+class _PaymentChannelsState extends State<_PaymentChannels> {
+  String? _selected;
+
+  @override
+  void didUpdateWidget(covariant _PaymentChannels oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_selected != null &&
+        !widget.entries.any(
+          (entry) => entry.inflow && entry.channel == _selected,
+        )) {
+      _selected = null;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final totals = <String, num>{};
-    for (final entry in entries.where((entry) => entry.inflow)) {
-      final channel = entry.channel.trim().isEmpty ? 'Boshqa' : entry.channel;
+    for (final entry in widget.entries.where((entry) => entry.inflow)) {
+      final channel = entry.channel.trim().isEmpty
+          ? tx(context, uz: 'Boshqa', ru: 'Другое', en: 'Other')
+          : entry.channel;
       totals[channel] = (totals[channel] ?? 0) + entry.amount;
     }
     final grandTotal = totals.values.fold<num>(0, (sum, value) => sum + value);
     final channels = totals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final visible = channels.take(3).toList(growable: false);
-    final palette = [c.primary, c.accent, c.success];
+    final palette = [
+      c.primary,
+      c.accent,
+      c.success,
+      c.warn,
+      c.danger,
+      const Color(0xFF7B61D1),
+    ];
+    final selectedIndex = channels.indexWhere(
+      (entry) => entry.key == _selected,
+    );
+    final selected = selectedIndex == -1 ? null : channels[selectedIndex];
+    void selectFromPoint(TapDownDetails details) {
+      if (channels.isEmpty || grandTotal <= 0) return;
+      const center = Offset(49, 49);
+      final delta = details.localPosition - center;
+      if (delta.distance < 25) {
+        setState(() => _selected = null);
+        return;
+      }
+      var angle = math.atan2(delta.dy, delta.dx) + math.pi / 2;
+      if (angle < 0) angle += math.pi * 2;
+      var cursor = 0.0;
+      for (final channel in channels) {
+        cursor += channel.value / grandTotal * math.pi * 2;
+        if (angle <= cursor) {
+          setState(() => _selected = channel.key);
+          return;
+        }
+      }
+    }
+
     return RefSurfaceCard(
       padding: const EdgeInsets.all(14),
       child: Row(
         children: [
-          SizedBox(
-            width: 78,
-            height: 78,
-            child: CircularProgressIndicator(
-              value: entries.isEmpty ? 0 : 1,
-              strokeWidth: 10,
-              backgroundColor: c.surface2,
-              valueColor: AlwaysStoppedAnimation(c.primary),
+          GestureDetector(
+            key: const ValueKey('payment-channel-donut'),
+            onTapDown: selectFromPoint,
+            child: SizedBox(
+              width: 98,
+              height: 98,
+              child: CustomPaint(
+                painter: _PaymentDonutPainter(
+                  values: channels.map((entry) => entry.value).toList(),
+                  colors: [
+                    for (var index = 0; index < channels.length; index++)
+                      palette[index % palette.length],
+                  ],
+                  background: c.surface2,
+                  selectedIndex: selectedIndex,
+                ),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(25),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            selected?.key ?? tr(context, 'chart_total'),
+                            textAlign: TextAlign.center,
+                            style: RefType.ui(
+                              size: 9.5,
+                              weight: FontWeight.w800,
+                              color: c.ink,
+                            ),
+                          ),
+                          Text(
+                            selected == null
+                                ? fmtMoneyShort(grandTotal)
+                                : '${(selected.value / grandTotal * 100).round()}%',
+                            style: RefType.mono(
+                              size: 10,
+                              weight: FontWeight.w800,
+                              color: c.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 14),
@@ -836,7 +1682,12 @@ class _PaymentChannels extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'To‘lov usullari',
+                  tx(
+                    context,
+                    uz: 'To‘lov usullari',
+                    ru: 'Способы оплаты',
+                    en: 'Payment methods',
+                  ),
                   style: RefType.ui(
                     size: 13.5,
                     weight: FontWeight.w800,
@@ -844,20 +1695,30 @@ class _PaymentChannels extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                if (visible.isEmpty)
+                if (channels.isEmpty)
                   Text(
-                    'Tasdiqlangan tushum yo‘q',
+                    tx(
+                      context,
+                      uz: 'Tasdiqlangan tushum yo‘q',
+                      ru: 'Нет подтверждённых поступлений',
+                      en: 'No confirmed income',
+                    ),
                     style: RefType.ui(size: 11, color: c.muted),
                   )
                 else
-                  for (var index = 0; index < visible.length; index++)
-                    _channel(
-                      context,
-                      palette[index],
-                      visible[index].key,
-                      grandTotal == 0
-                          ? '0%'
-                          : '${(visible[index].value / grandTotal * 100).round()}%',
+                  for (var index = 0; index < channels.length; index++)
+                    InkWell(
+                      borderRadius: RefRadius.sm,
+                      onTap: () =>
+                          setState(() => _selected = channels[index].key),
+                      child: _channel(
+                        context,
+                        palette[index % palette.length],
+                        channels[index].key,
+                        grandTotal == 0
+                            ? '0%'
+                            : '${(channels[index].value / grandTotal * 100).round()}%',
+                      ),
                     ),
               ],
             ),
@@ -904,6 +1765,64 @@ class _PaymentChannels extends StatelessWidget {
   );
 }
 
+class _PaymentDonutPainter extends CustomPainter {
+  const _PaymentDonutPainter({
+    required this.values,
+    required this.colors,
+    required this.background,
+    required this.selectedIndex,
+  });
+
+  final List<num> values;
+  final List<Color> colors;
+  final Color background;
+  final int selectedIndex;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = math.min(size.width, size.height) / 2 - 7;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    final total = values.fold<num>(0, (sum, value) => sum + value);
+    canvas.drawArc(
+      rect,
+      0,
+      math.pi * 2,
+      false,
+      Paint()
+        ..color = background
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 13,
+    );
+    if (total <= 0) return;
+    var start = -math.pi / 2;
+    for (var index = 0; index < values.length; index++) {
+      final sweep = values[index] / total * math.pi * 2;
+      canvas.drawArc(
+        rect,
+        start + .025,
+        math.max(0, sweep - .05),
+        false,
+        Paint()
+          ..color = colors[index].withValues(
+            alpha: selectedIndex == -1 || selectedIndex == index ? 1 : .3,
+          )
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = selectedIndex == index ? 16 : 13,
+      );
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PaymentDonutPainter oldDelegate) =>
+      oldDelegate.values != values ||
+      oldDelegate.colors != colors ||
+      oldDelegate.background != background ||
+      oldDelegate.selectedIndex != selectedIndex;
+}
+
 class _PaymentEntry extends StatelessWidget {
   const _PaymentEntry({required this.entry});
   final LedgerEntry entry;
@@ -915,7 +1834,12 @@ class _PaymentEntry extends StatelessWidget {
     return Semantics(
       key: ValueKey('offline-payment-${entry.id}'),
       button: true,
-      label: '${entry.title}. To‘lov tafsilotini ochish',
+      label: tx(
+        context,
+        uz: '${entry.title}. To‘lov tafsilotini ochish',
+        ru: '${entry.title}. Открыть детали платежа',
+        en: '${entry.title}. Open payment details',
+      ),
       child: RefStatusTile(
         icon: entry.inflow
             ? Icons.south_west_rounded
@@ -961,7 +1885,7 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
   String _query = '';
   int _folder = 0;
   int _page = 1;
-  int _pageSize = 5;
+  final int _pageSize = 1000000;
 
   Future<void> _openConversationPicker(AppStore store) async {
     final c = SfTheme.of(context);
@@ -1133,18 +2057,6 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
                   ),
                   const SizedBox(height: 9),
                 ],
-              if (indices.isNotEmpty)
-                RefPaginationBar(
-                  page: currentPage,
-                  pages: pageCount,
-                  total: indices.length,
-                  pageSize: _pageSize,
-                  onPageChanged: (value) => setState(() => _page = value),
-                  onPageSizeChanged: (value) => setState(() {
-                    _pageSize = value;
-                    _page = 1;
-                  }),
-                ),
             ],
           ),
         ),
@@ -1276,7 +2188,7 @@ class _WebHrPageState extends State<WebHrPage> {
   String _query = '';
   int _filter = 0;
   int _page = 1;
-  int _pageSize = 5;
+  final int _pageSize = 1000000;
 
   @override
   void dispose() {
@@ -1389,18 +2301,6 @@ class _WebHrPageState extends State<WebHrPage> {
                   ),
                   const SizedBox(height: 9),
                 ],
-              if (staff.isNotEmpty)
-                RefPaginationBar(
-                  page: currentPage,
-                  pages: pageCount,
-                  total: staff.length,
-                  pageSize: _pageSize,
-                  onPageChanged: (value) => setState(() => _page = value),
-                  onPageSizeChanged: (value) => setState(() {
-                    _pageSize = value;
-                    _page = 1;
-                  }),
-                ),
             ],
           ),
         ),

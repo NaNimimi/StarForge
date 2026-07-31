@@ -79,8 +79,8 @@ void main() {
           {'id': 'p-1', 'full_name': 'Azizov Anvar'},
         ],
         'departments': [
-          {'id': 'd-1', 'name': 'English', 'rating': 4.6},
-          {'id': 'd-2', 'name': 'Math', 'rating': 4.9},
+          {'id': 'd-1', 'name': 'English', 'status': 'active'},
+          {'id': 'd-2', 'name': 'Math', 'status': 'active'},
         ],
         'staff': [
           {'id': 'e-1', 'full_name': 'Nigora Karimova', 'department_id': 'd-2'},
@@ -176,7 +176,13 @@ void main() {
       expect(session.studentsForTeacher(teacher), hasLength(2));
       expect(session.childrenForParent(parent).single['id'], 's-1');
       expect(session.staffForDepartment(department).single['id'], 'e-1');
-      expect(session.departmentRanking.first['id'], 'd-2');
+      expect(session.records('departments').first['id'], 'd-1');
+      expect(
+        session
+            .records('departments')
+            .every((record) => !record.containsKey('rating')),
+        isTrue,
+      );
 
       final payment = session.paymentDetails('pay-1')!;
       expect(payment.payer, 'Azizov Anvar');
@@ -211,8 +217,7 @@ void main() {
       final store = AppStore.seed(SfRole.manager);
       addTearDown(store.dispose);
 
-      expect(store.departmentRanking.first.name, 'Matematika');
-      expect(store.departmentRanking.first.rating, 4.9);
+      expect(store.departments.first.name, 'Matematika');
       expect(store.staff.first.groups, contains('9-B Algebra'));
       expect(
         store.groupsForStaff(store.staff.first),

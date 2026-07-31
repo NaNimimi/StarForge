@@ -35,7 +35,7 @@ void main() {
     await tester.tap(find.text('Akbarov Akmal'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Davomat'), findsWidgets);
+    expect(find.text('Посещаемость'), findsWidgets);
     expect(find.text('96%'), findsWidgets);
     expect(find.text('Mas’ul'), findsOneWidget);
     expect(find.text('Akbarova D.'), findsOneWidget);

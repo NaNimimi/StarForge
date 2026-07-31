@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'api_connection.dart';
 import 'api_client.dart';
+import 'api_data_view.dart';
 import 'data.dart';
 import 'i18n.dart';
 import 'pages.dart';
@@ -17,8 +17,33 @@ import 'store.dart';
 import 'theme.dart';
 import 'widgets.dart';
 import 'web_mobile_pages.dart';
-import 'live_pages.dart';
 import 'notification_service.dart';
+
+const Map<String, Set<String>> _routeApiPermissions = {
+  'payments': {'payments:read'},
+  'report': {'payments:read', 'finance:read'},
+  'finance': {'payments:read'},
+  'approvals': {'approvals:read'},
+  'schedule': {'schedule:read'},
+  'anomalies': {'intelligence:read'},
+  'comparison': {'intelligence:read'},
+  'fairness': {'card:read'},
+  'logs': {'audit:read'},
+  'history': {'audit:read'},
+  'aiusage': {'ai:read'},
+  'ai': {'ai:read'},
+  'surveys': {'forms:read'},
+  'messages': {'messaging:read'},
+  'cases': {'tasks:read', 'compliance:read', 'penalty:read'},
+  'notifications': {'notifications:read'},
+};
+
+bool _backendAllowsRoute(ApiSession? session, String route) {
+  if (session?.authenticated != true) return true;
+  final required = _routeApiPermissions[route];
+  if (required == null || required.isEmpty) return true;
+  return required.any(session!.hasPermission);
+}
 
 /// Mobile adaptation of the web console shell.
 ///
@@ -64,7 +89,11 @@ class _ConsoleState extends State<Console> {
       _knownNotificationIds.clear();
       return;
     }
-    _notificationPoll ??= Timer.periodic(
+    // didChangeDependencies is triggered by every ApiSession notification.
+    // Only the first authenticated pass may start the initial sync; otherwise
+    // each completed resource refresh immediately launched another request.
+    if (_notificationPoll != null) return;
+    _notificationPoll = Timer.periodic(
       const Duration(seconds: 90),
       (_) => unawaited(_syncDeviceNotifications()),
     );
@@ -90,8 +119,8 @@ class _ConsoleState extends State<Console> {
     String fallback,
   ) {
     for (final key in keys) {
-      final value = record[key]?.toString().trim();
-      if (value != null && value.isNotEmpty) return value;
+      final value = apiText(apiPresentationValue(record[key]));
+      if (value.isNotEmpty) return value;
     }
     return fallback;
   }
@@ -169,7 +198,9 @@ class _ConsoleState extends State<Console> {
   }
 
   void _navigate(String route) {
-    if (!roleCanNavigate(widget.cfg.role, route)) {
+    final api = ApiScope.maybeOf(context)?.notifier;
+    if (!roleCanNavigate(widget.cfg.role, route) ||
+        !_backendAllowsRoute(api, route)) {
       setState(() {
         _route = 'dash';
         _drawerOpen = false;
@@ -195,11 +226,8 @@ class _ConsoleState extends State<Console> {
       _route = route;
       _drawerOpen = false;
     });
-    final api = ApiScope.maybeOf(context)?.notifier;
-    if (route == 'dash' && api?.authenticated == true) {
-      // Re-entering the dashboard must always fetch a fresh backend snapshot.
-      api!.refreshDashboard().catchError((_) {});
-    }
+    // DashboardScreen owns its single refresh lifecycle. Starting a second
+    // wave here used to duplicate every KPI request on ordinary navigation.
   }
 
   void _handleBack() {
@@ -236,169 +264,83 @@ class _ConsoleState extends State<Console> {
   }
 
   Widget _page(SfColors colors) {
-    final live = ApiScope.maybeOf(context)?.notifier?.authenticated ?? false;
     switch (_route) {
       case 'dash':
         return DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'tools':
+        // This route is the user's role-safe navigation/action hub in both
+        // preview and authenticated modes. The technical OpenAPI explorer is
+        // diagnostics, not role or permission management.
         return ProductivityHub(role: widget.cfg.role, onNavigate: _navigate);
       case 'branches':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'branches',
-                title: 'Filiallar',
-                icon: Icons.account_tree_rounded,
-              )
-            : const BranchesScreen();
+        return const BranchesScreen();
       case 'students':
-        return live ? const LiveStudentsPage() : const StudentsScreen();
+        return const StudentsScreen();
       case 'teachers':
-        return live
-            ? const LiveTeachersPage()
-            : TeachersWorkspaceScreen(colors: colors);
+        return TeachersWorkspaceScreen(colors: colors);
       case 'employees':
-        return live
-            ? const LiveEmployeesPage()
-            : HrWorkspaceScreen(colors: colors);
+        return HrWorkspaceScreen(colors: colors);
       case 'attendance':
-        return live
-            ? const LiveAttendanceAnalyticsPage()
-            : AttendanceScreen(colors: colors);
+        return AttendanceScreen(colors: colors);
       case 'finance':
       case 'report':
-        if (live && widget.cfg.role == SfRole.audit && _route == 'finance') {
-          return const _LiveDocumentPage(
-            resource: 'paymentReconciliation',
-            title: 'Moliyaviy solishtirish',
-            icon: Icons.rule_folder_outlined,
-          );
-        }
-        return live
-            ? const LiveRevenueReportPage()
-            : ReportScreen(colors: colors, role: widget.cfg.role);
+        return ReportScreen(colors: colors, role: widget.cfg.role);
       case 'groups':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'groups',
-                title: 'Guruhlar',
-                icon: Icons.workspaces_rounded,
-              )
-            : const WebGroupsPage();
+        return const WebGroupsPage();
       case 'messages':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'threads',
-                title: 'Xabarlar',
-                icon: Icons.chat_bubble_rounded,
-              )
-            : const WebMessagesPage();
+        return const WebMessagesPage();
+      case 'chats':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'approvals':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'approvals',
-                title: 'Tasdiqlar · faqat ko‘rish',
-                icon: Icons.lock_outline_rounded,
-              )
-            : const WebApprovalsPage();
+        return const WebApprovalsPage();
       case 'payments':
-        return live ? const LiveRevenueReportPage() : const WebPaymentsPage();
+        return const WebPaymentsPage();
       case 'hr':
-        return live ? const LiveEmployeesPage() : const WebHrPage();
+        return const WebHrPage();
       case 'parents':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'parents',
-                title: 'Ota-onalar',
-                icon: Icons.family_restroom_rounded,
-              )
-            : ParentsWorkspaceScreen(colors: colors);
+        return ParentsWorkspaceScreen(colors: colors);
       case 'departments':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'departments',
-                title: 'Bo‘limlar',
-                icon: Icons.account_balance_rounded,
-              )
-            : DepartmentsWorkspaceScreen(colors: colors);
+        return DepartmentsWorkspaceScreen(colors: colors);
       case 'meetings':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'meetings',
-                title: 'Yig‘ilishlar',
-                icon: Icons.event_rounded,
-              )
-            : MeetingsWorkspaceScreen(colors: colors);
+        return MeetingsWorkspaceScreen(colors: colors);
       case 'schedule':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'schedule',
-                title: 'Jadval',
-                icon: Icons.calendar_month_rounded,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
+      case 'payroll':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
+      case 'leads':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
+      case 'enroll':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'anomalies':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'studentRisk',
-                title: 'Risk va signallar',
-                icon: Icons.flag_rounded,
-              )
-            : const AnomaliesScreen();
+        return const AnomaliesScreen();
+      case 'fairness':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
+      case 'surveys':
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'cases':
-        return live
-            ? _LiveUnavailablePage(
-                title: 'Tekshiruv holatlari',
-                onOpenSettings: () => _navigate('settings'),
-                onBack: () => _navigate('dash'),
-              )
-            : const CasesScreen();
+        return const CasesScreen();
       case 'logs':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'audit',
-                title: 'O‘zgarmas audit jurnali',
-                icon: Icons.policy_rounded,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'history':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'audit',
-                title: 'So‘nggi backend hodisalari',
-                icon: Icons.history_rounded,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'comparison':
-        return live
-            ? const _LiveDocumentPage(
-                resource: 'intelligenceBranches',
-                title: 'Filiallarni solishtirish',
-                icon: Icons.compare_arrows_rounded,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'aiusage':
-        return live
-            ? const _LiveDocumentPage(
-                resource: 'aiUsage',
-                secondaryResource: 'aiBudget',
-                title: 'AI monitoring',
-                icon: Icons.auto_awesome_outlined,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'permissions':
-        return live
-            ? const LiveCollectionPage(
-                resource: 'accessPermissions',
-                title: 'Ruxsatlar · faqat ko‘rish',
-                icon: Icons.admin_panel_settings_outlined,
-              )
-            : buildAdminPage(_route, colors, widget.cfg.role) ??
-                  DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return buildAdminPage(_route, colors, widget.cfg.role) ??
+            DashboardScreen(cfg: widget.cfg, go: _navigate);
       case 'ai':
         // The same assistant surface handles both modes: with a session it
         // calls the published AI endpoint, without one it shows the honest
@@ -406,9 +348,7 @@ class _ConsoleState extends State<Console> {
         // make the connected assistant impossible to use.
         return AiScreen(cfg: widget.cfg);
       case 'notifications':
-        return live
-            ? LiveNotificationsPage(onNavigate: _navigate)
-            : NotificationsScreen(colors: colors, onNavigate: _navigate);
+        return NotificationsScreen(colors: colors, onNavigate: _navigate);
       case 'me':
         return ProfileScreen(
           cfg: widget.cfg,
@@ -417,30 +357,16 @@ class _ConsoleState extends State<Console> {
       case 'settings':
         return const ApiConnectionScreen();
       default:
-        // Authenticated workspaces must never fall back to seeded preview
-        // figures. Keep the route discoverable and explain that its endpoint
-        // is not published instead of presenting invented live data.
-        if (live) {
-          return _LiveUnavailablePage(
-            title: _routeLabel(_route),
-            onOpenSettings: () => _navigate('settings'),
-            onBack: () => _navigate('dash'),
-          );
-        }
         return buildAdminPage(_route, colors, widget.cfg.role) ??
             DashboardScreen(cfg: widget.cfg, go: _navigate);
     }
   }
 
-  List<TabSpec> get _bottomTabs => widget.cfg.tabs;
-
-  String _routeLabel(String route) {
-    for (final group in menuFor(widget.cfg.role)) {
-      for (final item in group.items) {
-        if (item.id == route) return menuLabel(context, item.label);
-      }
-    }
-    return route;
+  List<TabSpec> get _bottomTabs {
+    final api = ApiScope.maybeOf(context)?.notifier;
+    return widget.cfg.tabs
+        .where((tab) => _backendAllowsRoute(api, tab.id))
+        .toList(growable: false);
   }
 
   Widget _pageViewport(SfColors colors) => AnimatedSwitcher(
@@ -585,214 +511,6 @@ class _ConsoleState extends State<Console> {
             );
           },
         ),
-      ),
-    );
-  }
-}
-
-class _LiveUnavailablePage extends StatelessWidget {
-  const _LiveUnavailablePage({
-    required this.title,
-    required this.onOpenSettings,
-    required this.onBack,
-  });
-
-  final String title;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: EdgeInsets.zero,
-      children: [
-        RefLargeHeader(
-          eyebrow: 'LIVE WORKSPACE',
-          title: title,
-          subtitle: 'Раздел сохранён в навигации, но API ещё не опубликован',
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-          child: Column(
-            children: [
-              RefStatusTile(
-                icon: Icons.extension_off_outlined,
-                title: 'Интеграция ещё не подключена',
-                subtitle:
-                    'Приложение не подменяет серверные данные демонстрационными. Подключите endpoint и права доступа для этого раздела.',
-                tone: RefMetricTone.neutral,
-              ),
-              const SizedBox(height: 12),
-              RefButton(
-                label: 'Проверить подключение',
-                leading: Icons.settings_ethernet_rounded,
-                block: true,
-                onPressed: onOpenSettings,
-              ),
-              const SizedBox(height: 8),
-              RefButton(
-                label: 'Вернуться на Dashboard',
-                leading: Icons.arrow_back_rounded,
-                kind: RefButtonKind.ghost,
-                block: true,
-                onPressed: onBack,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _LiveDocumentPage extends StatefulWidget {
-  const _LiveDocumentPage({
-    required this.resource,
-    required this.title,
-    required this.icon,
-    this.secondaryResource,
-  });
-
-  final String resource;
-  final String? secondaryResource;
-  final String title;
-  final IconData icon;
-
-  @override
-  State<_LiveDocumentPage> createState() => _LiveDocumentPageState();
-}
-
-class _LiveDocumentPageState extends State<_LiveDocumentPage> {
-  bool _refreshing = false;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
-  }
-
-  Future<void> _refresh() async {
-    if (_refreshing) return;
-    setState(() {
-      _refreshing = true;
-      _error = null;
-    });
-    try {
-      final session = ApiScope.of(context);
-      await session.refresh(widget.resource);
-      if (widget.secondaryResource != null) {
-        await session.refresh(widget.secondaryResource!);
-      }
-    } on ApiException catch (error) {
-      _error = error.message;
-    } finally {
-      if (mounted) setState(() => _refreshing = false);
-    }
-  }
-
-  String _label(String key) => key
-      .replaceAll('_', ' ')
-      .replaceAllMapped(
-        RegExp(r'(^|\s)\S'),
-        (match) => match.group(0)!.toUpperCase(),
-      );
-
-  String _value(Object? value) {
-    if (value == null) return '—';
-    if (value is Map || value is Iterable) {
-      try {
-        return const JsonEncoder.withIndent('  ').convert(value);
-      } catch (_) {
-        return '$value';
-      }
-    }
-    return '$value';
-  }
-
-  List<MapEntry<String, Object?>> _entries(Object? document, String prefix) {
-    if (document is Map) {
-      return Map<String, dynamic>.from(document).entries
-          .map<MapEntry<String, Object?>>(
-            (entry) => MapEntry('$prefix${entry.key}', entry.value),
-          )
-          .toList(growable: false);
-    }
-    return [MapEntry(prefix.isEmpty ? 'result' : prefix, document)];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final session = ApiScope.of(context);
-    final primary = session.document(widget.resource);
-    final secondary = widget.secondaryResource == null
-        ? null
-        : session.document(widget.secondaryResource!);
-    final rows = [
-      ..._entries(primary, ''),
-      if (widget.secondaryResource != null)
-        ..._entries(secondary, '${widget.secondaryResource}.'),
-    ];
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        children: [
-          RefLargeHeader(
-            eyebrow: 'LIVE API',
-            title: widget.title,
-            subtitle: 'Последнее состояние backend · потяните для обновления',
-            actions: [
-              RefIconAction(
-                icon: Icons.refresh_rounded,
-                tooltip: 'Обновить',
-                onPressed: _refreshing ? null : _refresh,
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-            child: Column(
-              children: [
-                if (_refreshing && primary == null)
-                  const Padding(
-                    padding: EdgeInsets.all(32),
-                    child: CircularProgressIndicator(),
-                  )
-                else if (_error != null)
-                  RefStatusTile(
-                    icon: Icons.cloud_off_outlined,
-                    title: 'Не удалось обновить',
-                    subtitle: _error!,
-                    tone: RefMetricTone.danger,
-                    onTap: _refresh,
-                  )
-                else if (primary == null)
-                  RefStatusTile(
-                    icon: widget.icon,
-                    title: 'Данных пока нет',
-                    subtitle:
-                        'Endpoint подключён, но backend не вернул документ для вашей области доступа.',
-                    tone: RefMetricTone.neutral,
-                    onTap: _refresh,
-                  )
-                else
-                  for (var index = 0; index < rows.length; index++) ...[
-                    RefStatusTile(
-                      icon: index == 0
-                          ? widget.icon
-                          : Icons.data_object_rounded,
-                      title: _label(rows[index].key),
-                      subtitle: _value(rows[index].value),
-                      tone: RefMetricTone.neutral,
-                    ),
-                    if (index < rows.length - 1) const SizedBox(height: 8),
-                  ],
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -968,10 +686,11 @@ class _BubbleNavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final duration = RefMotion.resolve(context, RefMotion.standard);
+    final label = tabLabel(context, tab.id, tab.label);
     return Semantics(
       button: true,
       selected: active,
-      label: tab.label,
+      label: label,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(20),
@@ -1001,7 +720,7 @@ class _BubbleNavItem extends StatelessWidget {
                     color: active ? c.primary : c.muted,
                   ),
                   child: Text(
-                    tab.label,
+                    label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1084,12 +803,13 @@ class _ConsoleRail extends StatelessWidget {
                   itemBuilder: (context, index) {
                     final tab = tabs[index];
                     final active = tab.id == activeRoute;
+                    final label = tabLabel(context, tab.id, tab.label);
                     return Tooltip(
-                      message: tab.label,
+                      message: label,
                       child: Semantics(
                         button: true,
                         selected: active,
-                        label: tab.label,
+                        label: label,
                         child: InkWell(
                           onTap: () => onSelect(tab.id),
                           borderRadius: BorderRadius.circular(14),
@@ -1223,7 +943,15 @@ class _WebSidebar extends StatelessWidget {
       ]),
       fallback: 'Backend scope',
     );
-    final groups = menuFor(cfg.role);
+    final groups = [
+      for (final group in menuFor(cfg.role))
+        MenuGroup(
+          group.title,
+          group.items
+              .where((item) => _backendAllowsRoute(api, item.id))
+              .toList(growable: false),
+        ),
+    ].where((group) => group.items.isNotEmpty).toList(growable: false);
     final branchName = live
         ? liveScope
         : store.allBranchesSelected
@@ -1446,7 +1174,7 @@ class _WebSidebar extends StatelessWidget {
                                   ),
                                 ),
                                 Text(
-                                  cfg.roleTitle,
+                                  configLabel(context, cfg.roleTitle),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: RefType.ui(size: 10, color: c.muted),

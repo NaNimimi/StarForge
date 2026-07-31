@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'i18n.dart';
 import 'theme.dart';
 
 /// UI primitives adapted directly from the reference project's
@@ -851,7 +852,13 @@ class RefAdaptiveGrid extends StatelessWidget {
         spacing: spacing,
         runSpacing: spacing,
         children: [
-          for (final child in children) SizedBox(width: width, child: child),
+          for (var index = 0; index < children.length; index++)
+            SizedBox(
+              width: children.length == 3 && count == 2 && index == 2
+                  ? constraints.maxWidth
+                  : width,
+              child: children[index],
+            ),
         ],
       );
     },
@@ -1085,6 +1092,232 @@ class RefChatBubble extends StatelessWidget {
   }
 }
 
+/// Phone-safe date range selector. Flutter's stock range dialog overflows in
+/// narrow layouts with translated labels, so the app uses two compact,
+/// individually accessible date controls and common quick ranges.
+Future<DateTimeRange?> showRefDateRangePicker({
+  required BuildContext context,
+  required DateTime firstDate,
+  required DateTime lastDate,
+  DateTimeRange? initialDateRange,
+  String? title,
+}) {
+  var start =
+      initialDateRange?.start ??
+      DateTime(lastDate.year, lastDate.month - 1, lastDate.day);
+  var end = initialDateRange?.end ?? lastDate;
+  final colors = SfTheme.of(context);
+  String label(DateTime value) =>
+      MaterialLocalizations.of(context).formatCompactDate(value);
+
+  return showModalBottomSheet<DateTimeRange>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => StatefulBuilder(
+      builder: (context, setSheetState) {
+        Future<void> pick(bool isStart) async {
+          final value = await showDatePicker(
+            context: context,
+            initialDate: isStart ? start : end,
+            firstDate: firstDate,
+            lastDate: lastDate,
+            helpText: isStart
+                ? tx(
+                    context,
+                    uz: 'Boshlanish sanasi',
+                    ru: 'Дата от',
+                    en: 'Start date',
+                  )
+                : tx(
+                    context,
+                    uz: 'Tugash sanasi',
+                    ru: 'Дата до',
+                    en: 'End date',
+                  ),
+            cancelText: tx(
+              context,
+              uz: 'Bekor qilish',
+              ru: 'Отмена',
+              en: 'Cancel',
+            ),
+            confirmText: tx(
+              context,
+              uz: 'Tanlash',
+              ru: 'Выбрать',
+              en: 'Select',
+            ),
+          );
+          if (value == null) return;
+          setSheetState(() {
+            if (isStart) {
+              start = value;
+              if (end.isBefore(start)) end = start;
+            } else {
+              end = value;
+              if (start.isAfter(end)) start = end;
+            }
+          });
+        }
+
+        void quick(int days) {
+          setSheetState(() {
+            end = DateTime(lastDate.year, lastDate.month, lastDate.day);
+            start = end.subtract(Duration(days: days - 1));
+            if (start.isBefore(firstDate)) start = firstDate;
+          });
+        }
+
+        final c = colors;
+        return SfTheme(
+          colors: c,
+          child: SafeArea(
+            top: false,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
+              decoration: BoxDecoration(
+                color: c.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(26),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 38,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: c.border,
+                        borderRadius: RefRadius.pill,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    title ??
+                        tx(context, uz: 'Davr', ru: 'Период', en: 'Period'),
+                    style: RefType.ui(
+                      size: 18,
+                      weight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => pick(true),
+                          icon: const Icon(Icons.first_page_rounded),
+                          label: Text(
+                            '${tx(context, uz: 'Dan', ru: 'От', en: 'From')} · ${label(start)}',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => pick(false),
+                          icon: const Icon(Icons.last_page_rounded),
+                          label: Text(
+                            '${tx(context, uz: 'Gacha', ru: 'До', en: 'To')} · ${label(end)}',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      for (final preset in [
+                        (
+                          7,
+                          tx(context, uz: '7 kun', ru: '7 дней', en: '7 days'),
+                        ),
+                        (
+                          30,
+                          tx(
+                            context,
+                            uz: '30 kun',
+                            ru: '30 дней',
+                            en: '30 days',
+                          ),
+                        ),
+                        (
+                          90,
+                          tx(
+                            context,
+                            uz: '3 oy',
+                            ru: '3 месяца',
+                            en: '3 months',
+                          ),
+                        ),
+                        (
+                          365,
+                          tx(
+                            context,
+                            uz: '12 oy',
+                            ru: '12 месяцев',
+                            en: '12 months',
+                          ),
+                        ),
+                      ])
+                        ActionChip(
+                          label: Text(preset.$2),
+                          onPressed: () => quick(preset.$1),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          child: Text(
+                            tx(
+                              context,
+                              uz: 'Bekor qilish',
+                              ru: 'Отмена',
+                              en: 'Cancel',
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => Navigator.of(
+                            sheetContext,
+                          ).pop(DateTimeRange(start: start, end: end)),
+                          icon: const Icon(Icons.check_rounded),
+                          label: Text(
+                            tx(
+                              context,
+                              uz: 'Qo‘llash',
+                              ru: 'Применить',
+                              en: 'Apply',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
 /// Compact, accessible paging controls shared by offline and live lists.
 ///
 /// The range label makes the current slice explicit, while page-size changes
@@ -1118,21 +1351,43 @@ class RefPaginationBar extends StatelessWidget {
     final to = (safePage * pageSize).clamp(0, total).toInt();
     return Semantics(
       container: true,
-      label: 'Пагинация. Страница $safePage из $safePages',
+      label: tx(
+        context,
+        uz: 'Sahifalash. $safePage / $safePages sahifa',
+        ru: 'Пагинация. Страница $safePage из $safePages',
+        en: 'Pagination. Page $safePage of $safePages',
+      ),
       child: RefSurfaceCard(
         padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
         child: Row(
           children: [
             Tooltip(
-              message: 'Записей на странице',
+              message: tx(
+                context,
+                uz: 'Sahifadagi yozuvlar',
+                ru: 'Записей на странице',
+                en: 'Rows per page',
+              ),
               child: PopupMenuButton<int>(
-                tooltip: 'Записей на странице: $pageSize',
+                tooltip: tx(
+                  context,
+                  uz: 'Sahifadagi yozuvlar: $pageSize',
+                  ru: 'Записей на странице: $pageSize',
+                  en: 'Rows per page: $pageSize',
+                ),
                 onSelected: onPageSizeChanged,
                 itemBuilder: (context) => [
                   for (final size in pageSizes)
                     PopupMenuItem<int>(
                       value: size,
-                      child: Text('$size на странице'),
+                      child: Text(
+                        tx(
+                          context,
+                          uz: '$size ta sahifada',
+                          ru: '$size на странице',
+                          en: '$size per page',
+                        ),
+                      ),
                     ),
                 ],
                 child: Container(
@@ -1145,7 +1400,12 @@ class RefPaginationBar extends StatelessWidget {
                     border: Border.all(color: c.border),
                   ),
                   child: Text(
-                    '$pageSize / стр.',
+                    tx(
+                      context,
+                      uz: '$pageSize / sah.',
+                      ru: '$pageSize / стр.',
+                      en: '$pageSize / pg.',
+                    ),
                     style: RefType.mono(
                       size: 10,
                       weight: FontWeight.w700,
@@ -1169,7 +1429,12 @@ class RefPaginationBar extends StatelessWidget {
             ),
             IconButton(
               key: const ValueKey('pagination-previous'),
-              tooltip: 'Предыдущая страница',
+              tooltip: tx(
+                context,
+                uz: 'Oldingi sahifa',
+                ru: 'Предыдущая страница',
+                en: 'Previous page',
+              ),
               onPressed: safePage > 1
                   ? () => onPageChanged(safePage - 1)
                   : null,
@@ -1189,7 +1454,12 @@ class RefPaginationBar extends StatelessWidget {
             ),
             IconButton(
               key: const ValueKey('pagination-next'),
-              tooltip: 'Следующая страница',
+              tooltip: tx(
+                context,
+                uz: 'Keyingi sahifa',
+                ru: 'Следующая страница',
+                en: 'Next page',
+              ),
               onPressed: safePage < safePages
                   ? () => onPageChanged(safePage + 1)
                   : null,

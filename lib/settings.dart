@@ -417,4 +417,7 @@ class SettingsScope extends InheritedNotifier<AppSettings> {
     assert(s?.notifier != null, 'SettingsScope not found in context');
     return s!.notifier!;
   }
+
+  static AppSettings? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<SettingsScope>()?.notifier;
 }
