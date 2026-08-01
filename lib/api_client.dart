@@ -135,6 +135,28 @@ String _requestId() {
 Map<String, dynamic>? _asMap(Object? value) =>
     value is Map ? Map<String, dynamic>.from(value) : null;
 
+String? _deepScalar(Object? value, Set<String> keys, [int depth = 0]) {
+  if (depth > 8) return null;
+  final map = _asMap(value);
+  if (map != null) {
+    for (final entry in map.entries) {
+      if (!keys.contains(entry.key.toLowerCase())) continue;
+      final direct = _errorScalarText(entry.value);
+      if (direct != null) return direct;
+    }
+    for (final child in map.values) {
+      final nested = _deepScalar(child, keys, depth + 1);
+      if (nested != null) return nested;
+    }
+  } else if (value is Iterable && value is! String) {
+    for (final child in value) {
+      final nested = _deepScalar(child, keys, depth + 1);
+      if (nested != null) return nested;
+    }
+  }
+  return null;
+}
+
 String? _errorScalarText(Object? value) {
   if (value is! String && value is! num && value is! bool) return null;
   final text = '$value'.trim();
@@ -143,14 +165,22 @@ String? _errorScalarText(Object? value) {
 
 Map<String, dynamic>? _structuredApiErrors(Map<String, dynamic>? payload) {
   if (payload == null) return null;
-  final result = <String, dynamic>{...?_asMap(payload['errors'])};
-  for (final key in const ['message', 'error']) {
+  final nestedError = _asMap(payload['error']);
+  final result = <String, dynamic>{
+    ...?_asMap(payload['errors']),
+    ...?_asMap(nestedError?['errors']),
+  };
+  for (final key in const ['message', 'detail']) {
     final value = payload[key];
     if (value is Map) {
       result.addAll(Map<String, dynamic>.from(value));
     } else if (value is Iterable && value is! String) {
       result.putIfAbsent('detail', () => value.toList(growable: false));
     }
+  }
+  final nestedDetail = nestedError?['detail'];
+  if (nestedDetail is Iterable && nestedDetail is! String) {
+    result.putIfAbsent('detail', () => nestedDetail.toList(growable: false));
   }
   return result.isEmpty ? null : result;
 }
@@ -720,6 +750,7 @@ class StarforgeApiClient {
   String _baseUrl;
   String _language;
   String? _token;
+  List<String> _lastWarnings = const [];
   VoidCallback? onUnauthorized;
 
   StarforgeApiClient({String? baseUrl})
@@ -729,6 +760,7 @@ class StarforgeApiClient {
   String get baseUrl => _baseUrl;
   String? get token => _token;
   bool get hasSession => _token?.isNotEmpty == true;
+  List<String> get lastWarnings => _lastWarnings;
 
   void configure({String? baseUrl, String? language, String? token}) {
     if (baseUrl != null && baseUrl.trim().isNotEmpty) {
@@ -822,17 +854,14 @@ class StarforgeApiClient {
     );
     final session = _asMap(data) ?? const <String, dynamic>{};
     final access =
-        [
-              session['access'],
-              session['token'],
-              session['session_key'],
-              session['session'],
-              session['key'],
-            ]
-            .whereType<Object>()
-            .map((value) => value.toString().trim())
-            .where((value) => value.isNotEmpty)
-            .firstOrNull;
+        _deepScalar(session, const {
+          'access',
+          'access_token',
+          'token',
+          'session_key',
+        }) ??
+        _errorScalarText(session['session']) ??
+        _errorScalarText(session['key']);
     if (access == null || access.isEmpty) {
       throw ApiException(
         status: 0,
@@ -930,7 +959,10 @@ class StarforgeApiClient {
       final responseBytes = await response.stream.toBytes().timeout(timeout);
       final text = utf8.decode(responseBytes, allowMalformed: false);
       final decoded = text.trim().isEmpty ? null : _decode(text);
-      final responseId = response.headers['x-request-id'] ?? id;
+      final responseId =
+          response.headers['x-request-id'] ??
+          _deepScalar(decoded, const {'request_id', 'requestid'}) ??
+          id;
       if (response.statusCode < 200 || response.statusCode >= 300) {
         if (authenticate && response.statusCode == _HttpStatus.unauthorized) {
           clearSession();
@@ -987,10 +1019,21 @@ class StarforgeApiClient {
 
   dynamic _unwrap(Object? value, int status, String requestId) {
     final envelope = _asMap(value);
-    if (envelope == null || !envelope.containsKey('success')) return value;
+    if (envelope == null || !envelope.containsKey('success')) {
+      _lastWarnings = const [];
+      return value;
+    }
     if (envelope['success'] != true) {
       throw _errorFrom(status: status, payload: envelope, requestId: requestId);
     }
+    final warnings = envelope['warnings'];
+    _lastWarnings = warnings is Iterable && warnings is! String
+        ? List<String>.unmodifiable(
+            warnings
+                .map((warning) => '$warning'.trim())
+                .where((warning) => warning.isNotEmpty),
+          )
+        : const [];
     if (envelope.containsKey('pagination')) {
       return <String, dynamic>{
         'data': envelope['data'],
@@ -1008,15 +1051,21 @@ class StarforgeApiClient {
     String? fallback,
   }) {
     final map = _asMap(payload);
+    final nestedError = _asMap(map?['error']);
     final seconds = int.tryParse(retryAfter ?? '');
     return ApiException(
       status: status,
       message:
           _errorScalarText(map?['message']) ??
+          _errorScalarText(nestedError?['message']) ??
+          _errorScalarText(map?['detail']) ??
+          _errorScalarText(nestedError?['detail']) ??
           _errorScalarText(map?['error']) ??
           fallback ??
           'Request failed ($status)',
-      code: _errorScalarText(map?['code']),
+      code:
+          _errorScalarText(map?['code']) ??
+          _errorScalarText(nestedError?['code']),
       errors: _structuredApiErrors(map),
       requestId: requestId,
       retryAfter: seconds == null ? null : Duration(seconds: seconds),

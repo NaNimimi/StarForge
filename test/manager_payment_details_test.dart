@@ -59,16 +59,22 @@ Widget _offlineHost(AppStore store) {
   );
 }
 
-Widget _liveHost(ApiSession session) => ApiScope(
-  session: session,
-  child: MaterialApp(
-    theme: sfMaterialTheme(SfColors.light, dark: false),
-    home: const SfTheme(
-      colors: SfColors.light,
-      child: Scaffold(body: LiveRevenueReportPage()),
+Widget _liveHost(ApiSession session) {
+  final settings = AppSettings(lang: SfLang.uz);
+  return ApiScope(
+    session: session,
+    child: SettingsScope(
+      settings: settings,
+      child: MaterialApp(
+        theme: sfMaterialTheme(SfColors.light, dark: false),
+        home: const SfTheme(
+          colors: SfColors.light,
+          child: Scaffold(body: LiveRevenueReportPage()),
+        ),
+      ),
     ),
-  ),
-);
+  );
+}
 
 void _useNarrowPhone(WidgetTester tester) {
   tester.view.devicePixelRatio = 1;

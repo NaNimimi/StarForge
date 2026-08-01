@@ -1,0 +1,79 @@
+name: Live API Role Workflows
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_all_roles:
+        description: Fail when a CEO, Manager or Audit credential is missing
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-api-role-workflows
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - role: ceo
+            username_secret: STARFORGE_CEO_USERNAME
+            password_secret: STARFORGE_CEO_PASSWORD
+          - role: manager
+            username_secret: STARFORGE_MANAGER_USERNAME
+            password_secret: STARFORGE_MANAGER_PASSWORD
+          - role: audit
+            username_secret: STARFORGE_AUDIT_USERNAME
+            password_secret: STARFORGE_AUDIT_PASSWORD
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.12.1'
+
+      - name: Prepare role configuration
+        id: config
+        run: |
+          api_base_url="${CONFIGURED_API_BASE_URL:-https://starforge.78.111.91.113.nip.io}"
+          echo "base_url=${api_base_url}" >> "${GITHUB_OUTPUT}"
+          if [[ -n "${CONFIGURED_USERNAME}" && -n "${CONFIGURED_PASSWORD}" ]]; then
+            echo 'skip=false' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${REQUIRE_ALL_ROLES}" == 'true' ]]; then
+            echo "Missing GitHub secrets for the ${matrix_role} role." >&2
+            exit 64
+          fi
+          echo 'skip=true' >> "${GITHUB_OUTPUT}"
+          echo "::notice::Skipping ${matrix_role}; role credentials are not configured."
+        shell: bash
+        env:
+          CONFIGURED_API_BASE_URL: ${{ vars.STARFORGE_API_BASE_URL }}
+          CONFIGURED_USERNAME: ${{ secrets[matrix.username_secret] }}
+          CONFIGURED_PASSWORD: ${{ secrets[matrix.password_secret] }}
+          REQUIRE_ALL_ROLES: ${{ inputs.require_all_roles }}
+          matrix_role: ${{ matrix.role }}
+
+      - name: Run ${{ matrix.role }} workflow
+        if: steps.config.outputs.skip != 'true'
+        env:
+          STARFORGE_API_BASE_URL: ${{ steps.config.outputs.base_url }}
+          STARFORGE_API_HOST: ${{ vars.STARFORGE_API_HOST }}
+          STARFORGE_API_USERNAME: ${{ secrets[matrix.username_secret] }}
+          STARFORGE_API_PASSWORD: ${{ secrets[matrix.password_secret] }}
+          STARFORGE_EXPECTED_ROLE: ${{ matrix.role }}
+          STARFORGE_PROBE_INTERVAL_MS: '1500'
+        run: dart tool/live_api_workflow_probe.dart

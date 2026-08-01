@@ -1,0 +1,96 @@
+name: OpenAPI Contract
+
+on:
+  push:
+    paths:
+      - '.github/workflows/openapi-contract.yml'
+      - 'lib/api_catalog.dart'
+      - 'lib/api_catalog.g.dart'
+      - 'lib/api_client.dart'
+      - 'test/api_*.dart'
+      - 'tool/generate_api_catalog.dart'
+      - 'tool/openapi_workflow_audit.dart'
+  pull_request:
+    paths:
+      - '.github/workflows/openapi-contract.yml'
+      - 'lib/api_catalog.dart'
+      - 'lib/api_catalog.g.dart'
+      - 'lib/api_client.dart'
+      - 'test/api_*.dart'
+      - 'tool/generate_api_catalog.dart'
+      - 'tool/openapi_workflow_audit.dart'
+  workflow_dispatch:
+    inputs:
+      schema_url:
+        description: Optional HTTPS URL for the current schema.json
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generated-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Verify generated catalogue and transport fallbacks
+        run: |
+          flutter test --no-pub --concurrency=1 -r expanded \
+            test/api_openapi_contract_test.dart \
+            test/api_transport_test.dart \
+            test/api_fallback_transport_test.dart \
+            test/api_refresh_control_test.dart \
+            test/api_login_flow_test.dart
+
+      - name: Resolve optional published schema
+        id: schema
+        env:
+          INPUT_SCHEMA_URL: ${{ inputs.schema_url }}
+          REPOSITORY_SCHEMA_URL: ${{ vars.STARFORGE_SCHEMA_URL }}
+        run: |
+          schema_url="${INPUT_SCHEMA_URL:-${REPOSITORY_SCHEMA_URL}}"
+          if [[ -z "${schema_url}" ]]; then
+            echo 'available=false' >> "${GITHUB_OUTPUT}"
+            echo 'No schema URL configured; the checked-in 487-operation catalogue remains authoritative.'
+            exit 0
+          fi
+          if [[ "${schema_url}" != https://* ]]; then
+            echo 'The schema URL must use HTTPS.' >&2
+            exit 64
+          fi
+          curl --fail --location --retry 3 --silent --show-error \
+            "${schema_url}" --output "${RUNNER_TEMP}/schema.json"
+          echo 'available=true' >> "${GITHUB_OUTPUT}"
+
+      - name: Audit live schema against generated catalogue
+        if: steps.schema.outputs.available == 'true'
+        run: >-
+          dart tool/openapi_workflow_audit.dart
+          "${RUNNER_TEMP}/schema.json"
+          lib/api_catalog.g.dart
+
+      - name: Regenerate catalogue as a parse check
+        if: steps.schema.outputs.available == 'true'
+        run: >-
+          dart tool/generate_api_catalog.dart
+          "${RUNNER_TEMP}/schema.json"
+          "${RUNNER_TEMP}/api_catalog.generated.dart"
