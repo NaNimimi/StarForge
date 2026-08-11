@@ -63,7 +63,9 @@ void main() {
     expect(find.text('Номер операции'), findsOneWidget);
   });
 
-  testWidgets('notification actions persist in the role store', (tester) async {
+  testWidgets('offline notification history never invents server events', (
+    tester,
+  ) async {
     _phone(tester);
     SharedPreferences.setMockInitialValues({});
     final store = AppStore.seed(SfRole.manager);
@@ -79,27 +81,22 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('Непрочитанных уведомлений нет'), findsOneWidget);
     expect(store.readLocalNotificationIds, isEmpty);
-    await tester.tap(find.byIcon(Icons.done_all_rounded));
-    await tester.pumpAndSettle();
-    expect(store.readLocalNotificationIds, hasLength(2));
     expect(find.text('Открыть историю'), findsOneWidget);
     await tester.tap(find.text('Открыть историю'));
     await tester.pumpAndSettle();
-
-    final firstNotification = find.byType(Dismissible).first;
-    await tester.drag(firstNotification, const Offset(-420, 0));
-    await tester.pumpAndSettle();
-    expect(store.hiddenLocalNotificationIds, hasLength(1));
+    expect(find.text('Уведомлений нет'), findsOneWidget);
+    expect(find.byType(Dismissible), findsNothing);
     await settings.saveNotificationState();
 
     final restored = await AppSettings.load();
-    expect(restored.readNotificationKeys, hasLength(2));
-    expect(restored.hiddenNotificationKeys, hasLength(1));
+    expect(restored.readNotificationKeys, isEmpty);
+    expect(restored.hiddenNotificationKeys, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('notification tap opens its role-safe destination once', (
+  testWidgets('offline notification callback is not called without API rows', (
     tester,
   ) async {
     _phone(tester);
@@ -123,17 +120,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text("Yangi to'lov qabul qilindi"), findsOneWidget);
-    expect(find.text('Sebzorda yangi anomaliya signali'), findsNothing);
-    await tester.tap(find.text("Yangi to'lov qabul qilindi"));
-    await tester.pumpAndSettle();
-
-    expect(destination, 'payments');
-    expect(store.readLocalNotificationIds, hasLength(1));
-    expect(find.text("Yangi to'lov qabul qilindi"), findsNothing);
-    await tester.tap(find.text('История'));
-    await tester.pumpAndSettle();
-    expect(find.text("Yangi to'lov qabul qilindi"), findsOneWidget);
+    expect(find.byType(Dismissible), findsNothing);
+    expect(destination, isNull);
+    expect(store.readLocalNotificationIds, isEmpty);
     expect(tester.takeException(), isNull);
   });
 

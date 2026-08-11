@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'theme.dart';
 
@@ -70,9 +71,10 @@ const Map<String, String> kUserPhotos = {
 /// an [emoji]. Stored on the [AppStore] so the choice shows everywhere at once.
 class AvatarChoice {
   final String? photo;
+  final Uint8List? memoryBytes;
   final List<Color>? gradient;
   final String? emoji;
-  const AvatarChoice({this.photo, this.gradient, this.emoji});
+  const AvatarChoice({this.photo, this.memoryBytes, this.gradient, this.emoji});
 }
 
 /// Real-photo avatar options offered in the picker.
@@ -140,7 +142,23 @@ class SfAvatar extends StatelessWidget {
           ),
         ],
       ),
-      child: ch.photo != null
+      child: ch.memoryBytes != null
+          ? Image.memory(
+              ch.memoryBytes!,
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Text(
+                _initials,
+                style: TextStyle(
+                  fontFamily: SfType.ui,
+                  fontSize: size * 0.4,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            )
+          : ch.photo != null
           ? Image.asset(
               ch.photo!,
               width: size,

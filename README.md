@@ -10,14 +10,14 @@ Manage students, branches, classrooms, people, finance, communication, and quali
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.x-02569B?style=for-the-badge&logo=flutter&logoColor=white">
   <img alt="Dart" src="https://img.shields.io/badge/Dart-3.x-0175C2?style=for-the-badge&logo=dart&logoColor=white">
   <img alt="Material 3" src="https://img.shields.io/badge/Material-3-6750A4?style=for-the-badge&logo=materialdesign&logoColor=white">
-  <img alt="Platforms" src="https://img.shields.io/badge/Android_·_Web-Ready-4F7B3B?style=for-the-badge">
+  <img alt="Platforms" src="https://img.shields.io/badge/Android_·_iOS-Ready-4F7B3B?style=for-the-badge">
 </p>
 
 <p>
   <img alt="Uzbek" src="https://img.shields.io/badge/UZ-Uzbek-4F7B3B?style=flat-square">
   <img alt="Russian" src="https://img.shields.io/badge/RU-Russian-4F7B3B?style=flat-square">
   <img alt="English" src="https://img.shields.io/badge/EN-English-4F7B3B?style=flat-square">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.5.5-C68423?style=flat-square">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.5.7-C68423?style=flat-square">
 </p>
 
 </div>
@@ -175,6 +175,28 @@ flutter pub get
 flutter devices
 flutter run -d <device-id>
 ```
+
+### Live API and Firebase push
+
+The API origin and Firebase client identifiers are supplied at build time, so
+credentials and environment-specific values are never committed to source.
+
+```bash
+flutter build apk --release \
+  --dart-define="STARFORGE_API_BASE_URL=https://your-tenant.example" \
+  --dart-define="STARFORGE_FIREBASE_PROJECT_ID=your-project" \
+  --dart-define="STARFORGE_FIREBASE_MESSAGING_SENDER_ID=123456789" \
+  --dart-define="STARFORGE_FIREBASE_ANDROID_API_KEY=your-android-api-key" \
+  --dart-define="STARFORGE_FIREBASE_ANDROID_APP_ID=1:123456789:android:app-id" \
+  --dart-define="STARFORGE_FIREBASE_STORAGE_BUCKET=your-project.firebasestorage.app"
+```
+
+Native `android/app/google-services.json` and
+`ios/Runner/GoogleService-Info.plist` are also supported. After login the app
+registers its stable device ID and FCM token through
+`POST /api/v1/users/devices/`, refreshes rotated tokens, displays foreground
+messages, handles background/terminated delivery, and opens chats for payloads
+containing `thread_id`.
 
 ### Run on Web
 

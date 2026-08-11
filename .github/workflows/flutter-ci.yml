@@ -41,16 +41,23 @@ jobs:
       - name: Test
         run: flutter test --no-pub --concurrency=1 -r expanded
 
-      - name: Build web release
-        run: flutter build web --release --no-pub
-
       - name: Build Android release
         env:
           CONFIGURED_API_BASE_URL: ${{ vars.STARFORGE_API_BASE_URL }}
+          FIREBASE_PROJECT_ID: ${{ secrets.STARFORGE_FIREBASE_PROJECT_ID }}
+          FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.STARFORGE_FIREBASE_MESSAGING_SENDER_ID }}
+          FIREBASE_ANDROID_API_KEY: ${{ secrets.STARFORGE_FIREBASE_ANDROID_API_KEY }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.STARFORGE_FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.STARFORGE_FIREBASE_STORAGE_BUCKET }}
         run: |
           api_base_url="${CONFIGURED_API_BASE_URL:-https://starforge.78.111.91.113.nip.io}"
           flutter build apk --release --no-pub \
-            --dart-define="STARFORGE_API_BASE_URL=${api_base_url}"
+            --dart-define="STARFORGE_API_BASE_URL=${api_base_url}" \
+            --dart-define="STARFORGE_FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}" \
+            --dart-define="STARFORGE_FIREBASE_MESSAGING_SENDER_ID=${FIREBASE_MESSAGING_SENDER_ID}" \
+            --dart-define="STARFORGE_FIREBASE_ANDROID_API_KEY=${FIREBASE_ANDROID_API_KEY}" \
+            --dart-define="STARFORGE_FIREBASE_ANDROID_APP_ID=${FIREBASE_ANDROID_APP_ID}" \
+            --dart-define="STARFORGE_FIREBASE_STORAGE_BUCKET=${FIREBASE_STORAGE_BUCKET}"
 
       - name: Publish build artifacts
         uses: actions/upload-artifact@v4
@@ -58,6 +65,4 @@ jobs:
           name: starforge-release-${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/web/**
+          path: build/app/outputs/flutter-apk/app-release.apk

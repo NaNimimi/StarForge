@@ -1,0 +1,181 @@
+{
+  "captured_at": "2026-08-11T06:35:39.900Z",
+  "keeper_student": {
+    "id": 4,
+    "username": "qa.student.20260804",
+    "fields": {
+      "username": {
+        "value": "qa.student.20260804",
+        "checked": false
+      },
+      "is_active": {
+        "value": "",
+        "checked": true
+      },
+      "must_change_password": {
+        "value": "",
+        "checked": false
+      },
+      "first_name": {
+        "value": "Aziz",
+        "checked": false
+      },
+      "last_name": {
+        "value": "Karimov",
+        "checked": false
+      },
+      "middle_name": {
+        "value": "Rustam o‘g‘li",
+        "checked": false
+      },
+      "phone": {
+        "value": "+998900804101",
+        "checked": false
+      },
+      "email": {
+        "value": "qa.student.20260804@demo.localhost",
+        "checked": false
+      },
+      "birthdate": {
+        "value": "18.05.2012",
+        "checked": false
+      },
+      "academic_level": {
+        "value": "B1",
+        "checked": false
+      },
+      "location": {
+        "value": "Toshkent, Yunusobod",
+        "checked": false
+      },
+      "previous_school": {
+        "value": "220-sonli maktab",
+        "checked": false
+      },
+      "photo": {
+        "value": "",
+        "checked": false
+      },
+      "enrollment_events-TOTAL_FORMS": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-INITIAL_FORMS": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-MIN_NUM_FORMS": {
+        "value": "0",
+        "checked": false
+      },
+      "enrollment_events-MAX_NUM_FORMS": {
+        "value": "0",
+        "checked": false
+      },
+      "enrollment_events-0-id": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-0-student": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-1-id": {
+        "value": "3",
+        "checked": false
+      },
+      "enrollment_events-1-student": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-2-id": {
+        "value": "2",
+        "checked": false
+      },
+      "enrollment_events-2-student": {
+        "value": "4",
+        "checked": false
+      },
+      "enrollment_events-3-id": {
+        "value": "1",
+        "checked": false
+      },
+      "enrollment_events-3-student": {
+        "value": "4",
+        "checked": false
+      }
+    }
+  },
+  "keeper_parent": {
+    "id": 2,
+    "username": "qa.parent.20260804",
+    "fields": {
+      "username": {
+        "value": "qa.parent.20260804",
+        "checked": false
+      },
+      "is_active": {
+        "value": "",
+        "checked": true
+      },
+      "must_change_password": {
+        "value": "",
+        "checked": false
+      },
+      "first_name": {
+        "value": "Malika",
+        "checked": false
+      },
+      "last_name": {
+        "value": "Karimova",
+        "checked": false
+      },
+      "middle_name": {
+        "value": "Anvar qizi",
+        "checked": false
+      },
+      "phone": {
+        "value": "+998900804102",
+        "checked": false
+      },
+      "email": {
+        "value": "qa.parent.20260804@demo.localhost",
+        "checked": false
+      },
+      "birthdate": {
+        "value": "12.09.1985",
+        "checked": false
+      },
+      "workplace": {
+        "value": "StarForge QA Family",
+        "checked": false
+      },
+      "guardianships-TOTAL_FORMS": {
+        "value": "1",
+        "checked": false
+      },
+      "guardianships-INITIAL_FORMS": {
+        "value": "1",
+        "checked": false
+      },
+      "guardianships-MIN_NUM_FORMS": {
+        "value": "0",
+        "checked": false
+      },
+      "guardianships-MAX_NUM_FORMS": {
+        "value": "0",
+        "checked": false
+      },
+      "guardianships-0-id": {
+        "value": "2",
+        "checked": false
+      },
+      "guardianships-0-parent": {
+        "value": "2",
+        "checked": false
+      }
+    }
+  },
+  "extra_students": [],
+  "extra_parents": []
+}

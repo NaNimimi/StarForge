@@ -8,6 +8,7 @@ import 'api_client.dart';
 import 'api_data_view.dart';
 import 'data.dart';
 import 'i18n.dart';
+import 'live_pages.dart';
 import 'pages.dart';
 import 'productivity_hub.dart';
 import 'reference_ui.dart';
@@ -35,7 +36,8 @@ const Map<String, Set<String>> _routeApiPermissions = {
   'surveys': {'forms:read'},
   'messages': {'messaging:read'},
   'cases': {'tasks:read', 'compliance:read', 'penalty:read'},
-  'notifications': {'notifications:read'},
+  'students': {'students:read'},
+  'parents': {'parents:read'},
 };
 
 bool _backendAllowsRoute(ApiSession? session, String route) {
@@ -107,6 +109,8 @@ class _ConsoleState extends State<Console> {
   }
 
   bool _notificationUnread(Map<String, dynamic> record) {
+    final readAt = record['read_at'];
+    if (readAt != null && '$readAt'.trim().isNotEmpty) return false;
     final state = record['is_read'] ?? record['read'] ?? record['status'];
     if (state is bool) return !state;
     final text = '$state'.toLowerCase();
@@ -132,8 +136,8 @@ class _ConsoleState extends State<Console> {
     _syncingNotifications = true;
     try {
       await Future.wait([
-        session!.refresh('notifications'),
-        session.refresh('unreadNotifications'),
+        session!.refreshNotificationHead(),
+        session.refresh('unreadNotifications', force: true),
       ]);
       final records = session.records('notifications');
       final currentIds = records.map(_notificationId).toSet();
@@ -172,6 +176,7 @@ class _ConsoleState extends State<Console> {
             'message',
             'description',
           ], 'Yangi bildirishnoma bor'),
+          payload: Map<String, dynamic>.from(record),
         );
       }
     } catch (_) {
@@ -226,8 +231,41 @@ class _ConsoleState extends State<Console> {
       _route = route;
       _drawerOpen = false;
     });
-    // DashboardScreen owns its single refresh lifecycle. Starting a second
-    // wave here used to duplicate every KPI request on ordinary navigation.
+    unawaited(_refreshRouteData(route));
+  }
+
+  /// Database directories can change after sign-in (for example when an
+  /// operator creates a student in another session). Refresh their exact join
+  /// set whenever the user opens the section, while leaving dashboard polling
+  /// and unrelated endpoints untouched.
+  Future<void> _refreshRouteData(String route) async {
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (session?.authenticated != true) return;
+    final resources = switch (route) {
+      'students' => const ['students', 'guardians', 'parents', 'groups'],
+      'parents' => const ['parents', 'guardians', 'students', 'groups'],
+      _ => const <String>[],
+    };
+    for (final resource in resources) {
+      try {
+        await session!.refresh(resource, force: true);
+      } on ApiException catch (error) {
+        final primary = resource == resources.first;
+        if (primary && mounted) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(error.message),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          break;
+        }
+        // Optional joins can legitimately be forbidden for scoped roles.
+        // Other failures are kept in ApiSession and surfaced by live pages.
+      }
+    }
   }
 
   void _handleBack() {
@@ -266,7 +304,11 @@ class _ConsoleState extends State<Console> {
   Widget _page(SfColors colors) {
     switch (_route) {
       case 'dash':
-        return DashboardScreen(cfg: widget.cfg, go: _navigate);
+        return widget.cfg.role == SfRole.student
+            ? StudentSelfServiceScreen(colors: colors)
+            : DashboardScreen(cfg: widget.cfg, go: _navigate);
+      case 'student_report':
+        return StudentSelfServiceScreen(colors: colors, reportOnly: true);
       case 'tools':
         // This route is the user's role-safe navigation/action hub in both
         // preview and authenticated modes. The technical OpenAPI explorer is
@@ -348,11 +390,15 @@ class _ConsoleState extends State<Console> {
         // make the connected assistant impossible to use.
         return AiScreen(cfg: widget.cfg);
       case 'notifications':
-        return NotificationsScreen(colors: colors, onNavigate: _navigate);
+        final api = ApiScope.maybeOf(context)?.notifier;
+        return api?.authenticated == true
+            ? LiveNotificationsPage(onNavigate: _navigate)
+            : NotificationsScreen(colors: colors, onNavigate: _navigate);
       case 'me':
         return ProfileScreen(
           cfg: widget.cfg,
           onSwitchRole: widget.onSwitchRole,
+          onNavigate: _navigate,
         );
       case 'settings':
         return const ApiConnectionScreen();

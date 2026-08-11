@@ -4,6 +4,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Keep local/CI builds valid without project credentials. If the real native
+// Firebase config is supplied, process it using Google's official plugin.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.starforge.ceo_manager"
     compileSdk = flutter.compileSdkVersion

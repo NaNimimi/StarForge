@@ -5,7 +5,7 @@ import 'theme.dart';
 ///
 /// Keep this in one shared place instead of scattering stale version strings
 /// across screens.
-const kAppDisplayVersion = '1.5.5';
+const kAppDisplayVersion = '1.5.8';
 
 /// Display currency for all money formatting. Switchable from the design panel.
 enum SfCurrency { uzs, usd, eur, rub }
@@ -78,7 +78,7 @@ String fmtMoneyMln(num uzs) {
   return '$sign${a.round()}';
 }
 
-enum SfRole { ceo, manager, audit }
+enum SfRole { ceo, manager, audit, student }
 
 class TabSpec {
   final String id;
@@ -171,11 +171,35 @@ const Map<SfRole, RoleConfig> kRoleConfigs = {
       TabSpec('me', 'Profil', Icons.person_rounded),
     ],
   ),
+  SfRole.student: RoleConfig(
+    role: SfRole.student,
+    label: 'Student',
+    who: 'Student',
+    roleTitle: 'O‘quvchi',
+    scope: 'Shaxsiy kabinet',
+    dark: false,
+    tabs: [
+      TabSpec('dash', 'Panel', Icons.home_rounded),
+      TabSpec('student_report', 'Natija', Icons.school_rounded),
+      TabSpec('messages', 'Xabar', Icons.chat_bubble_rounded),
+      TabSpec('notifications', 'Bildirishnoma', Icons.notifications_rounded),
+      TabSpec('me', 'Profil', Icons.person_rounded),
+    ],
+  ),
 };
 
 // ── Mock data sets (ported verbatim from admin-mobile.jsx) ──────────────
 
 class Student {
+  /// Stable backend primary key. It is deliberately separate from the public
+  /// student number shown to users and is used for API relationships such as
+  /// the messaging contact directory.
+  final String? serverId;
+
+  /// Account id used by the messaging API. A student record id and a user
+  /// account id are different backend identities, so chat creation must never
+  /// substitute [serverId] for this value.
+  final String? serverUserId;
   final String name;
   final String group;
   final int attendance;
@@ -194,6 +218,7 @@ class Student {
   final String? username;
   final String? gender;
   final String? level;
+  final String? teacher;
   final String? enrolledAt;
   final int? age;
   final String? motherName;
@@ -219,10 +244,13 @@ class Student {
     this.username,
     this.gender,
     this.level,
+    this.teacher,
     this.enrolledAt,
     this.age,
     this.motherName,
     this.motherPhone,
+    this.serverId,
+    this.serverUserId,
     this.serverBacked = false,
   });
 }
@@ -361,6 +389,12 @@ StudentProfile studentProfile(Student s) {
 /// Days since the last call to this student's parents (demo: deterministic on
 /// the name, range 0–37). Drives the green/amber/red "call status" indicator.
 int studentCallDays(Student s) => _seedOf('call·${s.name}') % 38;
+
+/// API students do not publish parent-call history in the current contract.
+/// Returning null prevents live screens from presenting demo-derived dates as
+/// database facts while keeping the offline showcase deterministic.
+int? studentRecordedCallDays(Student s) =>
+    s.serverBacked ? null : studentCallDays(s);
 
 const List<Student> kStudents = [
   Student('Akbarov Akmal', '9-B Algebra', 96, 'paid', 0),
@@ -634,6 +668,10 @@ const List<AuditCase> kCases = [
 ];
 
 class Thread {
+  /// Stable messaging thread id supplied by the API. Seed/offline threads do
+  /// not have one and therefore never issue backend mutations.
+  final String? serverId;
+  final List<String> participantIds;
   final String name;
   final String group;
   final String last;
@@ -649,6 +687,8 @@ class Thread {
     this.unread = 0,
     this.online = false,
     this.isGroup = false,
+    this.serverId,
+    this.participantIds = const [],
   });
 }
 
@@ -883,13 +923,20 @@ const Map<SfRole, DashStats> kDashStats = {
     aiQuote: '38 oila qarzdor. 12 tasi 30 kundan oshgan.',
   ),
   SfRole.audit: DashStats(revenue: 0, students: '0', debt: 0, aiQuote: ''),
+  SfRole.student: DashStats(revenue: 0, students: '0', debt: 0, aiQuote: ''),
 };
 
 // ── Per-role selectors ──────────────────────────────────────────────────
-List<Student> studentsFor(SfRole r) =>
-    r == SfRole.manager ? kStudentsManager : kStudentsCeo;
-List<Branch> branchesFor(SfRole r) =>
-    r == SfRole.manager ? kBranchesManager : kBranches;
+List<Student> studentsFor(SfRole r) => r == SfRole.student
+    ? const <Student>[]
+    : r == SfRole.manager
+    ? kStudentsManager
+    : kStudentsCeo;
+List<Branch> branchesFor(SfRole r) => r == SfRole.student
+    ? const <Branch>[]
+    : r == SfRole.manager
+    ? kBranchesManager
+    : kBranches;
 List<Approval> approvalsFor(SfRole r) =>
     r == SfRole.manager ? kApprovals : const <Approval>[];
 List<LedgerEntry> ledgerFor(SfRole r) =>
@@ -898,4 +945,5 @@ List<Thread> threadsFor(SfRole r) => switch (r) {
   SfRole.ceo => kThreadsCeo,
   SfRole.manager => kThreads,
   SfRole.audit => kThreadsAudit,
+  SfRole.student => const <Thread>[],
 };

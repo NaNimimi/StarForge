@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingClient extends StarforgeApiClient {
   final calls = <({String method, String path, Object? body})>[];
+  final listCalls = <String>[];
   bool failRefresh = false;
 
   _RecordingClient() {
@@ -27,6 +28,7 @@ class _RecordingClient extends StarforgeApiClient {
 
   @override
   Future<ApiPage> list(String path, {Map<String, Object?>? query}) async {
+    listCalls.add(path);
     if (failRefresh) {
       throw const ApiException(
         status: HttpStatus.serviceUnavailable,
@@ -213,8 +215,90 @@ void main() {
       await session.sendThreadMessage(9, 'Salom');
 
       expect(client.calls.single.path, '/api/v1/messaging/threads/9/messages/');
-      expect(client.calls.single.body, {'text': 'Salom'});
+      expect(client.calls.single.body, {
+        'body': 'Salom',
+        'attachments': <String>[],
+      });
     });
+
+    test('thread read marker uses the published nested endpoint', () async {
+      final client = _RecordingClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+
+      await session.markThreadRead('9');
+
+      expect(client.calls.single.method, 'POST');
+      expect(client.calls.single.path, '/api/v1/messaging/threads/9/read/');
+      expect(client.calls.single.body, <String, Object?>{});
+    });
+
+    test(
+      'new direct thread sends its first message through messages API',
+      () async {
+        final client = _RecordingClient();
+        final session = ApiSession(client: client);
+        addTearDown(session.dispose);
+
+        await session.createMessageThread(
+          participantIds: const [42],
+          subject: 'Student account',
+          firstBody: 'Hello from the real chat',
+        );
+
+        expect(client.calls, hasLength(2));
+        expect(client.calls.first.method, 'POST');
+        expect(client.calls.first.path, '/api/v1/messaging/threads/');
+        expect(client.calls.first.body, {
+          'participant_ids': [42],
+          'subject': 'Student account',
+        });
+        expect(client.calls.last.path, '/api/v1/messaging/threads/1/messages/');
+        expect(client.calls.last.body, {
+          'body': 'Hello from the real chat',
+          'attachments': <String>[],
+        });
+      },
+    );
+
+    test(
+      'messaging bootstrap never probes unpublished contacts route',
+      () async {
+        final client = _RecordingClient();
+        final session = ApiSession(client: client)
+          ..me = {
+            'id': 17,
+            'permissions': ['messaging:read'],
+          };
+        addTearDown(session.dispose);
+
+        await session.reloadAll();
+
+        expect(client.listCalls, contains('/api/v1/messaging/threads/'));
+        expect(
+          client.listCalls,
+          isNot(contains('/api/v1/messaging/contacts/')),
+        );
+        expect(session.messagingSelfUserId, 17);
+      },
+    );
+
+    test(
+      'absolute attachment URLs need no unpublished download endpoint',
+      () async {
+        final client = _RecordingClient();
+        final session = ApiSession(client: client);
+        addTearDown(session.dispose);
+
+        final url = await session.messageAttachmentDownloadUrl(
+          9,
+          'https://cdn.example.test/chat/photo.jpg',
+        );
+
+        expect(url, 'https://cdn.example.test/chat/photo.jpg');
+        expect(client.calls, isEmpty);
+      },
+    );
 
     test(
       'teacher payroll uses payout-policy and prepare-salary endpoints',
@@ -273,7 +357,7 @@ void main() {
           'new_password': 'new-secret',
         });
         expect(client.calls[2].body, {
-          'current_password': 'old-secret',
+          'old_password': 'old-secret',
           'new_password': 'new-secret',
         });
       },

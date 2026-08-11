@@ -18,7 +18,21 @@ void main() {
           sfRoleFromApiProfile({'role_name': 'Compliance Auditor'}),
           SfRole.audit,
         );
-        expect(sfRoleFromApiProfile({'role': 'student'}), isNull);
+        expect(sfRoleFromApiProfile({'role': 'student'}), SfRole.student);
+        expect(
+          sfRoleFromApiProfile({'principal_kind': 'student'}),
+          SfRole.student,
+        );
+        expect(
+          sfRoleFromApiProfile({'principal_kind': 'parent'}),
+          SfRole.student,
+        );
+        expect(
+          sfRoleFromApiProfile({
+            'role': {'account_type_slug': 'guardian'},
+          }),
+          SfRole.student,
+        );
         expect(sfRoleFromApiProfile(null), isNull);
         expect(
           sfRoleFromApiProfile({

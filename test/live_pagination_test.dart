@@ -481,4 +481,58 @@ void main() {
     expect(find.text('Old message'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  test(
+    'own notification feed loads without an admin permission code',
+    () async {
+      final client = _NotificationClient();
+      final session = ApiSession(client: client)
+        ..me = {'permission_codes': <String>[]};
+      addTearDown(session.dispose);
+
+      await session.reloadAll();
+
+      expect(session.records('notifications'), hasLength(2));
+      expect(session.document('unreadNotifications'), {'count': 1});
+    },
+  );
+
+  testWidgets('informational notification marks read without empty detail', (
+    tester,
+  ) async {
+    _surface(tester);
+    final client = _NotificationClient();
+    client.records
+      ..clear()
+      ..add({
+        'id': 'notification-info-1',
+        'event_type': 'system.info',
+        'title': 'Database notice',
+        'body': 'No destination was published',
+        'data': const <String, dynamic>{},
+        'read_at': null,
+      });
+    final session = ApiSession(client: client);
+    final store = AppStore.seed(SfRole.manager);
+    addTearDown(session.dispose);
+    addTearDown(store.dispose);
+    String? destination;
+
+    await tester.pumpWidget(
+      _notificationHost(
+        session,
+        store,
+        LiveNotificationsPage(onNavigate: (route) => destination = route),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Database notice'));
+    await tester.pumpAndSettle();
+
+    expect(destination, isNull);
+    expect(find.byType(LiveRecordDetailPage), findsNothing);
+    expect(find.text('Database notice'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

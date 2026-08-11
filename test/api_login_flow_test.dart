@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:ceo_manager/api_client.dart';
 import 'package:ceo_manager/api_connection.dart';
 import 'package:ceo_manager/data.dart';
@@ -65,6 +67,33 @@ class _LoginClient extends StarforgeApiClient {
   }
 }
 
+class _SlowBootstrapClient extends _LoginClient {
+  final Completer<dynamic> studentsGate = Completer<dynamic>();
+
+  @override
+  Future<dynamic> request(
+    String method,
+    String path, {
+    Map<String, Object?>? query,
+    Object? body,
+    bool authenticate = true,
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    if (path == '/api/v1/students/') {
+      requestedPaths.add(path);
+      return studentsGate.future;
+    }
+    return super.request(
+      method,
+      path,
+      query: query,
+      body: body,
+      authenticate: authenticate,
+      timeout: timeout,
+    );
+  }
+}
+
 Widget _host(ApiSession session) {
   final settings = AppSettings(lang: SfLang.ru);
   return ApiScope(
@@ -83,6 +112,33 @@ Widget _host(ApiSession session) {
 }
 
 void main() {
+  test(
+    'successful authentication does not wait for dashboard bootstrap',
+    () async {
+      final client = _SlowBootstrapClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+
+      await session
+          .login(
+            endpoint: 'https://api.example.test',
+            username: 'director',
+            password: 'secret',
+          )
+          .timeout(const Duration(seconds: 1));
+
+      expect(session.authenticated, isTrue);
+      expect(session.me?['role'], 'ceo');
+      expect(client.requestedPaths, contains('/api/v1/students/'));
+      expect(client.studentsGate.isCompleted, isFalse);
+      client.studentsGate.complete(const {
+        'data': <Map<String, dynamic>>[],
+        'pagination': {'page': 1, 'page_size': 100, 'total': 0},
+      });
+      await Future<void>.delayed(Duration.zero);
+    },
+  );
+
   testWidgets('startup login authenticates against API and loads profile', (
     tester,
   ) async {
@@ -109,9 +165,7 @@ void main() {
     expect(client.requestedBodies['/api/v1/auth/login/'], {
       'username': 'director',
       'password': 'secret',
-      'platform': 'mobile',
     });
-    expect(client.requestedPaths, isNot(contains('/api/v1/auth/role-login/')));
     expect(client.requestedPaths, contains('/api/v1/users/me/'));
     expect(find.byKey(const ValueKey('workspace-ceo')), findsNothing);
     expect(tester.takeException(), isNull);

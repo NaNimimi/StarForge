@@ -364,9 +364,9 @@ class _ApiLoginScreenState extends State<ApiLoginScreen> {
                           child: Text(
                             tx(
                               context,
-                              uz: 'HTTPS · token faqat joriy sessiyada saqlanadi',
-                              ru: 'HTTPS · токен хранится только в текущей сессии',
-                              en: 'HTTPS · token is kept only for the current session',
+                              uz: 'HTTPS · token qurilmaning himoyalangan xotirasida',
+                              ru: 'HTTPS · токен защищён системным хранилищем',
+                              en: 'HTTPS · token is protected by secure device storage',
                             ),
                             textAlign: TextAlign.center,
                             style: RefType.ui(size: 10.5, color: c.muted),
@@ -680,12 +680,7 @@ class _ApiConnectionScreenState extends State<ApiConnectionScreen> {
   }
 
   Future<void> _showChangePassword() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: SfTheme.of(context).surface,
-      builder: (context) => const _ChangePasswordSheet(),
-    );
+    await showApiChangePassword(context);
   }
 
   String _message(ApiException error) {
@@ -1229,8 +1224,21 @@ class _PasswordResetSheetState extends State<_PasswordResetSheet> {
   }
 }
 
+Future<void> showApiChangePassword(
+  BuildContext context, {
+  bool mandatory = false,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  isDismissible: !mandatory,
+  enableDrag: !mandatory,
+  backgroundColor: SfTheme.of(context).surface,
+  builder: (context) => _ChangePasswordSheet(mandatory: mandatory),
+);
+
 class _ChangePasswordSheet extends StatefulWidget {
-  const _ChangePasswordSheet();
+  final bool mandatory;
+  const _ChangePasswordSheet({this.mandatory = false});
 
   @override
   State<_ChangePasswordSheet> createState() => _ChangePasswordSheetState();
@@ -1302,7 +1310,9 @@ class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Сменить пароль',
+                widget.mandatory
+                    ? 'Необходимо изменить временный пароль'
+                    : 'Сменить пароль',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 14),

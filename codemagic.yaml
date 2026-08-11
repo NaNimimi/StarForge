@@ -1,0 +1,111 @@
+workflows:
+  android-release:
+    name: StarForge EDU Android release
+    instance_type: linux_x2
+    max_build_duration: 60
+
+    environment:
+      flutter: 3.44.1
+      java: 17
+      vars:
+        STARFORGE_API_BASE_URL: "https://starforge.78.111.91.113.nip.io"
+
+    cache:
+      cache_paths:
+        - $FLUTTER_ROOT/.pub-cache
+        - $HOME/.gradle/caches
+
+    scripts:
+      - name: Resolve Flutter dependencies
+        script: flutter pub get
+
+      - name: Verify formatting
+        script: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: Analyze
+        script: flutter analyze --no-pub
+
+      - name: Run tests
+        script: flutter test --no-pub --concurrency=1 -r expanded
+
+      - name: Build Android release APK
+        script: |
+          flutter build apk --release --no-pub \
+            --build-number="$PROJECT_BUILD_NUMBER" \
+            --dart-define="STARFORGE_API_BASE_URL=$STARFORGE_API_BASE_URL" \
+            --dart-define="STARFORGE_FIREBASE_PROJECT_ID=${STARFORGE_FIREBASE_PROJECT_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_MESSAGING_SENDER_ID=${STARFORGE_FIREBASE_MESSAGING_SENDER_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_ANDROID_API_KEY=${STARFORGE_FIREBASE_ANDROID_API_KEY:-}" \
+            --dart-define="STARFORGE_FIREBASE_ANDROID_APP_ID=${STARFORGE_FIREBASE_ANDROID_APP_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_STORAGE_BUCKET=${STARFORGE_FIREBASE_STORAGE_BUCKET:-}"
+
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/mapping/release/mapping.txt
+
+  ios-release:
+    name: StarForge EDU iOS release
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.starforge.ceoManager
+      flutter: 3.44.1
+      xcode: latest
+      vars:
+        STARFORGE_API_BASE_URL: "https://starforge.78.111.91.113.nip.io"
+
+    cache:
+      cache_paths:
+        - $FLUTTER_ROOT/.pub-cache
+
+    scripts:
+      - name: Enable Flutter Swift Package Manager
+        script: flutter config --enable-swift-package-manager
+
+      - name: Resolve Flutter dependencies
+        script: flutter pub get
+
+      - name: Verify formatting
+        script: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: Analyze
+        script: flutter analyze --no-pub
+
+      - name: Run tests
+        script: flutter test --no-pub --concurrency=1 -r expanded
+
+      - name: Validate unsigned iOS release build
+        script: |
+          flutter build ios --release --no-codesign --no-pub \
+            --build-number="$PROJECT_BUILD_NUMBER" \
+            --dart-define="STARFORGE_API_BASE_URL=$STARFORGE_API_BASE_URL" \
+            --dart-define="STARFORGE_FIREBASE_PROJECT_ID=${STARFORGE_FIREBASE_PROJECT_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_MESSAGING_SENDER_ID=${STARFORGE_FIREBASE_MESSAGING_SENDER_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_API_KEY=${STARFORGE_FIREBASE_IOS_API_KEY:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_APP_ID=${STARFORGE_FIREBASE_IOS_APP_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_BUNDLE_ID=${STARFORGE_FIREBASE_IOS_BUNDLE_ID:-com.starforge.ceoManager}" \
+            --dart-define="STARFORGE_FIREBASE_STORAGE_BUCKET=${STARFORGE_FIREBASE_STORAGE_BUCKET:-}"
+
+      - name: Configure iOS signing
+        script: xcode-project use-profiles
+
+      - name: Build signed iOS IPA
+        script: |
+          flutter build ipa --release --no-pub \
+            --build-number="$PROJECT_BUILD_NUMBER" \
+            --dart-define="STARFORGE_API_BASE_URL=$STARFORGE_API_BASE_URL" \
+            --dart-define="STARFORGE_FIREBASE_PROJECT_ID=${STARFORGE_FIREBASE_PROJECT_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_MESSAGING_SENDER_ID=${STARFORGE_FIREBASE_MESSAGING_SENDER_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_API_KEY=${STARFORGE_FIREBASE_IOS_API_KEY:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_APP_ID=${STARFORGE_FIREBASE_IOS_APP_ID:-}" \
+            --dart-define="STARFORGE_FIREBASE_IOS_BUNDLE_ID=${STARFORGE_FIREBASE_IOS_BUNDLE_ID:-com.starforge.ceoManager}" \
+            --dart-define="STARFORGE_FIREBASE_STORAGE_BUCKET=${STARFORGE_FIREBASE_STORAGE_BUCKET:-}" \
+            --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/archive/*.xcarchive
+      - /tmp/xcodebuild_logs/*.log

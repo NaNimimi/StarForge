@@ -1,3 +1,4 @@
+import 'package:ceo_manager/api_client.dart';
 import 'package:ceo_manager/data.dart';
 import 'package:ceo_manager/pages.dart';
 import 'package:ceo_manager/settings.dart';
@@ -5,6 +6,50 @@ import 'package:ceo_manager/store.dart';
 import 'package:ceo_manager/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _AuditMessagingClient extends StarforgeApiClient {
+  _AuditMessagingClient() {
+    configure(baseUrl: 'https://api.test', token: 'audit-session');
+  }
+
+  final List<(String, String)> calls = <(String, String)>[];
+
+  @override
+  Future<dynamic> request(
+    String method,
+    String path, {
+    Map<String, Object?>? query,
+    Object? body,
+    bool authenticate = true,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    calls.add((method, path));
+    if (method == 'GET' && path == '/api/v1/messaging/threads/91/messages/') {
+      return const {
+        'data': [
+          {
+            'id': 501,
+            'sender': 8,
+            'body': 'Server-only transcript',
+            'created_at': '2026-08-10T08:14:00Z',
+          },
+        ],
+        'pagination': {
+          'page': 1,
+          'page_size': 100,
+          'total': 1,
+          'pages': 1,
+          'has_next': false,
+        },
+      };
+    }
+    throw ApiException(
+      status: 404,
+      message: 'Unexpected test request: $method $path',
+      requestId: 'audit-live-test',
+    );
+  }
+}
 
 void _usePhone(WidgetTester tester) {
   tester.view.devicePixelRatio = 1;
@@ -15,12 +60,12 @@ void _usePhone(WidgetTester tester) {
   });
 }
 
-Widget _host(Widget child) {
+Widget _host(Widget child, {AppStore? store, ApiSession? session}) {
   final settings = AppSettings();
-  return SettingsScope(
+  final content = SettingsScope(
     settings: settings,
     child: AppScope(
-      store: AppStore.seed(SfRole.ceo),
+      store: store ?? AppStore.seed(SfRole.ceo),
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: sfMaterialTheme(settings.colors, dark: false),
@@ -28,16 +73,82 @@ Widget _host(Widget child) {
       ),
     ),
   );
+  return session == null ? content : ApiScope(session: session, child: content);
 }
 
-Future<void> _pumpPhone(WidgetTester tester, Widget child) async {
+Future<void> _pumpPhone(
+  WidgetTester tester,
+  Widget child, {
+  AppStore? store,
+  ApiSession? session,
+}) async {
   _usePhone(tester);
-  await tester.pumpWidget(_host(child));
+  await tester.pumpWidget(_host(child, store: store, session: session));
   await tester.pump(const Duration(milliseconds: 900));
   expect(tester.takeException(), isNull);
 }
 
 void main() {
+  testWidgets(
+    'authenticated oversight renders only live API threads and stays read-only',
+    (tester) async {
+      final client = _AuditMessagingClient();
+      final session = ApiSession(client: client)
+        ..me = const {'id': 7, 'full_name': 'Audit Inspector', 'role': 'audit'}
+        ..messagingSelfUserId = 7;
+      final store = AppStore.empty(SfRole.audit)
+        ..threads.add(
+          ChatThread(
+            const Thread(
+              'Live Teacher',
+              'API direct conversation',
+              'Cached preview',
+              '14:14',
+              serverId: '91',
+              participantIds: ['7', '8'],
+            ),
+            const [ChatMsg('Cached preview', mine: false)],
+          ),
+        );
+      addTearDown(session.dispose);
+      addTearDown(store.dispose);
+
+      await _pumpPhone(
+        tester,
+        ChatsAdminPage(colors: SfColors.light),
+        store: store,
+        session: session,
+      );
+
+      expect(
+        find.byKey(const ValueKey('oversight-live-thread-91')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Live ↔ Audit'), findsOneWidget);
+      expect(find.textContaining('API direct conversation'), findsOneWidget);
+      expect(find.textContaining('Nigora Karimova'), findsNothing);
+
+      await tester.tap(
+        find.byKey(const ValueKey('oversight-live-thread-91')).hitTestable(),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Server-only transcript'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('oversight-read-only-banner')),
+        findsOneWidget,
+      );
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.byIcon(Icons.send_rounded), findsNothing);
+      expect(
+        client.calls,
+        contains(('GET', '/api/v1/messaging/threads/91/messages/')),
+      );
+      expect(client.calls.every((call) => call.$1 == 'GET'), isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'oversight row opens searchable read-only transcript with metadata at 320px',
     (tester) async {

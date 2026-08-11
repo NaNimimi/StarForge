@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import 'api_client.dart';
@@ -17,6 +19,21 @@ String _id(_Row row) => _text(row, const [
   'teacher_id',
   'branch_id',
 ], fallback: '');
+
+/// Defensive identity pass at the product-model boundary. Normally
+/// [StarforgeApiClient.list] already canonicalises complete collections, but
+/// keeping the adapter strict also protects restored/test snapshots and
+/// endpoint variants that happen to repeat a row in one response.
+List<_Row> _uniqueRows(Iterable<_Row> rows) {
+  final identities = <String>{};
+  final result = <_Row>[];
+  for (final row in rows) {
+    final id = _id(row);
+    final key = id.isEmpty ? jsonEncode(row) : id.toLowerCase();
+    if (identities.add(key)) result.add(row);
+  }
+  return result;
+}
 
 int _integer(_Row row, Iterable<String> keys, {int fallback = 0}) =>
     (apiNumber(row, keys) ?? fallback).round();
@@ -79,6 +96,105 @@ String _time(Object? value) {
       '${parsed.minute.toString().padLeft(2, '0')}';
 }
 
+List<String> _stringList(Object? value) {
+  if (value is! Iterable || value is String) return const [];
+  return value
+      .map((item) {
+        if (item is Map) {
+          final row = Map<String, dynamic>.from(item);
+          return apiText(apiValue(row, const ['user', 'user_id', 'id', 'pk']));
+        }
+        return apiText(item);
+      })
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
+String _userId(Object? value) {
+  if (value is Map) {
+    final row = Map<String, dynamic>.from(value);
+    return apiText(
+      apiValue(row, const ['user_id', 'account_id', 'user', 'id', 'pk']),
+    );
+  }
+  return apiText(value);
+}
+
+List<Map<String, dynamic>> _mapList(Object? value) {
+  if (value is! Iterable || value is String) return const [];
+  return value
+      .whereType<Map>()
+      .map((item) => Map<String, dynamic>.from(item))
+      .toList(growable: false);
+}
+
+List<String> _attachmentKeys(Object? value) {
+  if (value is! Iterable || value is String) return const [];
+  return value
+      .map((item) {
+        if (item is Map) {
+          return apiText(
+            apiValue(Map<String, dynamic>.from(item), const [
+              'key',
+              'storage_key',
+              'path',
+              'url',
+            ]),
+          );
+        }
+        return apiText(item);
+      })
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
+ChatMessageKind _messageKind(List<String> attachments) {
+  if (attachments.isEmpty) return ChatMessageKind.text;
+  final value = attachments.first.toLowerCase().split('?').first;
+  if (RegExp(r'\.(mp4|mov|m4v|webm|avi)$').hasMatch(value)) {
+    return ChatMessageKind.video;
+  }
+  if (RegExp(r'\.(m4a|aac|mp3|ogg|wav|opus)$').hasMatch(value)) {
+    return ChatMessageKind.voice;
+  }
+  if (RegExp(r'\.(jpg|jpeg|png|gif|webp|heic)$').hasMatch(value)) {
+    return ChatMessageKind.image;
+  }
+  return ChatMessageKind.text;
+}
+
+/// Converts the published message DTO into the established conversation
+/// model. Ownership comes from `self_user_id`; it is never guessed from the
+/// message order or populated with generated sample replies.
+ChatMsg apiChatMessage(ApiSession session, Map<String, dynamic> row) {
+  final rawSender = apiValue(row, const ['sender', 'sender_id', 'user']);
+  final senderId = rawSender is Map
+      ? apiText(
+          apiValue(Map<String, dynamic>.from(rawSender), const [
+            'id',
+            'pk',
+            'user_id',
+          ]),
+        )
+      : apiText(rawSender);
+  final explicitMine = apiValue(row, const ['is_mine', 'mine']);
+  final mine = explicitMine is bool
+      ? explicitMine
+      : senderId.isNotEmpty &&
+            senderId == '${session.messagingSelfUserId ?? ''}';
+  final attachments = _attachmentKeys(
+    apiValue(row, const ['attachments', 'attachment_keys', 'files']),
+  );
+  return ChatMsg(
+    _text(row, const ['body', 'text', 'content', 'message'], fallback: ''),
+    mine: mine,
+    kind: _messageKind(attachments),
+    serverId: _id(row),
+    createdAt: apiDate(apiValue(row, const ['created_at', 'sent_at', 'date'])),
+    attachmentKeys: attachments,
+  );
+}
+
 int _percentage(num value) =>
     (value.abs() <= 1 ? value * 100 : value).round().clamp(0, 100);
 
@@ -108,8 +224,9 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
   final groupRows = session.records('groups');
   final teacherRows = session.records('teachers');
   final staffRows = session.records('staff');
-  final studentRows = session.records('students');
+  final studentRows = _uniqueRows(session.records('students'));
   final parentRows = session.records('parents');
+  final guardianRows = session.records('guardians');
   final paymentRows = session.records('payments');
   final attendanceRows = session.records('attendanceRecords');
 
@@ -123,6 +240,13 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
       if (_id(row).isNotEmpty) _id(row): row,
   };
   final parentByStudent = <String, _Row>{};
+  final primaryGuardianKeys = <String>{};
+  final parentById = <String, _Row>{
+    for (final row in parentRows)
+      if (_id(row).isNotEmpty) _id(row): row,
+  };
+  // Keep compatibility with older API variants that embedded the child on
+  // the parent record itself.
   for (final row in parentRows) {
     final student = apiValue(row, const [
       'student_id',
@@ -139,14 +263,79 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
         : apiText(student);
     if (key.isNotEmpty) parentByStudent[key] = row;
   }
+  // The current backend publishes the relationship separately through
+  // /parents/guardians/. Join it here so both the student and parent product
+  // pages receive the actual contact from the database.
+  for (final link in guardianRows) {
+    final rawParent = apiValue(link, const [
+      'parent',
+      'parent_id',
+      'guardian',
+      'guardian_id',
+    ]);
+    final parentId = rawParent is Map
+        ? apiText(
+            apiValue(Map<String, dynamic>.from(rawParent), const ['id', 'pk']),
+          )
+        : apiText(rawParent);
+    final parent = parentById[parentId];
+    final joined = <String, dynamic>{
+      ...?parent,
+      if (parent == null) ...link,
+      if (apiText(
+        apiValue(parent ?? const {}, const ['full_name', 'name']),
+      ).isEmpty)
+        'full_name': _text(link, const ['parent_name', 'guardian_name']),
+    };
+    final rawStudent = apiValue(link, const [
+      'student',
+      'student_id',
+      'child',
+      'child_id',
+    ]);
+    final studentId = rawStudent is Map
+        ? apiText(
+            apiValue(Map<String, dynamic>.from(rawStudent), const [
+              'id',
+              'pk',
+              'student_id',
+            ]),
+          )
+        : apiText(rawStudent);
+    final studentName = _text(link, const [
+      'student_name',
+      'child_name',
+    ], fallback: '');
+    final isPrimary = _truthy(link['is_primary']);
+    void assign(String key) {
+      if (key.isEmpty) return;
+      if (primaryGuardianKeys.contains(key)) return;
+      if (parentByStudent.containsKey(key) && !isPrimary) return;
+      parentByStudent[key] = joined;
+      if (isPrimary) primaryGuardianKeys.add(key);
+    }
+
+    assign(studentId);
+    assign(studentName);
+  }
 
   List<Student>? students;
   if (session.collections.containsKey('students')) {
     students = studentRows
+        .where((row) {
+          final active = apiValue(row, const ['is_active', 'active']);
+          return active == null || _truthy(active);
+        })
         .map((row) {
           final id = _id(row);
           final groupValue = apiText(
-            apiValue(row, const ['group_id', 'group', 'cohort_id', 'cohort']),
+            apiValue(row, const [
+              'group_id',
+              'group',
+              'cohort_id',
+              'cohort',
+              'current_cohort',
+            ]),
           );
           final group = groupById[groupValue];
           final groupName = group == null
@@ -155,6 +344,7 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
                   'group',
                   'cohort_name',
                   'cohort',
+                  'current_cohort',
                 ], groupNames)
               : _text(group, const ['name', 'title']);
           final branchName = _relation(
@@ -214,9 +404,19 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
           final rawStatus = _text(row, const [
             'payment_status',
             'pay_status',
-            'status',
           ], fallback: '').toLowerCase();
-          final paymentState = active != null && !_truthy(active)
+          final lifecycle = _text(row, const [
+            'status',
+            'student_status',
+          ], fallback: '').toLowerCase();
+          final hasExited = const {
+            'withdrawn',
+            'graduated',
+            'left',
+            'archived',
+            'inactive',
+          }.contains(lifecycle);
+          final paymentState = hasExited || active != null && !_truthy(active)
               ? 'left'
               : debt > 0
               ? (rawStatus.contains('partial') ? 'partial' : 'debt')
@@ -230,7 +430,11 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
             _percentage(attendance ?? 0),
             paymentState,
             debt,
-            studentNumber: id,
+            studentNumber: _text(row, const [
+              'student_id',
+              'id',
+              'pk',
+            ], fallback: id),
             phone: _text(row, const [
               'phone',
               'phone_number',
@@ -255,15 +459,34 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
             gender: _text(row, const ['gender', 'sex'], fallback: '—'),
             level: _text(
               row,
-              const ['level_name', 'level', 'course_level'],
+              const ['academic_level', 'level_name', 'level', 'course_level'],
               fallback: group == null
                   ? '—'
                   : _text(group, const ['level_name', 'level'], fallback: '—'),
             ),
+            teacher: group == null
+                ? _text(row, const [
+                    'primary_teacher_name',
+                    'teacher_name',
+                  ], fallback: '—')
+                : _text(group, const [
+                    'primary_teacher_name',
+                    'teacher_name',
+                    'teacher',
+                  ], fallback: '—'),
             enrolledAt: _date(
-              apiValue(row, const ['enrolled_at', 'start_date', 'created_at']),
+              apiValue(row, const [
+                'enrollment_date',
+                'enrolled_at',
+                'start_date',
+                'created_at',
+              ]),
             ),
             age: apiNumber(row, const ['age'])?.round(),
+            serverId: id,
+            serverUserId: _userId(
+              apiValue(row, const ['user_id', 'account_id', 'user', 'account']),
+            ),
             serverBacked: true,
           );
         })
@@ -282,6 +505,8 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
               'branch_id',
             ], branchNames),
             teacher: _relation(row, const [
+              'primary_teacher_name',
+              'primary_teacher',
               'teacher_name',
               'teacher',
               'teacher_id',
@@ -532,26 +757,95 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
     threads = session
         .records('threads')
         .map((row) {
-          final last = _text(row, const [
+          final rawLast = apiValue(row, const [
             'last_message',
             'message',
             'preview',
+          ]);
+          final lastRow = rawLast is Map
+              ? Map<String, dynamic>.from(rawLast)
+              : null;
+          final last = lastRow == null
+              ? apiText(rawLast, fallback: '')
+              : _text(lastRow, const [
+                  'body',
+                  'text',
+                  'content',
+                  'message',
+                ], fallback: '');
+          final rawParticipants = apiValue(row, const [
+            'participants',
+            'participant_ids',
+            'members',
+            'member_ids',
+          ]);
+          final participantIds = _stringList(rawParticipants);
+          final selfId = '${session.messagingSelfUserId ?? ''}';
+          final otherIds = participantIds
+              .where((id) => selfId.isEmpty || id != selfId)
+              .toList(growable: false);
+          Map<String, dynamic>? participant;
+          for (final candidate in _mapList(rawParticipants)) {
+            if (otherIds.contains(_userId(candidate))) {
+              participant = candidate;
+              break;
+            }
+          }
+          final directName = participant == null
+              ? ''
+              : _text(participant, const [
+                  'display_name',
+                  'full_name',
+                  'name',
+                  'username',
+                ], fallback: '');
+          final subject = _text(row, const [
+            'subject',
+            'name',
+            'title',
           ], fallback: '');
+          final isGroup =
+              _truthy(apiValue(row, const ['is_group', 'group_chat'])) ||
+              otherIds.length > 1;
+          final title = !isGroup && directName.isNotEmpty
+              ? directName
+              : subject.isNotEmpty
+              ? subject
+              : directName.isNotEmpty
+              ? directName
+              : 'Диалог';
+          final contactRole = participant == null
+              ? ''
+              : _text(participant, const [
+                  'role_label',
+                  'role',
+                  'principal_kind',
+                ], fallback: '');
           final meta = Thread(
-            _text(row, const ['name', 'title', 'display_name']),
-            _text(row, const [
-              'group_name',
-              'group',
-              'type',
-            ], fallback: 'Диалог'),
+            title,
+            isGroup
+                ? 'Группа · ${otherIds.length + (selfId.isEmpty ? 0 : 1)}'
+                : contactRole.isEmpty
+                ? 'Диалог'
+                : contactRole,
             last,
-            _time(apiValue(row, const ['updated_at', 'last_message_at'])),
+            _time(
+              apiValue(lastRow ?? row, const [
+                'created_at',
+                'updated_at',
+                'last_message_at',
+              ]),
+            ),
             unread: _integer(row, const ['unread_count', 'unread']),
-            online: _truthy(apiValue(row, const ['online', 'is_online'])),
-            isGroup: _truthy(apiValue(row, const ['is_group', 'group_chat'])),
+            online: _truthy(
+              apiValue(participant ?? row, const ['online', 'is_online']),
+            ),
+            isGroup: isGroup,
+            serverId: _id(row),
+            participantIds: participantIds,
           );
           return ChatThread(meta, [
-            if (last.isNotEmpty) ChatMsg(last, mine: false),
+            if (lastRow != null) apiChatMessage(session, lastRow),
           ]);
         })
         .toList(growable: false);

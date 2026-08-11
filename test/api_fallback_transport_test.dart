@@ -159,4 +159,28 @@ void main() {
       expect(unauthorizedCalls, 1);
     },
   );
+
+  test(
+    'login accepts a nested opaque session key from the schema envelope',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        await utf8.decoder.bind(request).join();
+        await _json(request.response, HttpStatus.created, {
+          'success': true,
+          'data': {
+            'session': {'key': 'opaque-session-key'},
+          },
+        });
+      });
+
+      final client = StarforgeApiClient(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+      );
+      await client.login(username: 'admin', password: 'root');
+
+      expect(client.token, 'opaque-session-key');
+    },
+  );
 }

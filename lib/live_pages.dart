@@ -5808,8 +5808,8 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
     });
     try {
       await Future.wait([
-        ApiScope.of(context).refresh('notifications'),
-        ApiScope.of(context).refresh('unreadNotifications'),
+        ApiScope.of(context).refresh('notifications', force: true),
+        ApiScope.of(context).refresh('unreadNotifications', force: true),
       ]);
       if (mounted) setState(() => _page = 1);
     } on ApiException catch (error) {
@@ -5842,8 +5842,13 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
       return null;
     }
 
+    final rawData = apiPresentationValue(record['data']);
+    final data = rawData is Map
+        ? Map<String, dynamic>.from(rawData)
+        : const <String, dynamic>{};
+    final effective = <String, dynamic>{...data, ...record};
     final explicit = _text(
-      _value(record, const ['route', 'target', 'section']),
+      _value(effective, const ['route', 'screen', 'target', 'section']),
       empty: '',
     ).replaceFirst(RegExp(r'^/+'), '');
     if (explicit.isNotEmpty && roleCanNavigate(role, explicit)) {
@@ -5852,13 +5857,26 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
     final source = [
       _value(record, const [
         'route',
+        'screen',
         'target',
         'section',
         'entity_type',
         'type',
         'category',
       ]),
-      _value(record, const ['title', 'message', 'body']),
+      _value(effective, const [
+        'route',
+        'screen',
+        'target',
+        'section',
+        'entity_type',
+        'type',
+        'category',
+        'event_type',
+        'thread_id',
+        'message_id',
+      ]),
+      _value(effective, const ['title', 'message', 'body']),
     ].join(' ').toLowerCase();
     if (source.contains('student') ||
         source.contains('o‘quv') ||
@@ -5931,17 +5949,9 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
       widget.onNavigate!(route);
       return;
     }
-    final c = SfTheme.of(context);
-    Navigator.of(context).push(
-      sfPageRoute(
-        LiveRecordDetailPage(
-          resource: 'notifications',
-          initial: record,
-          title: 'Bildirishnoma',
-          colors: c,
-        ),
-      ),
-    );
+    // Some backend events are informational and intentionally do not publish
+    // a destination. Marking them read is the complete action; opening the
+    // generic JSON detail page produced an empty-looking screen for users.
   }
 
   Future<void> _markAllRead() async {
@@ -6021,10 +6031,15 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
         ),
         const SizedBox(height: 12),
         if (_error != null) _LiveError(message: _error!, onRetry: _refresh),
-        if (all.isEmpty && !_refreshing)
-          const _LiveEmpty(
+        if (all.isEmpty && !_refreshing && _error == null)
+          _LiveEmpty(
             icon: Icons.notifications_off_outlined,
-            message: 'API bildirishnoma qaytarmadi yoki ruxsat yo‘q.',
+            message: tx(
+              context,
+              uz: 'Hozircha bildirishnomalar yo‘q.',
+              ru: 'Уведомлений пока нет.',
+              en: 'No notifications yet.',
+            ),
           ),
         if (all.isNotEmpty && filtered.isEmpty && !_refreshing)
           const _LiveEmpty(

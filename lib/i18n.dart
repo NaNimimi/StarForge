@@ -480,6 +480,11 @@ const Map<String, List<String>> _strings = {
   'dm_hint': ['Xabar yozing…', 'Напишите сообщение…', 'Write a message…'],
   // Call status (green / amber / red by recency of last parent call)
   'call_recent': ["Yaqinda qo'ng'iroq", 'Звонок недавно', 'Called recently'],
+  'call_unknown': [
+    "Qo'ng'iroq tarixi yo'q",
+    'Истории звонков нет',
+    'No call history',
+  ],
   'call_mid': ['Ancha oldin', 'Звонили давно', 'A while ago'],
   'call_old': ["Juda ko'p oldin", 'Очень давно', 'Long ago'],
   'call_never_d': ['bugun', 'сегодня', 'today'],

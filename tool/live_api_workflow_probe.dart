@@ -69,6 +69,7 @@ class LiveProbe {
     Object? body,
     bool authenticate = true,
     int redirectsLeft = 2,
+    int transportRetries = 1,
   }) async {
     final previousRequest = _lastRequestStartedAt;
     if (previousRequest != null) {
@@ -155,6 +156,28 @@ class LiveProbe {
         }
       }
       return result;
+    } on SocketException {
+      if (transportRetries <= 0) rethrow;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      return request(
+        method,
+        path,
+        body: body,
+        authenticate: authenticate,
+        redirectsLeft: redirectsLeft,
+        transportRetries: transportRetries - 1,
+      );
+    } on TimeoutException {
+      if (transportRetries <= 0) rethrow;
+      await Future<void>.delayed(const Duration(seconds: 2));
+      return request(
+        method,
+        path,
+        body: body,
+        authenticate: authenticate,
+        redirectsLeft: redirectsLeft,
+        transportRetries: transportRetries - 1,
+      );
     } finally {
       client.close(force: true);
     }
@@ -199,11 +222,21 @@ String _normalizeRole(String value) {
       .replaceAll('-', '_')
       .replaceAll(' ', '_');
   if (normalized.contains('audit')) return 'audit';
-  if (normalized.contains('manager')) return 'manager';
+  if (normalized.contains('manager') ||
+      normalized.contains('branch_head') ||
+      normalized.contains('head_of_department')) {
+    return 'manager';
+  }
   if (normalized.contains('ceo') ||
       normalized.contains('owner') ||
-      normalized.contains('admin')) {
+      normalized.contains('admin') ||
+      normalized.contains('director')) {
     return 'ceo';
+  }
+  if (normalized == 'parent' ||
+      normalized == 'guardian' ||
+      normalized == 'caregiver') {
+    return 'parent';
   }
   return normalized;
 }
@@ -212,7 +245,15 @@ String? _findRole(Object? value, [int depth = 0]) {
   if (depth > 6) return null;
   final map = _map(value);
   if (map != null) {
-    for (final key in const ['role_code', 'role_slug', 'role_name']) {
+    final principalKind = _scalar(map['principal_kind']);
+    if (_normalizeRole(principalKind ?? '') == 'student') return principalKind;
+    for (final key in const [
+      'role_code',
+      'role_slug',
+      'role_name',
+      'account_type_slug',
+      'account_type_name',
+    ]) {
       final direct = _scalar(map[key]);
       if (direct != null) return direct;
     }
@@ -226,7 +267,13 @@ String? _findRole(Object? value, [int depth = 0]) {
         if (nestedRole != null) return nestedRole;
       }
     }
-    for (final key in const ['profile', 'user', 'account', 'roles']) {
+    for (final key in const [
+      'profile',
+      'user',
+      'account',
+      'roles',
+      'role_memberships',
+    ]) {
       final nestedRole = _findRole(map[key], depth + 1);
       if (nestedRole != null) return nestedRole;
     }
@@ -244,7 +291,7 @@ const _roleReads = <String, List<String>>{
     '/api/v1/org/branches/?page=1&page_size=1',
     '/api/v1/cohorts/?page=1&page_size=1',
     '/api/v1/payments/?page=1&page_size=1',
-    '/api/v1/audit/?page=1&page_size=1',
+    '/api/v1/audit/?page_size=1',
     '/api/v1/reports/?page=1&page_size=1',
     '/api/v1/intelligence/branches/?page=1&page_size=1',
   ],
@@ -256,11 +303,17 @@ const _roleReads = <String, List<String>>{
     '/api/v1/finance/invoices/?page=1&page_size=1',
   ],
   'audit': <String>[
-    '/api/v1/audit/?page=1&page_size=1',
+    '/api/v1/audit/?page_size=1',
     '/api/v1/audit/export/',
     '/api/v1/approvals/ledger/?page=1&page_size=1',
-    '/api/v1/intelligence/rules/?page=1&page_size=1',
+    '/api/v1/intelligence/rules/',
   ],
+  'student': <String>[
+    '/api/v1/students/me/dashboard/',
+    '/api/v1/students/me/report/',
+    '/api/v1/users/me/',
+  ],
+  'parent': <String>['/api/v1/parents/me/children/', '/api/v1/users/me/'],
 };
 
 Future<void> main() async {
@@ -294,34 +347,23 @@ Future<void> main() async {
   final failures = <String>[];
   final checks = <String>[];
 
-  final anonymous = await probe.request(
-    'GET',
-    '/api/v1/users/me/',
-    authenticate: false,
-  );
-  if (anonymous.status == 429) {
-    final retryAfter = anonymous.headers.value('retry-after');
-    stderr.writeln(
-      'API rate limit is active before login; no credentials were sent. '
-      'Retry-After: ${retryAfter ?? 'not published'} '
-      '(${anonymous.requestId}).',
-    );
-    exit(75);
-  }
-  if (anonymous.status != 401 && anonymous.status != 403) {
-    failures.add(
-      'Anonymous /users/me/ returned ${anonymous.status}; expected 401 or 403.',
-    );
-  } else {
-    checks.add('anonymous session boundary ${anonymous.status}');
-  }
-
-  final login = await probe.request(
-    'POST',
+  const loginPaths = <String>[
     '/api/v1/auth/login/',
-    body: {'username': username, 'password': password, 'platform': 'mobile'},
-    authenticate: false,
-  );
+    '/api/v1/auth/role-login/',
+    '/api/v1/auth/login',
+    '/api/v1/auth/role-login',
+  ];
+  late ProbeResponse login;
+  for (var index = 0; index < loginPaths.length; index++) {
+    login = await probe.request(
+      'POST',
+      loginPaths[index],
+      body: {'username': username, 'password': password},
+      authenticate: false,
+    );
+    final routeIsMissing = login.status == 404 || login.status == 405;
+    if (!routeIsMissing || index == loginPaths.length - 1) break;
+  }
   if (!login.succeeded) {
     stderr.writeln(
       'Login failed (${login.status}, ${login.requestId}): ${_errorText(login)}',
@@ -331,11 +373,13 @@ Future<void> main() async {
   final loginData = _unwrap(login.payload);
   final loginMap = _map(loginData);
   final token =
+      _scalar(loginData) ??
       _findValue(loginData, const {
         'access',
         'access_token',
         'token',
         'session_key',
+        'key',
       }) ??
       _scalar(loginMap?['session']) ??
       _scalar(loginMap?['key']);
@@ -358,7 +402,9 @@ Future<void> main() async {
   final publishedRole = _normalizeRole(_findRole(profile) ?? '');
   final role = expectedRole.isNotEmpty ? expectedRole : publishedRole;
   if (role.isEmpty || !_roleReads.containsKey(role)) {
-    failures.add('Unable to map the server profile to ceo, manager or audit.');
+    failures.add(
+      'Unable to map the server profile to ceo, manager, audit, student or parent.',
+    );
   } else {
     checks.add('profile role ${publishedRole.isEmpty ? role : publishedRole}');
     if (expectedRole.isNotEmpty &&

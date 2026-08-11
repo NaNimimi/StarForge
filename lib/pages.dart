@@ -3,9 +3,12 @@
 // mobile app mirrors the web feature set for CEO / Manager / Audit.
 
 import 'package:flutter/material.dart';
+import 'api_client.dart';
+import 'api_store_adapter.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'i18n.dart';
+import 'store.dart';
 import 'widgets.dart';
 import 'screens.dart'
     show
@@ -20,7 +23,8 @@ import 'screens.dart'
         ParentsWorkspaceScreen,
         DepartmentsWorkspaceScreen,
         MeetingsWorkspaceScreen,
-        PaymentsWorkspaceScreen;
+        PaymentsWorkspaceScreen,
+        StudentSelfServiceScreen;
 
 const Color _purple = Color(0xFF7A4A82);
 
@@ -1777,12 +1781,60 @@ const _oversightThreads = <_OversightThread>[
   ),
 ];
 
+String _oversightMessageTime(ChatMsg message, String fallback) {
+  final createdAt = message.createdAt?.toLocal();
+  if (createdAt == null) return fallback;
+  return '${createdAt.hour.toString().padLeft(2, '0')}:'
+      '${createdAt.minute.toString().padLeft(2, '0')}';
+}
+
+_OversightThread _liveOversightThread(ChatThread thread, String selfName) {
+  final peer = thread.meta.name.trim().isEmpty ? 'Участник' : thread.meta.name;
+  final account = selfName.trim().isEmpty ? 'Моя учётная запись' : selfName;
+  return _OversightThread(
+    teacher: peer,
+    parent: account,
+    context: thread.meta.group.trim().isEmpty ? 'Диалог' : thread.meta.group,
+    lastActivity: thread.meta.time,
+    flagged: false,
+    messages: [
+      for (final message in thread.messages)
+        _OversightMessage(
+          message.mine ? account : peer,
+          message.text,
+          _oversightMessageTime(message, thread.meta.time),
+        ),
+    ],
+  );
+}
+
 class ChatsAdminPage extends StatelessWidget {
   final SfColors colors;
   const ChatsAdminPage({super.key, required this.colors});
   @override
   Widget build(BuildContext context) {
     final c = colors;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final live = session?.authenticated == true;
+    final liveSources = live
+        ? List<ChatThread>.unmodifiable(AppScope.of(context).threads)
+        : const <ChatThread>[];
+    final selfName = live
+        ? apiText(
+            apiValue(session!.me ?? const {}, const [
+              'full_name',
+              'display_name',
+              'name',
+              'username',
+            ]),
+            fallback: 'Моя учётная запись',
+          )
+        : '';
+    final threads = live
+        ? liveSources
+              .map((thread) => _liveOversightThread(thread, selfName))
+              .toList(growable: false)
+        : _oversightThreads;
     return SfTheme(
       colors: c,
       child: _page(c, 'Suhbat nazorati', [
@@ -1821,39 +1873,65 @@ class ChatsAdminPage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 12),
-              _listCard(
-                rows: [
-                  for (int i = 0; i < _oversightThreads.length; i++)
-                    _Row(
-                      key: ValueKey('oversight-thread-$i'),
-                      lead: SfAvatar(
-                        name: _oversightThreads[i].teacher,
-                        size: 32,
-                      ),
-                      title:
-                          '${_oversightThreads[i].teacher.split(' ')[0]} ↔ ${_oversightThreads[i].parent.split(' ')[0]}',
-                      sub:
-                          '${_oversightThreads[i].context} · ${_oversightThreads[i].messages.last.text}',
-                      last: i == _oversightThreads.length - 1,
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => _OversightChatDetailPage(
-                            colors: c,
-                            thread: _oversightThreads[i],
-                          ),
+              if (threads.isEmpty)
+                SfCard(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        live
+                            ? 'Пока нет доступных диалогов'
+                            : 'Диалоги не добавлены',
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 12.5,
+                          color: c.muted,
                         ),
                       ),
-                      trail: _oversightThreads[i].flagged
-                          ? Icon(Icons.flag_rounded, size: 16, color: c.danger)
-                          : _mono(
-                              context,
-                              _oversightThreads[i].lastActivity,
-                              size: 9.5,
-                              color: c.muted,
-                            ),
                     ),
-                ],
-              ),
+                  ),
+                )
+              else
+                _listCard(
+                  rows: [
+                    for (int i = 0; i < threads.length; i++)
+                      _Row(
+                        key: ValueKey(
+                          live
+                              ? 'oversight-live-thread-${liveSources[i].meta.serverId ?? i}'
+                              : 'oversight-thread-$i',
+                        ),
+                        lead: SfAvatar(name: threads[i].teacher, size: 32),
+                        title:
+                            '${threads[i].teacher.split(' ')[0]} ↔ ${threads[i].parent.split(' ')[0]}',
+                        sub: threads[i].messages.isEmpty
+                            ? '${threads[i].context} · Сообщений пока нет'
+                            : '${threads[i].context} · ${threads[i].messages.last.text}',
+                        last: i == threads.length - 1,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => _OversightChatDetailPage(
+                              colors: c,
+                              thread: threads[i],
+                              liveSource: live ? liveSources[i] : null,
+                            ),
+                          ),
+                        ),
+                        trail: threads[i].flagged
+                            ? Icon(
+                                Icons.flag_rounded,
+                                size: 16,
+                                color: c.danger,
+                              )
+                            : _mono(
+                                context,
+                                threads[i].lastActivity,
+                                size: 9.5,
+                                color: c.muted,
+                              ),
+                      ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -1865,8 +1943,13 @@ class ChatsAdminPage extends StatelessWidget {
 class _OversightChatDetailPage extends StatefulWidget {
   final SfColors colors;
   final _OversightThread thread;
+  final ChatThread? liveSource;
 
-  const _OversightChatDetailPage({required this.colors, required this.thread});
+  const _OversightChatDetailPage({
+    required this.colors,
+    required this.thread,
+    this.liveSource,
+  });
 
   @override
   State<_OversightChatDetailPage> createState() =>
@@ -1876,6 +1959,69 @@ class _OversightChatDetailPage extends StatefulWidget {
 class _OversightChatDetailPageState extends State<_OversightChatDetailPage> {
   final TextEditingController _search = TextEditingController();
   String _query = '';
+  late _OversightThread _thread = widget.thread;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.liveSource != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadTranscript());
+    }
+  }
+
+  Future<void> _loadTranscript() async {
+    final source = widget.liveSource;
+    final id = source?.meta.serverId?.trim() ?? '';
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (source == null ||
+        id.isEmpty ||
+        session == null ||
+        !session.authenticated ||
+        _loading) {
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final page = await session.threadMessages(id);
+      final messages =
+          page.items
+              .map((row) => apiChatMessage(session, row))
+              .toList(growable: false)
+            ..sort((left, right) {
+              final leftAt = left.createdAt;
+              final rightAt = right.createdAt;
+              if (leftAt == null && rightAt == null) return 0;
+              if (leftAt == null) return -1;
+              if (rightAt == null) return 1;
+              return leftAt.compareTo(rightAt);
+            });
+      final selfName = apiText(
+        apiValue(session.me ?? const {}, const [
+          'full_name',
+          'display_name',
+          'name',
+          'username',
+        ]),
+        fallback: 'Моя учётная запись',
+      );
+      if (!mounted) return;
+      setState(() {
+        _thread = _liveOversightThread(
+          ChatThread(source.meta, messages),
+          selfName,
+        );
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -1886,7 +2032,7 @@ class _OversightChatDetailPageState extends State<_OversightChatDetailPage> {
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    final thread = widget.thread;
+    final thread = _thread;
     final query = _query.trim().toLowerCase();
     final messages = thread.messages
         .where(
@@ -1933,6 +2079,10 @@ class _OversightChatDetailPageState extends State<_OversightChatDetailPage> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 26),
           children: [
+            if (_loading) ...[
+              const LinearProgressIndicator(minHeight: 2),
+              const SizedBox(height: 10),
+            ],
             Container(
               key: const ValueKey('oversight-read-only-banner'),
               padding: const EdgeInsets.all(12),
@@ -1960,6 +2110,27 @@ class _OversightChatDetailPageState extends State<_OversightChatDetailPage> {
                 ],
               ),
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              SfCard(
+                child: ListTile(
+                  leading: Icon(Icons.sync_problem_rounded, color: c.danger),
+                  title: Text(
+                    _error!,
+                    style: TextStyle(
+                      fontFamily: SfType.ui,
+                      fontSize: 12,
+                      color: c.danger,
+                    ),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Повторить',
+                    onPressed: _loadTranscript,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             SfCard(
               child: Column(
@@ -3326,6 +3497,7 @@ Color _permissionRoleColor(SfColors colors, SfRole role) => switch (role) {
   SfRole.ceo => colors.primary,
   SfRole.manager => colors.success,
   SfRole.audit => _purple,
+  SfRole.student => colors.accent,
 };
 
 String _permissionActionFor(String route, SfRole role) => switch (route) {
@@ -5395,6 +5567,22 @@ List<MenuGroup> menuFor(SfRole role) {
           MenuItem('settings', 'Sozlamalar', Icons.settings_rounded),
         ]),
       ];
+    case SfRole.student:
+      return const [
+        MenuGroup('Shaxsiy kabinet', [
+          MenuItem('dash', 'Mening panelim', Icons.home_rounded),
+          MenuItem('student_report', 'Natijalarim', Icons.school_rounded),
+          MenuItem('messages', 'Xabarlar', Icons.chat_rounded),
+          MenuItem(
+            'notifications',
+            'Bildirishnomalar',
+            Icons.notifications_none_rounded,
+          ),
+        ]),
+        MenuGroup('Tizim', [
+          MenuItem('settings', 'Sozlamalar', Icons.settings_rounded),
+        ]),
+      ];
   }
 }
 
@@ -5427,6 +5615,8 @@ Widget? buildAdminPage(String id, SfColors c, SfRole role) {
 Widget? _adminPageFor(String id, SfColors c, SfRole role) {
   final ceo = role == SfRole.ceo;
   switch (id) {
+    case 'student_report':
+      return StudentSelfServiceScreen(colors: c, reportOnly: true);
     case 'branches':
       return BranchesAdminPage(colors: c);
     case 'students':

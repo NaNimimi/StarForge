@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart'
-    show ChangeNotifier, DateTimeRange, IconData, Icons;
+    show ChangeNotifier, Color, DateTimeRange, IconData, Icons;
 import 'package:flutter/widgets.dart' show BuildContext, InheritedNotifier;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'data.dart';
 import 'widgets.dart';
 
@@ -8,7 +13,27 @@ import 'widgets.dart';
 class AiTurn {
   final String text;
   final bool mine;
-  const AiTurn(this.text, {required this.mine});
+  final DateTime? createdAt;
+  const AiTurn(this.text, {required this.mine, this.createdAt});
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'text': text,
+    'mine': mine,
+    if (createdAt != null) 'created_at': createdAt!.toUtc().toIso8601String(),
+  };
+
+  static AiTurn? fromJson(Object? source) {
+    if (source is! Map) return null;
+    final data = Map<String, dynamic>.from(source);
+    final text = data['text'];
+    final mine = data['mine'];
+    if (text is! String || text.trim().isEmpty || mine is! bool) return null;
+    return AiTurn(
+      text,
+      mine: mine,
+      createdAt: DateTime.tryParse('${data['created_at'] ?? ''}'),
+    );
+  }
 }
 
 /// Payload carried by a message in a conversation thread. Files stay local in
@@ -16,20 +41,52 @@ class AiTurn {
 /// upload [path] and retain its remote URL.
 enum ChatMessageKind { text, image, video, voice }
 
+enum ChatDeliveryState { sent, sending, failed }
+
 /// One message inside a conversation thread.
 class ChatMsg {
+  final String? serverId;
   final String text;
   final bool mine;
   final ChatMessageKind kind;
   final String? path;
   final Duration? duration;
+  final DateTime? createdAt;
+  final List<String> attachmentKeys;
+  final ChatDeliveryState delivery;
   const ChatMsg(
     this.text, {
     required this.mine,
     this.kind = ChatMessageKind.text,
     this.path,
     this.duration,
+    this.serverId,
+    this.createdAt,
+    this.attachmentKeys = const [],
+    this.delivery = ChatDeliveryState.sent,
   });
+
+  ChatMsg copyWith({
+    String? text,
+    bool? mine,
+    ChatMessageKind? kind,
+    String? path,
+    Duration? duration,
+    String? serverId,
+    DateTime? createdAt,
+    List<String>? attachmentKeys,
+    ChatDeliveryState? delivery,
+  }) => ChatMsg(
+    text ?? this.text,
+    mine: mine ?? this.mine,
+    kind: kind ?? this.kind,
+    path: path ?? this.path,
+    duration: duration ?? this.duration,
+    serverId: serverId ?? this.serverId,
+    createdAt: createdAt ?? this.createdAt,
+    attachmentKeys: attachmentKeys ?? this.attachmentKeys,
+    delivery: delivery ?? this.delivery,
+  );
 }
 
 /// A live conversation: its [meta] (from [Thread]) plus a growing message log.
@@ -242,9 +299,58 @@ class ActivityEvent {
 
 /// One saved AI conversation — its title (from the first question) and turns.
 class AiConversation {
+  static int _nextLocalId = 0;
+
+  final String id;
   String title;
   final List<AiTurn> turns;
-  AiConversation(this.title, this.turns);
+  final DateTime createdAt;
+  DateTime updatedAt;
+
+  AiConversation(
+    this.title,
+    this.turns, {
+    String? id,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) : id = id ?? _newId(),
+       createdAt = createdAt ?? DateTime.now(),
+       updatedAt = updatedAt ?? createdAt ?? DateTime.now();
+
+  static String _newId() {
+    _nextLocalId += 1;
+    return '${DateTime.now().microsecondsSinceEpoch}-$_nextLocalId';
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'id': id,
+    'title': title,
+    'created_at': createdAt.toUtc().toIso8601String(),
+    'updated_at': updatedAt.toUtc().toIso8601String(),
+    'turns': turns.map((turn) => turn.toJson()).toList(growable: false),
+  };
+
+  static AiConversation? fromJson(Object? source) {
+    if (source is! Map) return null;
+    final data = Map<String, dynamic>.from(source);
+    final id = '${data['id'] ?? ''}'.trim();
+    final title = '${data['title'] ?? ''}'.trim();
+    final createdAt = DateTime.tryParse('${data['created_at'] ?? ''}');
+    final updatedAt = DateTime.tryParse('${data['updated_at'] ?? ''}');
+    final rawTurns = data['turns'];
+    if (id.isEmpty || title.isEmpty || rawTurns is! List) return null;
+    final turns = rawTurns
+        .map(AiTurn.fromJson)
+        .whereType<AiTurn>()
+        .toList(growable: true);
+    return AiConversation(
+      title,
+      turns,
+      id: id,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? createdAt,
+    );
+  }
 }
 
 /// In-memory app state for the demo (no backend yet — "Backend ulanmagan").
@@ -560,7 +666,18 @@ class AppStore extends ChangeNotifier {
     AiConversation('Yangi suhbat', []),
   ];
   int activeConv = 0;
-  List<AiTurn> get chat => conversations[activeConv].turns;
+  List<AiTurn> get chat {
+    if (conversations.isEmpty) {
+      conversations.add(AiConversation('Yangi suhbat', []));
+      activeConv = 0;
+    }
+    final selected = activeConv < 0
+        ? 0
+        : (activeConv >= conversations.length
+              ? conversations.length - 1
+              : activeConv);
+    return conversations[selected].turns;
+  }
 
   /// Start a fresh conversation (reuses an already-empty one).
   void newConversation() {
@@ -569,11 +686,14 @@ class AppStore extends ChangeNotifier {
       activeConv = 0;
     }
     notifyListeners();
+    _scheduleAiHistoryPersist();
   }
 
   void selectConversation(int i) {
+    if (i < 0 || i >= conversations.length || i == activeConv) return;
     activeConv = i;
     notifyListeners();
+    _scheduleAiHistoryPersist();
   }
 
   void addAiUserTurn(String text) {
@@ -585,21 +705,63 @@ class AppStore extends ChangeNotifier {
           ? '${value.substring(0, 32)}…'
           : value;
     }
-    conversation.turns.add(AiTurn(value, mine: true));
+    conversation.turns.add(
+      AiTurn(value, mine: true, createdAt: DateTime.now()),
+    );
+    conversation.updatedAt = DateTime.now();
     notifyListeners();
+    _scheduleAiHistoryPersist();
   }
 
   void addAiAssistantTurn(String text) {
     final value = text.trim();
     if (value.isEmpty) return;
-    conversations[activeConv].turns.add(AiTurn(value, mine: false));
+    final conversation = conversations[activeConv];
+    conversation.turns.add(
+      AiTurn(value, mine: false, createdAt: DateTime.now()),
+    );
+    conversation.updatedAt = DateTime.now();
     notifyListeners();
+    _scheduleAiHistoryPersist();
   }
 
   void clearActiveConversation() {
-    conversations[activeConv].turns.clear();
-    conversations[activeConv].title = 'Yangi suhbat';
+    final conversation = conversations[activeConv];
+    conversation.turns.clear();
+    conversation.title = 'Yangi suhbat';
+    conversation.updatedAt = DateTime.now();
     notifyListeners();
+    _scheduleAiHistoryPersist();
+  }
+
+  void renameConversation(int index, String title) {
+    final value = title.trim();
+    if (index < 0 || index >= conversations.length || value.isEmpty) return;
+    final conversation = conversations[index];
+    conversation.title = value.length > 80
+        ? '${value.substring(0, 80)}…'
+        : value;
+    conversation.updatedAt = DateTime.now();
+    notifyListeners();
+    _scheduleAiHistoryPersist();
+  }
+
+  void deleteConversation(int index) {
+    if (index < 0 || index >= conversations.length) return;
+    if (conversations.length == 1) {
+      clearActiveConversation();
+      return;
+    }
+    conversations.removeAt(index);
+    if (index < activeConv) {
+      activeConv -= 1;
+    } else if (index == activeConv) {
+      activeConv = index >= conversations.length
+          ? conversations.length - 1
+          : index;
+    }
+    notifyListeners();
+    _scheduleAiHistoryPersist();
   }
 
   AppStore({
@@ -693,9 +855,164 @@ class AppStore extends ChangeNotifier {
   /// The logged-in user's chosen avatar (null = their default photo). Set from
   /// the avatar picker; read by the top bar and profile so it updates live.
   AvatarChoice? avatarChoice;
+  String? _profileStorageIdentity;
+  Future<void> _aiWriteQueue = Future<void>.value();
+  bool _disposed = false;
+
+  String get _avatarStorageKey =>
+      'profile.${_profileStorageIdentity ?? 'offline.${role.name}'}.avatar';
+  String get _aiStorageKey =>
+      'profile.${_profileStorageIdentity ?? 'offline.${role.name}'}.ai.v1';
+
+  /// Select a per-account storage namespace and restore device-local profile
+  /// state. AI conversations are deliberately account-scoped so one signed-in
+  /// user can never see another user's local history.
+  Future<void> bindProfileIdentity(String identity) async {
+    final safe = identity.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_.-]+'), '_');
+    if (safe.isEmpty || _profileStorageIdentity == safe) return;
+    await _aiWriteQueue;
+    if (_disposed) return;
+    _profileStorageIdentity = safe;
+    avatarChoice = null;
+    conversations
+      ..clear()
+      ..add(AiConversation('Yangi suhbat', []));
+    activeConv = 0;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_disposed || _profileStorageIdentity != safe) return;
+
+      final avatarEncoded = prefs.getString(_avatarStorageKey);
+      if (avatarEncoded != null && avatarEncoded.isNotEmpty) {
+        try {
+          final data = Map<String, dynamic>.from(
+            jsonDecode(avatarEncoded) as Map,
+          );
+          final memory = data['memory'] as String?;
+          final gradient = (data['gradient'] as List?)
+              ?.map((value) => int.tryParse('$value'))
+              .whereType<int>()
+              .map(Color.new)
+              .toList(growable: false);
+          avatarChoice = AvatarChoice(
+            photo: data['photo'] as String?,
+            memoryBytes: memory == null ? null : base64Decode(memory),
+            emoji: data['emoji'] as String?,
+            gradient: gradient,
+          );
+        } catch (_) {
+          avatarChoice = null;
+        }
+      }
+
+      _restoreAiHistory(prefs.getString(_aiStorageKey));
+      notifyListeners();
+    } catch (_) {
+      if (_disposed) return;
+      // Corrupt or unavailable device preferences must never block a profile
+      // or leak state from the previously signed-in account.
+      notifyListeners();
+    }
+  }
+
+  void _restoreAiHistory(String? encoded) {
+    if (encoded == null || encoded.isEmpty) return;
+    try {
+      final data = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
+      final rawConversations = data['conversations'];
+      if (rawConversations is! List) return;
+      final restored = rawConversations
+          .take(100)
+          .map(AiConversation.fromJson)
+          .whereType<AiConversation>()
+          .toList(growable: true);
+      if (restored.isEmpty) return;
+      conversations
+        ..clear()
+        ..addAll(restored);
+      final activeId = '${data['active_id'] ?? ''}';
+      final selected = conversations.indexWhere(
+        (conversation) => conversation.id == activeId,
+      );
+      activeConv = selected < 0 ? 0 : selected;
+    } catch (_) {
+      // Keep the clean empty conversation when the saved payload is corrupt.
+    }
+  }
+
+  void _scheduleAiHistoryPersist() {
+    final identity = _profileStorageIdentity;
+    if (identity == null || identity.isEmpty || _disposed) return;
+    final key = _aiStorageKey;
+    final selectedIndex = activeConv < 0
+        ? 0
+        : (activeConv >= conversations.length
+              ? conversations.length - 1
+              : activeConv);
+    final selected = conversations.isEmpty
+        ? null
+        : conversations[selectedIndex].id;
+    final payload = jsonEncode(<String, dynamic>{
+      'version': 1,
+      'active_id': ?selected,
+      'conversations': conversations
+          .take(100)
+          .map((conversation) => conversation.toJson())
+          .toList(growable: false),
+    });
+    _aiWriteQueue = _aiWriteQueue
+        .then((_) async {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(key, payload);
+        })
+        .catchError((_) {
+          // The current in-memory conversation remains fully usable.
+        });
+  }
+
+  /// Lets tests and lifecycle owners wait until queued AI history writes have
+  /// reached platform storage.
+  Future<void> flushAiHistory() => _aiWriteQueue;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   void setAvatar(AvatarChoice? choice) {
     avatarChoice = choice;
     notifyListeners();
+    unawaited(_persistAvatar(choice));
+  }
+
+  void setAvatarBytes(Uint8List bytes) =>
+      setAvatar(AvatarChoice(memoryBytes: Uint8List.fromList(bytes)));
+
+  Future<void> _persistAvatar(AvatarChoice? choice) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (choice == null) {
+        await prefs.remove(_avatarStorageKey);
+        return;
+      }
+      await prefs.setString(
+        _avatarStorageKey,
+        jsonEncode({
+          if (choice.photo != null) 'photo': choice.photo,
+          if (choice.memoryBytes != null)
+            'memory': base64Encode(choice.memoryBytes!),
+          if (choice.emoji != null) 'emoji': choice.emoji,
+          if (choice.gradient != null)
+            'gradient': choice.gradient!
+                .map((color) => color.toARGB32())
+                .toList(),
+        }),
+      );
+    } catch (_) {
+      // The in-memory selection remains usable when platform storage is absent.
+    }
   }
 
   /// User-edited profile fields (null = fall back to the role config defaults).
@@ -1108,8 +1425,12 @@ class AppStore extends ChangeNotifier {
   /// Build the demo state for [role] — each console gets its own slice of data.
   factory AppStore.seed(SfRole role) => AppStore(
     role: role,
-    students: studentsFor(role),
-    branches: branchesFor(role),
+    // Keep preview collections mutable. Authenticated workspaces normally use
+    // [AppStore.empty], but making this boundary safe guarantees that a late
+    // live snapshot can replace preview rows instead of either mixing with
+    // them or failing on an unmodifiable const list.
+    students: List<Student>.from(studentsFor(role)),
+    branches: List<Branch>.from(branchesFor(role)),
     approvals: List<Approval>.from(approvalsFor(role)),
     ledger: List<LedgerEntry>.from(ledgerFor(role)),
     anomalies: List<Anomaly>.from(kAnomalies),
@@ -1200,6 +1521,17 @@ class AppStore extends ChangeNotifier {
     final t = text.trim();
     if (t.isEmpty) return;
     threads[threadIdx].messages.add(ChatMsg(t, mine: true));
+    notifyListeners();
+  }
+
+  /// Replaces one transcript after an authoritative messaging API read. This
+  /// keeps the existing widgets/notifier design while preventing local sample
+  /// replies from being mixed with server messages.
+  void replaceThreadMessages(int threadIdx, Iterable<ChatMsg> values) {
+    if (threadIdx < 0 || threadIdx >= threads.length) return;
+    threads[threadIdx].messages
+      ..clear()
+      ..addAll(values);
     notifyListeners();
   }
 
@@ -1301,9 +1633,6 @@ class AppStore extends ChangeNotifier {
     final t = text.trim();
     if (t.isEmpty) return;
     addAiUserTurn(t);
-    addAiAssistantTurn(
-      'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
-    );
   }
 }
 

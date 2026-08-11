@@ -12,8 +12,12 @@ import 'store.dart';
 import 'settings.dart';
 import 'i18n.dart';
 import 'console.dart';
+import 'live_pages.dart';
+import 'pages.dart';
 import 'widgets.dart';
 import 'notification_service.dart';
+import 'push_notification_service.dart';
+import 'session_storage.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,13 +26,21 @@ Future<void> main() async {
   } catch (_) {
     // Web/desktop previews can run without a native notification bridge.
   }
+  await PushNotificationService.instance.initialize();
   AppSettings? restoredSettings;
   try {
     restoredSettings = await AppSettings.load();
   } catch (_) {
     // The preview remains usable if platform storage is unavailable.
   }
-  runApp(CeoManagerApp(initialSettings: restoredSettings));
+  final apiSession = ApiSession(sessionStorage: SecureApiSessionStorage());
+  await apiSession.restore(language: restoredSettings?.lang.name ?? 'uz');
+  runApp(
+    CeoManagerApp(
+      initialSettings: restoredSettings,
+      initialApiSession: apiSession,
+    ),
+  );
 }
 
 /// Maps the authenticated backend profile to the only workspace the account
@@ -77,10 +89,26 @@ SfRole? sfRoleFromApiProfile(Map<String, dynamic>? profile) {
         normalized.contains('super_admin')) {
       return SfRole.ceo;
     }
+    if (normalized == 'student' ||
+        normalized == 'learner' ||
+        normalized == 'pupil') {
+      return SfRole.student;
+    }
+    // Parent accounts use the same least-privileged self-service shell. They
+    // must never fall through to a staff workspace (or be signed out merely
+    // because this app does not have a separate administrative parent role).
+    if (normalized == 'parent' ||
+        normalized == 'guardian' ||
+        normalized == 'caregiver') {
+      return SfRole.student;
+    }
     return null;
   }
 
   for (final key in const [
+    'principal_kind',
+    'account_kind',
+    'account_type_slug',
     'role',
     'role_name',
     'role_slug',
@@ -103,15 +131,23 @@ SfRole? sfRoleFromApiProfile(Map<String, dynamic>? profile) {
 }
 
 class CeoManagerApp extends StatefulWidget {
-  const CeoManagerApp({super.key, this.initialSettings});
+  const CeoManagerApp({
+    super.key,
+    this.initialSettings,
+    this.initialApiSession,
+  });
 
   final AppSettings? initialSettings;
+  final ApiSession? initialApiSession;
 
   @override
   State<CeoManagerApp> createState() => _CeoManagerAppState();
 }
 
 class _CeoManagerAppState extends State<CeoManagerApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  StreamSubscription<Map<String, dynamic>>? _notificationTapSubscription;
+  Map<String, dynamic>? _pendingNotificationPayload;
   SfRole? role;
   // Seeded again whenever the user opens a different workspace. The first
   // value only provides AppScope while the workspace picker is on screen.
@@ -123,8 +159,10 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   // Live v1 API session. It is kept above every route, mirroring the web
   // console's StoreProvider, so a successful connection can hydrate all pages
   // without passing credentials through widgets.
-  late final ApiSession apiSession = ApiSession();
+  late final ApiSession apiSession = widget.initialApiSession ?? ApiSession();
   bool _hadLiveSession = false;
+  bool _pushSessionBound = false;
+  bool _passwordGateOpen = false;
   void _onSettings() {
     // Keep server-generated labels/errors and all subsequent requests aligned
     // with the language currently visible in the app.
@@ -137,6 +175,10 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   void _onApiSession() {
     if (!mounted) return;
     if (!apiSession.authenticated) {
+      if (_pushSessionBound) {
+        _pushSessionBound = false;
+        PushNotificationService.instance.unbindAuthenticatedSession();
+      }
       if (_hadLiveSession) {
         _hadLiveSession = false;
         setState(() => role = null);
@@ -156,8 +198,85 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
       _openWorkspace(liveRole);
     }
     if (liveRole != null) {
+      final profile = apiSession.me ?? const <String, dynamic>{};
+      final tenant = apiText(profile['tenant_slug'], fallback: 'default');
+      final principal = apiText(
+        apiValue(profile, const ['principal_kind', 'username', 'id']),
+        fallback: liveRole.name,
+      );
+      final principalId = apiText(
+        apiValue(profile, const ['id', 'username']),
+        fallback: principal,
+      );
+      unawaited(store.bindProfileIdentity('$tenant.$principal.$principalId'));
+      if (profile['must_change_password'] == true && !_passwordGateOpen) {
+        _passwordGateOpen = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          final gateContext = _navigatorKey.currentContext;
+          if (gateContext != null && mounted && apiSession.authenticated) {
+            await showApiChangePassword(gateContext, mandatory: true);
+          }
+          _passwordGateOpen = false;
+        });
+      }
+      if (!_pushSessionBound) {
+        _pushSessionBound = true;
+        unawaited(
+          PushNotificationService.instance.bindAuthenticatedSession(
+            (body) =>
+                apiSession.action('POST', '/api/v1/users/devices/', body: body),
+          ),
+        );
+      }
       syncProductStoreFromApi(apiSession, store);
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _openPendingNotification(),
+      );
     }
+  }
+
+  void _onNotificationTap(Map<String, dynamic> payload) {
+    DeviceNotificationService.instance.takePendingTapPayload();
+    _pendingNotificationPayload = Map<String, dynamic>.from(payload);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onApiSession();
+      _openPendingNotification();
+    });
+  }
+
+  void _openPendingNotification() {
+    if (!mounted || role == null || !apiSession.authenticated) return;
+    final payload = _pendingNotificationPayload;
+    if (payload == null) return;
+    _pendingNotificationPayload = null;
+    var route = notificationRouteFromPayload(payload);
+    if (!roleCanNavigate(role!, route)) route = 'notifications';
+    final navigator = _navigatorKey.currentState;
+    if (route == 'notifications') {
+      navigator?.push(
+        sfPageRoute(
+          SfTheme(
+            colors: settings.colors,
+            child: LiveNotificationsPage(
+              onNavigate: (destination) {
+                navigator.pop();
+                _pushAuthenticatedRoute(destination);
+              },
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    _pushAuthenticatedRoute(route);
+  }
+
+  void _pushAuthenticatedRoute(String route) {
+    if (!mounted || role == null || !apiSession.authenticated) return;
+    if (!roleCanNavigate(role!, route)) return;
+    final page = buildAdminPage(route, settings.colors, role!);
+    if (page == null) return;
+    _navigatorKey.currentState?.push(sfPageRoute(page));
   }
 
   @override
@@ -165,14 +284,30 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
     super.initState();
     settings = widget.initialSettings ?? AppSettings();
     apiSession.client.configure(language: settings.lang.name);
+    _notificationTapSubscription = DeviceNotificationService
+        .instance
+        .notificationTaps
+        .listen(_onNotificationTap);
+    _pendingNotificationPayload = DeviceNotificationService.instance
+        .takePendingTapPayload();
     settings.addListener(_onSettings);
     apiSession.addListener(_onApiSession);
+    // A restored session finishes before this State subscribes to ApiSession,
+    // so no authentication notification is emitted after [runApp]. Reconcile
+    // it once explicitly or the valid saved account would remain on the login
+    // screen until some unrelated API event happened.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onApiSession();
+      _openPendingNotification();
+    });
   }
 
   @override
   void dispose() {
     settings.removeListener(_onSettings);
     apiSession.removeListener(_onApiSession);
+    _notificationTapSubscription?.cancel();
+    PushNotificationService.instance.unbindAuthenticatedSession();
     settings.dispose();
     apiSession.dispose();
     super.dispose();
@@ -193,6 +328,7 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
         child: AppScope(
           store: store,
           child: MaterialApp(
+            navigatorKey: _navigatorKey,
             title: 'StarForge EDU · CEO Manager',
             debugShowCheckedModeBanner: false,
             theme: sfMaterialTheme(c, dark: settings.dark),

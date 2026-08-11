@@ -16,6 +16,7 @@ import 'package:video_player/video_player.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'api_client.dart';
 import 'api_data_view.dart';
+import 'api_store_adapter.dart';
 import 'theme.dart';
 import 'data.dart';
 import 'store.dart';
@@ -342,13 +343,26 @@ class _DetailsSheetRow extends StatelessWidget {
 }
 
 /// Notifications page opened from the dashboard bell.
-void _showNotifications(BuildContext context) {
+void _showNotifications(
+  BuildContext context, {
+  ValueChanged<String>? onNavigate,
+}) {
   final c = SfTheme.of(context);
+  final api = ApiScope.maybeOf(context)?.notifier;
   Navigator.of(context).push(
     sfPageRoute(
       SfTheme(
         colors: c,
-        child: NotificationsScreen(colors: c),
+        child: api?.authenticated == true
+            ? LiveNotificationsPage(
+                onNavigate: onNavigate == null
+                    ? null
+                    : (route) {
+                        Navigator.of(context).pop();
+                        onNavigate(route);
+                      },
+              )
+            : NotificationsScreen(colors: c),
       ),
     ),
   );
@@ -361,7 +375,7 @@ class _Notif {
   final String title, body, time, group;
   final String route;
   final Set<SfRole> roles;
-  final bool unread;
+  final bool unread = false;
   const _Notif(
     this.icon,
     this.tone,
@@ -371,87 +385,14 @@ class _Notif {
     this.group, {
     required this.route,
     required this.roles,
-    this.unread = false,
   });
 
   String get id => '$group|$title|$time';
 }
 
-const _kNotifs = <_Notif>[
-  _Notif(
-    Icons.payments_rounded,
-    PillTone.success,
-    "Yangi to'lov qabul qilindi",
-    'Azizova Madina · 600 000 so‘m · Payme',
-    '2 daq oldin',
-    'today',
-    route: 'payments',
-    roles: {SfRole.ceo, SfRole.manager},
-    unread: true,
-  ),
-  _Notif(
-    Icons.flag_rounded,
-    PillTone.danger,
-    'Sebzorda yangi anomaliya signali',
-    'Naqd · kvitansiyasiz · AI skor 88',
-    '18 daq oldin',
-    'today',
-    route: 'anomalies',
-    roles: {SfRole.audit},
-    unread: true,
-  ),
-  _Notif(
-    Icons.groups_rounded,
-    PillTone.primary,
-    "Ingliz B2 guruhi to'ldi",
-    '18/18 o‘rin band · yangi guruh ochish mumkin',
-    '1 soat oldin',
-    'today',
-    route: 'groups',
-    roles: {SfRole.ceo, SfRole.manager},
-    unread: true,
-  ),
-  _Notif(
-    Icons.task_alt_rounded,
-    PillTone.warn,
-    "3 ta yangi tasdiq so'rovi",
-    "To'lov qaytarish · ta'til · chiqarish",
-    '2 soat oldin',
-    'today',
-    route: 'approvals',
-    roles: {SfRole.ceo, SfRole.manager},
-  ),
-  _Notif(
-    Icons.call_rounded,
-    PillTone.danger,
-    "Eshmatov Otabek — qo'ng'iroq kerak",
-    "Ota-onaga 21 kundan beri qo'ng'iroq qilinmagan",
-    'Kecha 16:20',
-    'earlier',
-    route: 'students',
-    roles: {SfRole.ceo, SfRole.manager},
-  ),
-  _Notif(
-    Icons.emoji_events_rounded,
-    PillTone.accent,
-    'Yangi reyting natijasi',
-    "Chilonzor filiali oyning eng yaxshisi",
-    'Kecha 12:05',
-    'earlier',
-    route: 'comparison',
-    roles: {SfRole.ceo},
-  ),
-  _Notif(
-    Icons.warning_amber_rounded,
-    PillTone.warn,
-    '142 oila qarzdor',
-    '38 tasi 30+ kun · eslatma yuborish tavsiya etiladi',
-    '2 kun oldin',
-    'earlier',
-    route: 'payments',
-    roles: {SfRole.ceo, SfRole.manager},
-  ),
-];
+// Offline mode must never invent an API history. The authenticated page reads
+// only `/api/v1/notifications/`; without a session the honest state is empty.
+const _kNotifs = <_Notif>[];
 
 /// Full notifications page (was a bottom sheet) — grouped Today / Earlier,
 /// each entry with an icon, body and relative time.
@@ -5198,6 +5139,7 @@ String _studentPaymentLabel(BuildContext context, String status) =>
     };
 
 String studentTeacher(Student student) {
+  if (student.serverBacked) return student.teacher ?? '—';
   final group = student.group.toLowerCase();
   if (group.contains('ingliz') || group.contains('ielts')) {
     return 'Aziz Tursunov';
@@ -5221,16 +5163,25 @@ int studentAverageScore(Student student) =>
 /// Maps "days since last parent call" to a tone + label key. Green ≤3 days,
 /// amber ≤14, red beyond — the recency-of-contact signal the founder wants
 /// front-and-centre on every student.
-({PillTone tone, String key}) _callTone(int days) {
+({PillTone tone, String key}) _callTone(int? days) {
+  if (days == null) return (tone: PillTone.neutral, key: 'call_unknown');
   if (days <= 3) return (tone: PillTone.success, key: 'call_recent');
   if (days <= 14) return (tone: PillTone.warn, key: 'call_mid');
   return (tone: PillTone.danger, key: 'call_old');
 }
 
 /// Human "3 kun oldin" / "bugun" label for a last-call day count.
-String _callAgo(BuildContext context, int days) => days <= 0
+String _callAgo(BuildContext context, int? days) => days == null
+    ? '—'
+    : days <= 0
     ? tr(context, 'call_never_d')
     : '$days ${tr(context, 'call_days_ago')}';
+
+int? _minimumRecordedCallDays(Iterable<Student> students) {
+  final values = students.map(studentRecordedCallDays).whereType<int>();
+  if (values.isEmpty) return null;
+  return values.reduce((a, b) => a < b ? a : b);
+}
 
 class StudentsScreen extends StatefulWidget {
   const StudentsScreen({super.key});
@@ -5262,7 +5213,8 @@ class _StudentsScreenState extends State<StudentsScreen>
 
   bool _callOk(Student s) {
     if (callSel == 0) return true;
-    final d = studentCallDays(s);
+    final d = studentRecordedCallDays(s);
+    if (d == null) return false;
     return switch (callSel) {
       1 => d <= 3,
       2 => d > 3 && d <= 14,
@@ -5327,7 +5279,10 @@ class _StudentsScreenState extends State<StudentsScreen>
   Widget _legacyBuild(BuildContext context) {
     super.build(context);
     final c = SfTheme.of(context);
-    final all = [...AppScope.of(context).students, ...kExitedStudents];
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final all = api?.authenticated == true
+        ? [...AppScope.of(context).students]
+        : [...AppScope.of(context).students, ...kExitedStudents];
     final branches = <String>[
       '__all',
       ...{for (final s in all) studentProfile(s).branch},
@@ -5589,7 +5544,10 @@ class _ReferenceStudentsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final enrolledRange = state.enrolledRange;
-    final all = [...AppScope.of(context).students, ...kExitedStudents];
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final all = api?.authenticated == true
+        ? [...AppScope.of(context).students]
+        : [...AppScope.of(context).students, ...kExitedStudents];
     final branches = <String>[
       '__all',
       ...{for (final student in all) studentProfile(student).branch},
@@ -6210,7 +6168,7 @@ class _ReferenceStudentCard extends StatelessWidget {
         : student.attendance >= 85
         ? c.warn
         : c.danger;
-    final call = _callTone(studentCallDays(student));
+    final call = _callTone(studentRecordedCallDays(student));
     final payment = _studentTones[student.pay]!;
     return RefPressable(
       onPressed: () => Navigator.of(
@@ -6258,6 +6216,8 @@ class _ReferenceStudentCard extends StatelessWidget {
                             ? c.success
                             : call.tone == PillTone.warn
                             ? c.warn
+                            : call.tone == PillTone.neutral
+                            ? c.muted
                             : c.danger,
                       ),
                       const SizedBox(width: 5),
@@ -6265,7 +6225,10 @@ class _ReferenceStudentCard extends StatelessWidget {
                         child: Text(
                           student.pay == 'left'
                               ? studentExitReason(student)
-                              : _callAgo(context, studentCallDays(student)),
+                              : _callAgo(
+                                  context,
+                                  studentRecordedCallDays(student),
+                                ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: RefType.ui(
@@ -6776,7 +6739,7 @@ class _StudentRow extends StatelessWidget {
         : s.attendance >= 85
         ? c.warn
         : c.danger;
-    final days = studentCallDays(s);
+    final days = studentRecordedCallDays(s);
     final call = _callTone(days);
     final payment = _studentTones[s.pay]!;
     return Material(
@@ -6843,6 +6806,8 @@ class _StudentRow extends StatelessWidget {
                                     ? c.success
                                     : call.tone == PillTone.warn
                                     ? c.warn
+                                    : call.tone == PillTone.neutral
+                                    ? c.muted
                                     : c.danger,
                               ),
                               const SizedBox(width: 4),
@@ -6940,12 +6905,14 @@ class StudentDetailScreen extends StatelessWidget {
         ? c.warn
         : c.danger;
     final t = _studentTones[s.pay]!;
-    final callDays = studentCallDays(s);
+    final callDays = studentRecordedCallDays(s);
     final call = _callTone(callDays);
     final callColor = call.tone == PillTone.success
         ? c.success
         : call.tone == PillTone.warn
         ? c.warn
+        : call.tone == PillTone.neutral
+        ? c.muted
         : c.danger;
     // Synthesise an 8-week attendance trend ending near the current value.
     final base = s.attendance.toDouble();
@@ -7411,12 +7378,14 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
         : s.attendance >= 85
         ? colors.warn
         : colors.danger;
-    final callDays = studentCallDays(s);
+    final callDays = studentRecordedCallDays(s);
     final call = _callTone(callDays);
     final callColor = call.tone == PillTone.success
         ? colors.success
         : call.tone == PillTone.warn
         ? colors.warn
+        : call.tone == PillTone.neutral
+        ? colors.muted
         : colors.danger;
     final payment = _studentTones[s.pay]!;
     final trend = <double>[
@@ -8581,13 +8550,10 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   DateTime? _recordStartedAt;
   Duration _recordElapsed = Duration.zero;
   Timer? _recordTicker;
-  late final List<ChatMsg> _msgs = [
-    ChatMsg(
-      'Assalomu alaykum! ${studentProfile(widget.student).firstName} bo‘yicha yangilik bormi?',
-      mine: false,
-    ),
-    const ChatMsg('Bugungi dars uchun rahmat 🙏', mine: false),
-  ];
+  final List<ChatMsg> _msgs = <ChatMsg>[];
+  int? _liveThreadIndex;
+  int? _liveParticipantId;
+  bool _submittingFirstMessage = false;
 
   @override
   void initState() {
@@ -8597,6 +8563,31 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     if (_ctrl.text.isNotEmpty) {
       _drafts[widget.student.name] = _ctrl.text;
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _resolveLiveChat());
+  }
+
+  void _resolveLiveChat() {
+    if (!mounted) return;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (session == null || !session.authenticated) return;
+    final participantId = int.tryParse(widget.student.serverUserId ?? '');
+    final store = AppScope.of(context);
+    final index = _existingThreadIndex(store, participantId);
+    setState(() {
+      _liveParticipantId = participantId;
+      _liveThreadIndex = index < 0 ? null : index;
+    });
+  }
+
+  int _existingThreadIndex(AppStore store, int? participantId) {
+    return store.threads.indexWhere(
+      (thread) =>
+          participantId != null &&
+              thread.meta.participantIds.contains('$participantId') ||
+          !thread.meta.isGroup &&
+              thread.meta.name.trim().toLowerCase() ==
+                  widget.student.name.trim().toLowerCase(),
+    );
   }
 
   @override
@@ -8613,10 +8604,48 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     super.dispose();
   }
 
-  void _send([String? preset]) {
+  Future<void> _send([String? preset]) async {
     final text = preset ?? _ctrl.text;
     if (text.trim().isEmpty) return;
     final store = AppScope.of(context);
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (session != null && session.authenticated) {
+      if (_submittingFirstMessage) return;
+      final participantId =
+          _liveParticipantId ?? int.tryParse(widget.student.serverUserId ?? '');
+      final existingIndex = _existingThreadIndex(store, participantId);
+      final existingThreadId = existingIndex < 0
+          ? ''
+          : store.threads[existingIndex].meta.serverId?.trim() ?? '';
+      if (existingThreadId.isEmpty && participantId == null) {
+        _snack(
+          context,
+          'Для этого ученика сервер не вернул учётную запись чата',
+        );
+        return;
+      }
+      setState(() => _submittingFirstMessage = true);
+      try {
+        if (existingThreadId.isNotEmpty) {
+          await session.sendThreadMessage(existingThreadId, text.trim());
+        } else {
+          await session.createMessageThread(
+            participantIds: [participantId!],
+            subject: widget.student.name,
+            firstBody: text.trim(),
+          );
+        }
+        if (!mounted) return;
+        _ctrl.clear();
+        _drafts.remove(widget.student.name);
+        _resolveLiveChat();
+      } on ApiException catch (error) {
+        if (mounted) _snack(context, error.message);
+      } finally {
+        if (mounted) setState(() => _submittingFirstMessage = false);
+      }
+      return;
+    }
     final editingIndex = preset == null ? _editingIndex : null;
     setState(() {
       if (editingIndex != null &&
@@ -8640,7 +8669,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
         if (_replyingTo case final target?) {
           _replyTargets[outgoing] = target;
         }
-        _msgs.add(ChatMsg(_familyReply(text.trim()), mine: false));
       }
       _replyingTo = null;
       _emojiOpen = false;
@@ -8717,17 +8745,6 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     _composerFocus.requestFocus();
   }
 
-  String _familyReply(String q) {
-    final s = q.toLowerCase();
-    if (s.contains('qarz') || s.contains('to') || s.contains('pul')) {
-      return "Tushunarli, bu hafta to'lovni amalga oshiramiz. Rahmat!";
-    }
-    if (s.contains('davomat') || s.contains('kel')) {
-      return "Ertaga albatta keladi, ogohlantirdik 👍";
-    }
-    return "Rahmat, ma'lumot uchun! Aloqada bo'lamiz.";
-  }
-
   void _startRecordTicker() {
     _recordTicker?.cancel();
     _recordTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -8755,18 +8772,33 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
         _voiceLocked = false;
         _recordStartedAt = null;
         _finishRecordTicker();
-        if (path != null) {
-          _msgs.add(
-            ChatMsg(
-              'Voice message',
-              mine: true,
-              kind: ChatMessageKind.voice,
+      });
+      if (path != null) {
+        final session = ApiScope.maybeOf(context)?.notifier;
+        if (session != null && session.authenticated) {
+          await _uploadFirstStudentAttachment(
+            _PreparedChatAttachment(
               path: path,
-              duration: duration,
+              name: _portableFileName(path),
+              choice: _AttachmentChoice.file,
+              messageKind: ChatMessageKind.voice,
+              caption: 'Voice message',
             ),
           );
+        } else {
+          setState(() {
+            _msgs.add(
+              ChatMsg(
+                'Voice message',
+                mine: true,
+                kind: ChatMessageKind.voice,
+                path: path,
+                duration: duration,
+              ),
+            );
+          });
         }
-      });
+      }
       _scrollToEnd();
       return;
     }
@@ -8881,9 +8913,57 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
         prepared = prepared.copyWith(path: localPath);
       }
       if (!mounted) return;
+      final session = ApiScope.maybeOf(context)?.notifier;
+      if (session != null && session.authenticated) {
+        await _uploadFirstStudentAttachment(prepared);
+        return;
+      }
       _queueStudentUpload(prepared);
     } catch (_) {
       if (mounted) _snack(context, 'Не удалось прикрепить файл');
+    }
+  }
+
+  Future<void> _uploadFirstStudentAttachment(
+    _PreparedChatAttachment attachment,
+  ) async {
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final participantId = _liveParticipantId;
+    if (session == null || !session.authenticated) return;
+    if (participantId == null) {
+      _snack(context, 'Для этого ученика сервер не вернул учётную запись чата');
+      return;
+    }
+    final upload = _PendingChatUpload(attachment);
+    setState(() => _pendingUploads.add(upload));
+    try {
+      final bytes = await XFile(attachment.path).readAsBytes();
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = .18);
+      final key = await session.uploadMessageAttachment(
+        filename: attachment.name,
+        contentType: _chatContentType(attachment.name),
+        bytes: bytes,
+      );
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = .85);
+      await session.createMessageThread(
+        participantIds: [participantId],
+        subject: widget.student.name,
+        firstBody: attachment.caption,
+        attachments: [key],
+      );
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = 1);
+      _resolveLiveChat();
+    } on ApiException catch (error) {
+      if (mounted && !upload.cancelled) _snack(context, error.message);
+    } catch (_) {
+      if (mounted && !upload.cancelled) {
+        _snack(context, 'Не удалось прикрепить файл');
+      }
+    } finally {
+      if (mounted) setState(() => _pendingUploads.remove(upload));
     }
   }
 
@@ -8923,6 +9003,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   }
 
   void _cancelStudentUpload(_PendingChatUpload upload) {
+    upload.cancelled = true;
     _uploadTimers.remove(upload.id)?.cancel();
     setState(() => _pendingUploads.remove(upload));
     _snack(context, 'Подготовка вложения отменена');
@@ -9073,7 +9154,13 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => _referenceBuild(context);
+  Widget build(BuildContext context) {
+    final liveIndex = _liveThreadIndex;
+    if (liveIndex != null) {
+      return ChatScreen(threadIdx: liveIndex, colors: widget.colors);
+    }
+    return _referenceBuild(context);
+  }
 
   // ignore: unused_element
   Widget _legacyBuild(BuildContext context) {
@@ -11613,46 +11700,77 @@ class _ReferenceBranchesPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              RefAdaptiveGrid(
-                minCellWidth: 152,
-                children: [
-                  RefMetricCard(
-                    label: 'Filiallar',
-                    value: '${branches.length}',
-                    icon: Icons.account_tree_rounded,
-                    tone: RefMetricTone.primary,
+              if (branches.isEmpty)
+                RefSurfaceCard(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 22),
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.account_tree_outlined,
+                          size: 34,
+                          color: c.muted,
+                        ),
+                        const SizedBox(height: 9),
+                        Text(
+                          tx(
+                            context,
+                            uz: 'Hozircha hech narsa yo‘q',
+                            ru: 'Пока ничего нет',
+                            en: 'Nothing here yet',
+                          ),
+                          style: RefType.ui(
+                            size: 14,
+                            weight: FontWeight.w700,
+                            color: c.ink2,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  RefMetricCard(
-                    label: 'O‘quvchilar',
-                    value: '$totalStudents',
-                    icon: Icons.groups_rounded,
-                    tone: RefMetricTone.success,
-                  ),
-                  RefMetricCard(
-                    label: 'Средняя посещаемость',
-                    value: '$averageAttendance%',
-                    icon: Icons.how_to_reg_rounded,
-                    tone: averageAttendance >= 92
-                        ? RefMetricTone.success
-                        : RefMetricTone.warning,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              const RefSectionHeader(
-                title: 'Filiallar ro‘yxati',
-                subtitle: 'Доход, посещаемость и динамика',
-              ),
-              const SizedBox(height: 8),
-              for (var index = 0; index < branches.length; index++) ...[
-                RefStaggeredReveal(
-                  order: index,
-                  child: _ReferenceBranchCard(
-                    branch: branches[index],
-                    colors: c,
-                  ),
+                )
+              else ...[
+                RefAdaptiveGrid(
+                  minCellWidth: 152,
+                  children: [
+                    RefMetricCard(
+                      label: 'Filiallar',
+                      value: '${branches.length}',
+                      icon: Icons.account_tree_rounded,
+                      tone: RefMetricTone.primary,
+                    ),
+                    RefMetricCard(
+                      label: 'O‘quvchilar',
+                      value: '$totalStudents',
+                      icon: Icons.groups_rounded,
+                      tone: RefMetricTone.success,
+                    ),
+                    RefMetricCard(
+                      label: 'Средняя посещаемость',
+                      value: '$averageAttendance%',
+                      icon: Icons.how_to_reg_rounded,
+                      tone: averageAttendance >= 92
+                          ? RefMetricTone.success
+                          : RefMetricTone.warning,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 20),
+                const RefSectionHeader(
+                  title: 'Filiallar ro‘yxati',
+                  subtitle: 'Доход, посещаемость и динамика',
+                ),
+                const SizedBox(height: 8),
+                for (var index = 0; index < branches.length; index++) ...[
+                  RefStaggeredReveal(
+                    order: index,
+                    child: _ReferenceBranchCard(
+                      branch: branches[index],
+                      colors: c,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
               ],
             ],
           ),
@@ -11988,6 +12106,35 @@ void _showBranchSheet(BuildContext context, Branch b) {
   );
 }
 
+Widget _emptyDataRow(BuildContext context, SfColors colors) => Padding(
+  padding: const EdgeInsets.fromLTRB(14, 18, 14, 20),
+  child: Row(
+    children: [
+      Icon(Icons.inbox_outlined, size: 20, color: colors.muted),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          tx(
+            context,
+            uz: 'Hozircha hech narsa yo‘q',
+            ru: 'Пока ничего нет',
+            en: 'Nothing here yet',
+          ),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: SfType.ui,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: colors.muted,
+          ),
+        ),
+      ),
+    ],
+  ),
+);
+
 /// Full mobile branch workspace. It replaces the old read-only bottom sheet
 /// when a CEO needs to review, configure, pause or export one branch.
 class BranchWorkspaceScreen extends StatefulWidget {
@@ -12100,6 +12247,18 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
   Widget build(BuildContext context) {
     final c = widget.colors;
     final b = widget.branch;
+    final store = AppScope.of(context);
+    final live = ApiScope.maybeOf(context)?.notifier?.authenticated == true;
+    final branchTeachers = store.staff
+        .where((teacher) => teacher.branch == b.name)
+        .toList(growable: false);
+    final branchEvents = store.activities
+        .where(
+          (event) =>
+              event.title.toLowerCase().contains(b.name.toLowerCase()) ||
+              event.detail.toLowerCase().contains(b.name.toLowerCase()),
+        )
+        .toList(growable: false);
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -12316,28 +12475,42 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
               child: Column(
                 children: [
                   SfCardHeader(tr(context, 'branch_teachers_top')),
-                  _branchTeacherRow(
-                    c,
-                    'Madina Halimova',
-                    'Matematika',
-                    '87%',
-                    '★ 5',
-                  ),
-                  _branchTeacherRow(
-                    c,
-                    'Sevara Ibragimova',
-                    'Ingliz tili',
-                    '90%',
-                    '★ 5',
-                  ),
-                  _branchTeacherRow(
-                    c,
-                    'Munira Tosheva',
-                    'Fizika',
-                    '93%',
-                    '★ 5',
-                    last: true,
-                  ),
+                  if (live && branchTeachers.isEmpty)
+                    _emptyDataRow(context, c)
+                  else if (live)
+                    for (var i = 0; i < branchTeachers.length; i++)
+                      _branchTeacherRow(
+                        c,
+                        branchTeachers[i].fullName,
+                        branchTeachers[i].subject,
+                        '—',
+                        '${branchTeachers[i].groups.length}',
+                        last: i == branchTeachers.length - 1,
+                      )
+                  else ...[
+                    _branchTeacherRow(
+                      c,
+                      'Madina Halimova',
+                      'Matematika',
+                      '87%',
+                      '★ 5',
+                    ),
+                    _branchTeacherRow(
+                      c,
+                      'Sevara Ibragimova',
+                      'Ingliz tili',
+                      '90%',
+                      '★ 5',
+                    ),
+                    _branchTeacherRow(
+                      c,
+                      'Munira Tosheva',
+                      'Fizika',
+                      '93%',
+                      '★ 5',
+                      last: true,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -12353,53 +12526,67 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                       en: 'Recent activity',
                     ),
                   ),
-                  _branchEventRow(
-                    c,
-                    Icons.trending_up_rounded,
-                    tx(
-                      context,
-                      uz: 'Yangi to‘lov · 1.2 mln',
-                      ru: 'Новый платёж · 1,2 млн',
-                      en: 'New payment · 1.2m',
+                  if (live && branchEvents.isEmpty)
+                    _emptyDataRow(context, c)
+                  else if (live)
+                    for (var i = 0; i < branchEvents.length; i++)
+                      _branchEventRow(
+                        c,
+                        branchEvents[i].icon,
+                        branchEvents[i].title,
+                        branchEvents[i].detail,
+                        c.primary,
+                        last: i == branchEvents.length - 1,
+                      )
+                  else ...[
+                    _branchEventRow(
+                      c,
+                      Icons.trending_up_rounded,
+                      tx(
+                        context,
+                        uz: 'Yangi to‘lov · 1.2 mln',
+                        ru: 'Новый платёж · 1,2 млн',
+                        en: 'New payment · 1.2m',
+                      ),
+                      tx(
+                        context,
+                        uz: '2 daqiqa',
+                        ru: '2 минуты',
+                        en: '2 minutes',
+                      ),
+                      c.success,
                     ),
-                    tx(
-                      context,
-                      uz: '2 daqiqa',
-                      ru: '2 минуты',
-                      en: '2 minutes',
+                    _branchEventRow(
+                      c,
+                      Icons.notifications_active_rounded,
+                      tx(
+                        context,
+                        uz: 'Qarz eslatmasi yuborildi',
+                        ru: 'Отправлено напоминание о долге',
+                        en: 'Debt reminder sent',
+                      ),
+                      tx(
+                        context,
+                        uz: '14 daqiqa',
+                        ru: '14 минут',
+                        en: '14 minutes',
+                      ),
+                      c.warn,
                     ),
-                    c.success,
-                  ),
-                  _branchEventRow(
-                    c,
-                    Icons.notifications_active_rounded,
-                    tx(
-                      context,
-                      uz: 'Qarz eslatmasi yuborildi',
-                      ru: 'Отправлено напоминание о долге',
-                      en: 'Debt reminder sent',
+                    _branchEventRow(
+                      c,
+                      Icons.flag_rounded,
+                      tx(
+                        context,
+                        uz: 'Audit flag · past davomat',
+                        ru: 'Флаг аудита · низкая посещаемость',
+                        en: 'Audit flag · low attendance',
+                      ),
+                      tx(context, uz: '2 soat', ru: '2 часа', en: '2 hours'),
+                      c.danger,
+                      last: true,
                     ),
-                    tx(
-                      context,
-                      uz: '14 daqiqa',
-                      ru: '14 минут',
-                      en: '14 minutes',
-                    ),
-                    c.warn,
-                  ),
-                  _branchEventRow(
-                    c,
-                    Icons.flag_rounded,
-                    tx(
-                      context,
-                      uz: 'Audit flag · past davomat',
-                      ru: 'Флаг аудита · низкая посещаемость',
-                      en: 'Audit flag · low attendance',
-                    ),
-                    tx(context, uz: '2 soat', ru: '2 часа', en: '2 hours'),
-                    c.danger,
-                    last: true,
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -13183,6 +13370,7 @@ class _AiScreenState extends State<AiScreen> {
   final ScrollController _scroll = ScrollController();
   bool _historyOpen = false;
   bool _sending = false;
+  String? _serviceError;
 
   @override
   void dispose() {
@@ -13197,35 +13385,44 @@ class _AiScreenState extends State<AiScreen> {
     store.addAiUserTurn(text);
     _ctrl.clear();
     FocusScope.of(context).unfocus();
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _serviceError = null;
+    });
     try {
       final api = ApiScope.maybeOf(context)?.notifier;
       if (api == null || !api.authenticated) {
-        store.addAiAssistantTurn(
-          'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
-        );
+        if (mounted) {
+          setState(() {
+            _serviceError =
+                'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.';
+          });
+        }
       } else {
         final answer = await api.requestAi(text);
         store.addAiAssistantTurn(answer);
       }
     } on ApiException catch (error) {
       if (mounted) {
-        store.addAiAssistantTurn(switch (error.status) {
-          401 || 404 =>
-            'AI ещё не подключен. Backend доступен, но AI endpoint не настроен.',
-          403 =>
-            'AI недоступен для вашей роли. Попросите администратора выдать разрешение.',
-          429 =>
-            'Лимит AI на сейчас исчерпан. Попробуйте позже или проверьте бюджет центра.',
-          _ =>
-            'AI временно недоступен. Соединение с backend есть, но сервис не ответил.',
+        setState(() {
+          _serviceError = switch (error.status) {
+            401 || 404 =>
+              'AI ещё не подключен. Backend доступен, но AI endpoint не настроен.',
+            403 =>
+              'AI недоступен для вашей роли. Попросите администратора выдать разрешение.',
+            429 =>
+              'Лимит AI на сейчас исчерпан. Попробуйте позже или проверьте бюджет центра.',
+            _ =>
+              'AI временно недоступен. Соединение с backend есть, но сервис не ответил.',
+          };
         });
       }
     } catch (_) {
       if (mounted) {
-        store.addAiAssistantTurn(
-          'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.',
-        );
+        setState(() {
+          _serviceError =
+              'AI ещё не подключен. Подключите AI/backend в настройках и повторите запрос.';
+        });
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -13278,7 +13475,10 @@ class _AiScreenState extends State<AiScreen> {
                 _AiIconBtn(
                   icon: Icons.delete_sweep_outlined,
                   tooltip: 'Suhbatni tozalash',
-                  onTap: store.clearActiveConversation,
+                  onTap: () {
+                    store.clearActiveConversation();
+                    setState(() => _serviceError = null);
+                  },
                 ),
               if (store.chat.isNotEmpty) const SizedBox(width: 6),
               _AiIconBtn(
@@ -13286,7 +13486,10 @@ class _AiScreenState extends State<AiScreen> {
                 tooltip: 'Yangi suhbat',
                 onTap: () {
                   store.newConversation();
-                  setState(() => _historyOpen = false);
+                  setState(() {
+                    _historyOpen = false;
+                    _serviceError = null;
+                  });
                 },
               ),
             ],
@@ -13321,6 +13524,16 @@ class _AiScreenState extends State<AiScreen> {
                       )
                     else
                       for (final turn in store.chat) _ChatBubble(turn: turn),
+                    if (_serviceError case final error?) ...[
+                      const SizedBox(height: 4),
+                      RefStatusTile(
+                        key: const ValueKey('ai-service-error'),
+                        icon: Icons.info_outline_rounded,
+                        title: 'AI недоступен',
+                        subtitle: error,
+                        tone: RefMetricTone.warning,
+                      ),
+                    ],
                     if (_sending) ...[
                       const SizedBox(height: 4),
                       Row(
@@ -13472,11 +13685,17 @@ class _AiScreenState extends State<AiScreen> {
             colors: c,
             onSelect: (i) {
               store.selectConversation(i);
-              setState(() => _historyOpen = false);
+              setState(() {
+                _historyOpen = false;
+                _serviceError = null;
+              });
             },
             onNew: () {
               store.newConversation();
-              setState(() => _historyOpen = false);
+              setState(() {
+                _historyOpen = false;
+                _serviceError = null;
+              });
             },
             onClose: () => setState(() => _historyOpen = false),
           ),
@@ -13529,7 +13748,7 @@ class _AiIconBtn extends StatelessWidget {
 }
 
 /// ChatGPT-style left panel listing saved AI conversations.
-class _AiHistoryPanel extends StatelessWidget {
+class _AiHistoryPanel extends StatefulWidget {
   final AppStore store;
   final SfColors colors;
   final ValueChanged<int> onSelect;
@@ -13541,9 +13760,89 @@ class _AiHistoryPanel extends StatelessWidget {
     required this.onNew,
     required this.onClose,
   });
+
+  @override
+  State<_AiHistoryPanel> createState() => _AiHistoryPanelState();
+}
+
+class _AiHistoryPanelState extends State<_AiHistoryPanel> {
+  final TextEditingController _searchController = TextEditingController();
+  bool _searching = false;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _rename(int index, AiConversation conversation) async {
+    final controller = TextEditingController(text: conversation.title);
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Переименовать чат'),
+        content: TextField(
+          key: const ValueKey('ai-rename-field'),
+          controller: controller,
+          autofocus: true,
+          maxLength: 80,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (text) => Navigator.pop(dialogContext, text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value != null && mounted) widget.store.renameConversation(index, value);
+  }
+
+  Future<void> _delete(int index, AiConversation conversation) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Удалить чат?'),
+        content: Text(
+          'История «${conversation.title}» будет удалена только для этой учётной записи на устройстве.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) widget.store.deleteConversation(index);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
+    final query = _searchController.text.trim().toLowerCase();
+    final visible = <(int, AiConversation)>[];
+    for (var i = 0; i < widget.store.conversations.length; i++) {
+      final conversation = widget.store.conversations[i];
+      final matches =
+          query.isEmpty ||
+          conversation.title.toLowerCase().contains(query) ||
+          conversation.turns.any(
+            (turn) => turn.text.toLowerCase().contains(query),
+          );
+      if (matches) visible.add((i, conversation));
+    }
     return Material(
       color: c.surface,
       child: SafeArea(
@@ -13556,28 +13855,85 @@ class _AiHistoryPanel extends StatelessWidget {
                 children: [
                   Icon(Icons.auto_awesome_rounded, size: 18, color: c.ai),
                   const SizedBox(width: 8),
-                  Text(
-                    tr(context, 'ai_history'),
-                    style: TextStyle(
-                      fontFamily: SfType.ui,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: c.ink,
+                  Expanded(
+                    child: Text(
+                      tr(context, 'ai_history'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: SfType.ui,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: c.ink,
+                      ),
                     ),
                   ),
-                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Поиск по истории',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 40,
+                      height: 40,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _searching = !_searching;
+                        if (!_searching) _searchController.clear();
+                      });
+                    },
+                    icon: Icon(
+                      _searching
+                          ? Icons.search_off_rounded
+                          : Icons.search_rounded,
+                      size: 20,
+                      color: c.muted,
+                    ),
+                  ),
                   IconButton(
                     tooltip: 'Yopish',
-                    onPressed: onClose,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 40,
+                      height: 40,
+                    ),
+                    onPressed: widget.onClose,
                     icon: Icon(Icons.close_rounded, size: 20, color: c.muted),
                   ),
                 ],
               ),
             ),
+            if (_searching)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                child: TextField(
+                  key: const ValueKey('ai-history-search'),
+                  controller: _searchController,
+                  autofocus: true,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: 'Поиск по чатам',
+                    prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                    suffixIcon: _searchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Очистить поиск',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
               child: GestureDetector(
-                onTap: onNew,
+                onTap: widget.onNew,
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   alignment: Alignment.center,
@@ -13606,73 +13962,109 @@ class _AiHistoryPanel extends StatelessWidget {
             ),
             Divider(height: 1, color: c.border),
             Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                itemCount: store.conversations.length,
-                itemBuilder: (_, i) {
-                  final conv = store.conversations[i];
-                  final active = i == store.activeConv;
-                  final preview = conv.turns.isEmpty
-                      ? tr(context, 'ai_empty_chat')
-                      : conv.turns.last.text;
-                  return InkWell(
-                    onTap: () => onSelect(i),
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
+              child: visible.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Ничего не найдено',
+                        style: RefType.ui(size: 12, color: c.muted),
                       ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 11,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: active ? c.surface2 : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                        border: active ? Border.all(color: c.border) : null,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.chat_bubble_outline_rounded,
-                            size: 15,
-                            color: active ? c.ai : c.muted,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      itemCount: visible.length,
+                      itemBuilder: (_, visibleIndex) {
+                        final (i, conv) = visible[visibleIndex];
+                        final active = i == widget.store.activeConv;
+                        final preview = conv.turns.isEmpty
+                            ? tr(context, 'ai_empty_chat')
+                            : conv.turns.last.text;
+                        return InkWell(
+                          onTap: () => widget.onSelect(i),
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 11,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: active ? c.surface2 : Colors.transparent,
+                              borderRadius: BorderRadius.circular(10),
+                              border: active
+                                  ? Border.all(color: c.border)
+                                  : null,
+                            ),
+                            child: Row(
                               children: [
-                                Text(
-                                  conv.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: SfType.ui,
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: c.ink,
+                                Icon(
+                                  Icons.chat_bubble_outline_rounded,
+                                  size: 15,
+                                  color: active ? c.ai : c.muted,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        conv.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontFamily: SfType.ui,
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: c.ink,
+                                        ),
+                                      ),
+                                      Text(
+                                        preview,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontFamily: SfType.ui,
+                                          fontSize: 10.5,
+                                          color: c.muted,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                Text(
-                                  preview,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontFamily: SfType.ui,
-                                    fontSize: 10.5,
+                                PopupMenuButton<String>(
+                                  tooltip: 'Действия с чатом',
+                                  padding: EdgeInsets.zero,
+                                  icon: Icon(
+                                    Icons.more_horiz_rounded,
+                                    size: 18,
                                     color: c.muted,
                                   ),
+                                  onSelected: (action) {
+                                    if (action == 'rename') {
+                                      _rename(i, conv);
+                                    } else if (action == 'delete') {
+                                      _delete(i, conv);
+                                    }
+                                  },
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: 'rename',
+                                      child: Text('Переименовать'),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Удалить'),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
           ],
         ),
@@ -15587,12 +15979,14 @@ class _ManagedTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final bool requiredField;
   final int maxLines;
+  final bool enabled;
   const _ManagedTextField({
     required this.controller,
     required this.label,
     this.keyboardType,
     this.requiredField = false,
     this.maxLines = 1,
+    this.enabled = true,
   });
   @override
   Widget build(BuildContext context) {
@@ -15601,6 +15995,7 @@ class _ManagedTextField extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 11),
       child: TextFormField(
         controller: controller,
+        enabled: enabled,
         keyboardType: keyboardType,
         maxLines: maxLines,
         style: TextStyle(fontFamily: SfType.ui, fontSize: 13.5, color: c.ink),
@@ -15636,6 +16031,8 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
   String _branch = 'Yunusobod';
   String _group = '__none';
   String _gender = 'Male';
+  bool _submitting = false;
+  String? _submitError;
 
   @override
   void dispose() {
@@ -15655,8 +16052,68 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
     super.dispose();
   }
 
-  void _submit() {
-    if (!(_form.currentState?.validate() ?? false)) return;
+  Map<String, dynamic>? _recordByPhone(
+    List<Map<String, dynamic>> rows,
+    String phone,
+  ) {
+    final wanted = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    for (final row in rows) {
+      final candidate = apiText(
+        apiValue(row, const ['phone', 'phone_number', 'mobile']),
+      ).replaceAll(RegExp(r'[^0-9]'), '');
+      if (candidate.isNotEmpty && candidate == wanted) return row;
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _recordByName(
+    List<Map<String, dynamic>> rows,
+    String name, {
+    String? branchId,
+  }) {
+    final wanted = name.trim().toLowerCase();
+    for (final row in rows) {
+      final candidate = apiText(
+        apiValue(row, const ['name', 'full_name', 'title']),
+      ).trim().toLowerCase();
+      if (candidate != wanted) continue;
+      if (branchId != null) {
+        final rawBranch = apiValue(row, const ['branch', 'branch_id']);
+        final candidateBranch = rawBranch is Map
+            ? apiText(
+                apiValue(Map<String, dynamic>.from(rawBranch), const [
+                  'id',
+                  'pk',
+                ]),
+              )
+            : apiText(rawBranch);
+        if (candidateBranch != branchId) continue;
+      }
+      return row;
+    }
+    return null;
+  }
+
+  String _apiRecordId(Map<String, dynamic>? row) =>
+      apiText(row == null ? null : apiValue(row, const ['id', 'pk', 'uuid']));
+
+  String _apiSubmitError(ApiException error) {
+    final details = error.errors?.entries
+        .expand((entry) {
+          final value = entry.value;
+          if (value is Iterable) {
+            return value.map((item) => '${entry.key}: $item');
+          }
+          return ['${entry.key}: $value'];
+        })
+        .join(' · ');
+    return [
+      error.message,
+      if (details != null && details.isNotEmpty) details,
+    ].join(' · ');
+  }
+
+  void _saveOffline() {
     final store = AppScope.of(context);
     final selectedGroup = _group == '__none' ? 'Qabul · yangi' : _group;
     store.addStudent(
@@ -15680,18 +16137,171 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
       ),
       branch: _branch,
     );
-    Navigator.of(context).pop();
-    _snack(
-      context,
-      'O‘quvchi muvaffaqiyatli qabul qilindi',
-      bg: widget.colors.success,
-    );
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    if (!(_form.currentState?.validate() ?? false)) return;
+    final api = ApiScope.maybeOf(context)?.notifier;
+    if (api == null || !api.authenticated) {
+      _saveOffline();
+      Navigator.of(context).pop();
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _submitError = null;
+    });
+    try {
+      final missingCapabilities = <String>[
+        if (!api.hasPermission('students:write')) 'students:write',
+        if (!api.hasPermission('parents:write')) 'parents:write',
+        if (!api.hasPermission('safeguarding:write')) 'safeguarding:write',
+        if (_group != '__none' && !api.hasPermission('cohorts:write'))
+          'cohorts:write',
+      ];
+      if (missingCapabilities.isNotEmpty) {
+        throw ApiException(
+          status: 403,
+          message:
+              'У этой роли нет прав для полного приёма ученика с родителем.',
+          code: 'insufficient_admission_permissions',
+          errors: {'permissions': missingCapabilities},
+          requestId: 'local-admission-permission-check',
+        );
+      }
+      final branch = _recordByName(api.records('branches'), _branch);
+      final branchId = _apiRecordId(branch);
+      if (branchId.isEmpty) {
+        throw const ApiException(
+          status: 422,
+          message: 'Выбранный филиал отсутствует в API.',
+          code: 'invalid_branch',
+          requestId: 'local-admission-validation',
+        );
+      }
+      final selectedGroup = _group == '__none'
+          ? null
+          : _recordByName(api.records('groups'), _group, branchId: branchId);
+      final selectedGroupId = _apiRecordId(selectedGroup);
+      if (_group != '__none' && selectedGroupId.isEmpty) {
+        throw const ApiException(
+          status: 422,
+          message: 'Выбранная группа отсутствует в этом филиале.',
+          code: 'invalid_cohort',
+          requestId: 'local-admission-validation',
+        );
+      }
+
+      var student = _recordByPhone(api.records('students'), _phone.text);
+      student ??= await api.create('students', {
+        'branch': int.tryParse(branchId) ?? branchId,
+        'username': _username.text.trim(),
+        'phone': _phone.text.trim(),
+        'first_name': _first.text.trim(),
+        'last_name': _last.text.trim(),
+        'gender': _gender == 'Female' ? 'f' : 'm',
+        'status': _group == '__none' ? 'lead' : 'enrolled',
+        if (_backup.text.trim().isNotEmpty)
+          'emergency_contacts': [
+            {'name': 'Secondary phone', 'phone': _backup.text.trim()},
+          ],
+      });
+      final studentId = _apiRecordId(student);
+      if (studentId.isEmpty) {
+        throw const ApiException(
+          status: 502,
+          message: 'API создал ученика без идентификатора.',
+          code: 'invalid_student_response',
+          requestId: 'local-admission-validation',
+        );
+      }
+
+      var parent = _recordByPhone(api.records('parents'), _parentPhone.text);
+      if (parent == null) {
+        final parts = _parentName.text
+            .trim()
+            .split(RegExp(r'\s+'))
+            .where((part) => part.isNotEmpty)
+            .toList(growable: false);
+        parent = await api.create('parents', {
+          'phone': _parentPhone.text.trim(),
+          'first_name': parts.isEmpty ? '' : parts.first,
+          'last_name': parts.length < 2 ? '' : parts.skip(1).join(' '),
+          if (_parentBackup.text.trim().isNotEmpty)
+            'notes': 'Secondary phone: ${_parentBackup.text.trim()}',
+        });
+      }
+      final parentId = _apiRecordId(parent);
+      if (parentId.isEmpty) {
+        throw const ApiException(
+          status: 502,
+          message: 'API создал родителя без идентификатора.',
+          code: 'invalid_parent_response',
+          requestId: 'local-admission-validation',
+        );
+      }
+
+      final linkExists = api.records('guardians').any((row) {
+        final linkedParent = apiText(
+          apiValue(row, const ['parent', 'parent_id']),
+        );
+        final linkedStudent = apiText(
+          apiValue(row, const ['student', 'student_id']),
+        );
+        return linkedParent == parentId && linkedStudent == studentId;
+      });
+      if (!linkExists) {
+        await api.create('guardians', {
+          'parent': int.tryParse(parentId) ?? parentId,
+          'student': int.tryParse(studentId) ?? studentId,
+          'relationship': 'other',
+          'is_primary': true,
+        });
+      }
+
+      if (_group != '__none') {
+        final currentGroup = apiText(
+          apiValue(student ?? const {}, const [
+            'current_cohort',
+            'cohort',
+            'group',
+          ]),
+        );
+        if (currentGroup != selectedGroupId) {
+          await api.action(
+            'POST',
+            '/api/v1/cohorts/${Uri.encodeComponent(selectedGroupId)}/enroll/',
+            body: {'student': int.tryParse(studentId) ?? studentId},
+            refreshResources: const ['students', 'groups'],
+          );
+        }
+      }
+
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _submitError = _apiSubmitError(error));
+    } catch (_) {
+      if (mounted) {
+        setState(() => _submitError = 'Не удалось сохранить данные в API.');
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
+    final live = ApiScope.maybeOf(context)?.notifier?.authenticated == true;
+    final branchNames = store.branches.map((branch) => branch.name).toList();
+    if (branchNames.isNotEmpty && !branchNames.contains(_branch)) {
+      _branch = branchNames.first;
+      _group = '__none';
+    }
     final groups = _groupsFrom(
       store.students,
       store.extraGroups,
@@ -15719,6 +16329,15 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
             children: [
+              if (_submitError != null) ...[
+                RefStatusTile(
+                  icon: Icons.error_outline_rounded,
+                  title: 'Не удалось сохранить в базе',
+                  subtitle: _submitError!,
+                  tone: RefMetricTone.danger,
+                ),
+                const SizedBox(height: 12),
+              ],
               _setSec(c, 'O‘QUVCHI MA’LUMOTLARI'),
               _ManagedTextField(
                 controller: _first,
@@ -15732,8 +16351,11 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
               ),
               _ManagedTextField(
                 controller: _number,
-                label: 'Student number',
-                requiredField: true,
+                label: live
+                    ? 'Student number · API автоматически создаст'
+                    : 'Student number',
+                requiredField: !live,
+                enabled: !live,
               ),
               _ManagedTextField(
                 controller: _phone,
@@ -15769,7 +16391,7 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
               _ManagedSelect<String>(
                 label: 'Filial',
                 value: _branch,
-                items: [for (final b in store.branches) b.name],
+                items: branchNames,
                 onChanged: (v) => setState(() {
                   _branch = v;
                   _group = '__none';
@@ -15802,8 +16424,10 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
             child: SfButton(
-              icon: Icons.check_rounded,
-              label: 'O‘quvchini yaratish',
+              icon: _submitting
+                  ? Icons.hourglass_top_rounded
+                  : Icons.check_rounded,
+              label: _submitting ? 'Saqlanmoqda…' : 'O‘quvchini yaratish',
               primary: true,
               onTap: _submit,
             ),
@@ -17117,7 +17741,75 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
   Widget build(BuildContext context) {
     final c = widget.colors;
     final branches = AppScope.of(context).branches;
-    if (branches.isEmpty) return const SizedBox.shrink();
+    if (branches.length < 2) {
+      return SfTheme(
+        colors: c,
+        child: Scaffold(
+          backgroundColor: c.bg,
+          appBar: AppBar(
+            backgroundColor: c.surface,
+            surfaceTintColor: Colors.transparent,
+            iconTheme: IconThemeData(color: c.ink),
+            title: Text(
+              tx(
+                context,
+                uz: 'Filiallarni solishtirish',
+                ru: 'Сравнение филиалов',
+                en: 'Branch comparison',
+              ),
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontWeight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+          ),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: SfCard(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.compare_arrows_rounded,
+                        size: 34,
+                        color: c.muted,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        branches.isEmpty
+                            ? tx(
+                                context,
+                                uz: 'Hozircha hech narsa yo‘q',
+                                ru: 'Пока ничего нет',
+                                en: 'Nothing here yet',
+                              )
+                            : tx(
+                                context,
+                                uz: 'Solishtirish uchun kamida 2 ta filial kerak',
+                                ru: 'Для сравнения нужны минимум 2 филиала',
+                                en: 'At least 2 branches are required',
+                              ),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: SfType.ui,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: c.ink2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     a ??= branches.first.name;
     b ??= branches.length > 1 ? branches[1].name : branches.first.name;
     final first = branches.firstWhere((item) => item.name == a);
@@ -17400,12 +18092,17 @@ class _ActivityHistoryScreenState extends State<ActivityHistoryScreen> {
             ),
             const SizedBox(height: 12),
             SfCard(
-              child: Column(
-                children: [
-                  for (int i = 0; i < items.length; i++)
-                    _ActivityRow(event: items[i], last: i == items.length - 1),
-                ],
-              ),
+              child: items.isEmpty
+                  ? _emptyDataRow(context, c)
+                  : Column(
+                      children: [
+                        for (int i = 0; i < items.length; i++)
+                          _ActivityRow(
+                            event: items[i],
+                            last: i == items.length - 1,
+                          ),
+                      ],
+                    ),
             ),
           ],
         ),
@@ -17553,6 +18250,20 @@ class ActivityDetailScreen extends StatelessWidget {
   }
 }
 
+class _ParentWorkspaceEntry {
+  const _ParentWorkspaceEntry({
+    required this.name,
+    required this.phone,
+    required this.children,
+    this.record,
+  });
+
+  final String name;
+  final String phone;
+  final List<Student> children;
+  final Map<String, dynamic>? record;
+}
+
 class ParentsWorkspaceScreen extends StatefulWidget {
   final SfColors colors;
   const ParentsWorkspaceScreen({super.key, required this.colors});
@@ -17571,38 +18282,120 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
     super.dispose();
   }
 
+  Student? _productStudentFor(
+    Map<String, dynamic> row,
+    List<Student> students,
+  ) {
+    final id = apiText(
+      apiValue(row, const ['id', 'pk', 'student_id']),
+    ).toLowerCase();
+    final name = apiText(
+      apiValue(row, const ['full_name', 'name', 'student_name']),
+    ).toLowerCase();
+    for (final student in students) {
+      if (id.isNotEmpty && (student.studentNumber ?? '').toLowerCase() == id) {
+        return student;
+      }
+      if (name.isNotEmpty && student.name.toLowerCase() == name) {
+        return student;
+      }
+    }
+    return null;
+  }
+
+  List<_ParentWorkspaceEntry> _entries(BuildContext context) {
+    final storeStudents = AppScope.of(context).students;
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final live = api?.authenticated == true;
+    if (!live) {
+      final byParent = <String, List<Student>>{};
+      for (final student in [...storeStudents, ...kExitedStudents]) {
+        byParent
+            .putIfAbsent(studentProfile(student).fatherName, () => [])
+            .add(student);
+      }
+      return [
+        for (final entry in byParent.entries)
+          _ParentWorkspaceEntry(
+            name: entry.key,
+            phone: studentProfile(entry.value.first).fatherPhone,
+            children: entry.value,
+          ),
+      ];
+    }
+
+    return [
+      for (final parent in api!.records('parents'))
+        () {
+          final name = apiText(
+            apiValue(parent, const [
+              'full_name',
+              'name',
+              'display_name',
+              'username',
+              'id',
+            ]),
+            fallback: '—',
+          );
+          final mapped = <Student>[];
+          for (final row in api.childrenForParent(parent)) {
+            final student = _productStudentFor(row, storeStudents);
+            if (student != null && !mapped.contains(student)) {
+              mapped.add(student);
+            }
+          }
+          // Supports an older response shape where the parent was embedded in
+          // the student but no guardian row was published.
+          for (final student in storeStudents) {
+            if (student.parentName?.trim().toLowerCase() ==
+                    name.trim().toLowerCase() &&
+                !mapped.contains(student)) {
+              mapped.add(student);
+            }
+          }
+          return _ParentWorkspaceEntry(
+            name: name,
+            phone: apiText(
+              apiValue(parent, const ['phone', 'phone_number', 'mobile']),
+              fallback: '—',
+            ),
+            children: mapped,
+            record: parent,
+          );
+        }(),
+    ];
+  }
+
+  int? _lastCall(_ParentWorkspaceEntry entry) =>
+      entry.children.isEmpty ? null : _minimumRecordedCallDays(entry.children);
+
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    final children = [...AppScope.of(context).students, ...kExitedStudents];
-    final byParent = <String, List<Student>>{};
-    for (final student in children) {
-      byParent
-          .putIfAbsent(studentProfile(student).fatherName, () => [])
-          .add(student);
-    }
-    final matchingEntries = byParent.entries.where((entry) {
+    final allEntries = _entries(context);
+    final matchingEntries = allEntries.where((entry) {
       final q = query.toLowerCase();
       return q.isEmpty ||
-          entry.key.toLowerCase().contains(q) ||
-          entry.value.any((s) => s.name.toLowerCase().contains(q));
+          entry.name.toLowerCase().contains(q) ||
+          entry.phone.toLowerCase().contains(q) ||
+          entry.children.any((s) => s.name.toLowerCase().contains(q));
     }).toList();
-    final allChildren = matchingEntries.expand((entry) => entry.value).toList();
+    final allChildren = matchingEntries
+        .expand((entry) => entry.children)
+        .toList();
     final attentionCount = matchingEntries.where((entry) {
-      final lastCall = entry.value
-          .map(studentCallDays)
-          .reduce((a, b) => a < b ? a : b);
-      return lastCall > 7;
+      final lastCall = _lastCall(entry);
+      return lastCall != null && lastCall > 7;
     }).length;
     final debtCount = allChildren.where((child) => child.debt > 0).length;
     final entries = matchingEntries.where((entry) {
       if (metric == 1) {
-        final lastCall = entry.value
-            .map(studentCallDays)
-            .reduce((a, b) => a < b ? a : b);
-        return lastCall > 7;
+        final lastCall = _lastCall(entry);
+        return lastCall != null && lastCall > 7;
       }
-      if (metric == 2) return entry.value.any((child) => child.debt > 0);
+      if (metric == 2) {
+        return entry.children.any((child) => child.debt > 0);
+      }
       return true;
     }).toList();
     return SfTheme(
@@ -17698,8 +18491,10 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
                       RefStaggeredReveal(
                         order: i,
                         child: _ParentRow(
-                          name: entries[i].key,
-                          children: entries[i].value,
+                          name: entries[i].name,
+                          phone: entries[i].phone,
+                          children: entries[i].children,
+                          record: entries[i].record,
                           colors: c,
                         ),
                       ),
@@ -17717,25 +18512,33 @@ class _ParentsWorkspaceScreenState extends State<ParentsWorkspaceScreen> {
 
 class _ParentRow extends StatelessWidget {
   final String name;
+  final String phone;
   final List<Student> children;
+  final Map<String, dynamic>? record;
   final SfColors colors;
   const _ParentRow({
     required this.name,
+    required this.phone,
     required this.children,
+    this.record,
     required this.colors,
   });
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    final child = children.first;
-    final profile = studentProfile(child);
-    final lastCall = children
-        .map(studentCallDays)
-        .reduce((a, b) => a < b ? a : b);
+    final child = children.firstOrNull;
+    final profile = child == null ? null : studentProfile(child);
+    final lastCall = child == null ? null : _minimumRecordedCallDays(children);
     return RefPressable(
       onPressed: () => Navigator.of(context).push(
         sfPageRoute(
-          ParentDetailScreen(name: name, children: children, colors: c),
+          ParentDetailScreen(
+            name: name,
+            phone: phone,
+            children: children,
+            record: record,
+            colors: c,
+          ),
         ),
       ),
       borderRadius: RefRadius.lg,
@@ -17764,7 +18567,7 @@ class _ParentRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${children.length} farzand · ${profile.fatherPhone}',
+                        '${children.length} farzand · $phone',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: RefType.ui(size: 10.5, color: c.muted),
@@ -17772,36 +18575,58 @@ class _ParentRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                RefPill(
-                  label: _callAgo(context, lastCall),
-                  tone: lastCall <= 3
-                      ? RefPillTone.success
-                      : RefPillTone.warning,
-                ),
+                if (lastCall != null)
+                  RefPill(
+                    label: _callAgo(context, lastCall),
+                    tone: lastCall <= 3
+                        ? RefPillTone.success
+                        : RefPillTone.warning,
+                  )
+                else
+                  RefPill(
+                    label: child == null
+                        ? 'Farzand biriktirilmagan'
+                        : 'Qo‘ng‘iroq tarixi yo‘q',
+                    tone: RefPillTone.neutral,
+                  ),
               ],
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 12,
-              runSpacing: 5,
-              children: [
-                _ParentChildFact(
-                  icon: Icons.person_outline_rounded,
-                  label: studentTeacher(child),
-                ),
-                _ParentChildFact(
-                  icon: Icons.school_outlined,
-                  label: 'Boshlagan: ${profile.enrolled}',
-                ),
-              ],
-            ),
+            if (child != null && profile != null)
+              Wrap(
+                spacing: 12,
+                runSpacing: 5,
+                children: [
+                  _ParentChildFact(
+                    icon: Icons.person_outline_rounded,
+                    label: studentTeacher(child),
+                  ),
+                  _ParentChildFact(
+                    icon: Icons.school_outlined,
+                    label: 'Boshlagan: ${profile.enrolled}',
+                  ),
+                ],
+              )
+            else
+              _ParentChildFact(
+                icon: Icons.link_off_rounded,
+                label: 'Связь с учеником ещё не добавлена',
+              ),
             const SizedBox(height: 3),
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
                 onPressed: () => Navigator.of(context).push(
                   sfPageRoute(
-                    StudentDetailScreen(student: child, colors: colors),
+                    child == null
+                        ? ParentDetailScreen(
+                            name: name,
+                            phone: phone,
+                            children: children,
+                            record: record,
+                            colors: c,
+                          )
+                        : StudentDetailScreen(student: child, colors: colors),
                   ),
                 ),
                 icon: const Icon(Icons.arrow_forward_rounded, size: 16),
@@ -17817,18 +18642,38 @@ class _ParentRow extends StatelessWidget {
 
 class ParentDetailScreen extends StatelessWidget {
   final String name;
+  final String phone;
   final List<Student> children;
+  final Map<String, dynamic>? record;
   final SfColors colors;
   const ParentDetailScreen({
     super.key,
     required this.name,
+    required this.phone,
     required this.children,
+    this.record,
     required this.colors,
   });
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    final profile = studentProfile(children.first);
+    final profile = children.isEmpty ? null : studentProfile(children.first);
+    final apiDetails = record == null
+        ? const <(String, String)>[]
+        : <(String, String)>[
+            (
+              'Username',
+              apiText(apiValue(record!, const ['username', 'login'])),
+            ),
+            ('Email', apiText(apiValue(record!, const ['email']))),
+            ('Ish joyi', apiText(apiValue(record!, const ['workplace']))),
+            ('Jinsi', apiText(apiValue(record!, const ['gender']))),
+            ('Tug‘ilgan sana', apiText(apiValue(record!, const ['birthdate']))),
+            (
+              'Ro‘yxatdan o‘tgan',
+              apiText(apiValue(record!, const ['created_at'])),
+            ),
+          ].where((entry) => entry.$2.isNotEmpty).toList(growable: false);
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -17869,12 +18714,12 @@ class ParentDetailScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          profile.fatherPhone,
+                          phone,
                           style: RefType.ui(size: 11.5, color: c.muted),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${children.length} farzand · ${profile.branch}',
+                          '${children.length} farzand${profile == null ? '' : ' · ${profile.branch}'}',
                           style: RefType.eyebrow(size: 9, color: c.primary),
                         ),
                       ],
@@ -17884,8 +18729,31 @@ class ParentDetailScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 14),
+            if (apiDetails.isNotEmpty) ...[
+              _setSec(c, 'OTA-ONA MA’LUMOTLARI'),
+              const SizedBox(height: 6),
+              SfCard(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < apiDetails.length; i++)
+                      _InfoRow(
+                        apiDetails[i].$1,
+                        apiDetails[i].$2,
+                        last: i == apiDetails.length - 1,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
             _setSec(c, 'FARZANDLARI · ${children.length}'),
             const SizedBox(height: 6),
+            if (children.isEmpty)
+              const _EmptyState(
+                icon: Icons.link_off_rounded,
+                title: 'Ученик не привязан',
+                sub: 'Родитель есть в базе, но связь guardians ещё не создана.',
+              ),
             for (final child in children) ...[
               _ParentChildCard(student: child, colors: c),
               const SizedBox(height: 8),
@@ -17906,7 +18774,7 @@ class _ParentChildCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = colors;
     final profile = studentProfile(student);
-    final lastCall = studentCallDays(student);
+    final lastCall = studentRecordedCallDays(student);
     return RefSurfaceCard(
       padding: const EdgeInsets.all(13),
       child: Column(
@@ -21642,17 +22510,25 @@ class _ChatScreenState extends State<ChatScreen> {
   DateTime? _recordStartedAt;
   Duration _recordElapsed = Duration.zero;
   Timer? _recordTicker;
+  Timer? _messagePoller;
+  bool _loadingMessages = false;
+  bool _refreshingMessages = false;
+  bool _sendingMessage = false;
+  String? _messageError;
+  String? _liveThreadId;
 
   @override
   void initState() {
     super.initState();
     _ctrl.text = _drafts[widget.threadIdx] ?? '';
+    WidgetsBinding.instance.addPostFrameCallback((_) => _beginServerSync());
   }
 
   @override
   void dispose() {
     _drafts[widget.threadIdx] = _ctrl.text;
     _recordTicker?.cancel();
+    _messagePoller?.cancel();
     for (final timer in _uploadTimers.values) {
       timer.cancel();
     }
@@ -21663,11 +22539,135 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _send(AppStore store) {
+  void _beginServerSync() {
+    if (!mounted) return;
+    final store = AppScope.of(context);
+    if (widget.threadIdx < 0 || widget.threadIdx >= store.threads.length) {
+      return;
+    }
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final id = store.threads[widget.threadIdx].meta.serverId?.trim() ?? '';
+    if (session == null || !session.authenticated || id.isEmpty) return;
+    _liveThreadId = id;
+    _refreshServerMessages(showLoading: true, showErrors: true);
+    _messagePoller?.cancel();
+    _messagePoller = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (mounted && !_sendingMessage) {
+        _refreshServerMessages();
+      }
+    });
+  }
+
+  Future<void> _refreshServerMessages({
+    bool showLoading = false,
+    bool showErrors = false,
+    bool markRead = true,
+  }) async {
+    final id = _liveThreadId;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (id == null ||
+        session == null ||
+        !session.authenticated ||
+        _refreshingMessages) {
+      return;
+    }
+    _refreshingMessages = true;
+    if (showLoading && mounted) {
+      setState(() {
+        _loadingMessages = true;
+        _messageError = null;
+      });
+    }
+    try {
+      final page = await session.threadMessages(id);
+      if (!mounted) return;
+      final messages =
+          page.items
+              .map((row) => apiChatMessage(session, row))
+              .toList(growable: false)
+            ..sort((left, right) {
+              final leftAt = left.createdAt;
+              final rightAt = right.createdAt;
+              if (leftAt == null && rightAt == null) return 0;
+              if (leftAt == null) return -1;
+              if (rightAt == null) return 1;
+              return leftAt.compareTo(rightAt);
+            });
+      final store = AppScope.of(context);
+      if (widget.threadIdx < store.threads.length) {
+        store.replaceThreadMessages(widget.threadIdx, messages);
+      }
+      setState(() => _messageError = null);
+      _scrollToEnd();
+      if (markRead) {
+        try {
+          await session.markThreadRead(id);
+        } on ApiException {
+          // The transcript is already usable. A best-effort read marker must
+          // not hide messages when a role cannot update unread state.
+        }
+      }
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _messageError = error.message);
+      if (showErrors) _snack(context, error.message);
+    } finally {
+      _refreshingMessages = false;
+      if (mounted && showLoading) {
+        setState(() => _loadingMessages = false);
+      }
+    }
+  }
+
+  Future<void> _send(AppStore store) async {
     if (_ctrl.text.trim().isEmpty) return;
     final text = _ctrl.text.trim();
     final messages = store.threads[widget.threadIdx].messages;
     final editingIndex = _editingIndex;
+    final liveThreadId = _liveThreadId;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (liveThreadId != null && editingIndex != null) {
+      _snack(context, 'Сервер пока не поддерживает изменение сообщений');
+      return;
+    }
+    if (liveThreadId != null && session != null && session.authenticated) {
+      if (_sendingMessage) return;
+      final pending = ChatMsg(
+        text,
+        mine: true,
+        createdAt: DateTime.now(),
+        delivery: ChatDeliveryState.sending,
+      );
+      store.replaceThreadMessages(widget.threadIdx, [...messages, pending]);
+      _ctrl.clear();
+      _drafts.remove(widget.threadIdx);
+      setState(() {
+        _editingIndex = null;
+        _replyingTo = null;
+        _emojiOpen = false;
+        _sendingMessage = true;
+        _messageError = null;
+      });
+      _scrollToEnd();
+      try {
+        await session.sendThreadMessage(liveThreadId, text);
+        await _refreshServerMessages(markRead: false);
+      } on ApiException catch (error) {
+        if (!mounted) return;
+        final current = AppScope.of(context).threads[widget.threadIdx].messages;
+        final index = current.indexOf(pending);
+        if (index >= 0) {
+          final failed = [...current];
+          failed[index] = pending.copyWith(delivery: ChatDeliveryState.failed);
+          store.replaceThreadMessages(widget.threadIdx, failed);
+        }
+        setState(() => _messageError = error.message);
+        _snack(context, error.message);
+      } finally {
+        if (mounted) setState(() => _sendingMessage = false);
+      }
+      return;
+    }
     if (editingIndex != null &&
         editingIndex >= 0 &&
         editingIndex < messages.length) {
@@ -21809,6 +22809,10 @@ class _ChatScreenState extends State<ChatScreen> {
         prepared = prepared.copyWith(path: localPath);
       }
       if (!mounted) return;
+      if (_liveThreadId != null) {
+        await _uploadServerAttachment(prepared);
+        return;
+      }
       _queueUpload(prepared, (uploaded) {
         if (!mounted) return;
         if (uploaded.messageKind != null) {
@@ -21825,6 +22829,47 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     } catch (_) {
       if (mounted) _snack(context, 'Faylni biriktirib bo‘lmadi');
+    }
+  }
+
+  Future<void> _uploadServerAttachment(
+    _PreparedChatAttachment attachment,
+  ) async {
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final threadId = _liveThreadId;
+    if (session == null || threadId == null || !session.authenticated) return;
+    final upload = _PendingChatUpload(attachment);
+    setState(() => _pendingUploads.add(upload));
+    try {
+      final bytes = await XFile(attachment.path).readAsBytes();
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = .18);
+      final key = await session.uploadMessageAttachment(
+        filename: attachment.name,
+        contentType: _chatContentType(attachment.name),
+        bytes: bytes,
+      );
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = .88);
+      await session.sendThreadMessage(
+        threadId,
+        attachment.caption,
+        attachments: [key],
+      );
+      if (!mounted || upload.cancelled) return;
+      setState(() => upload.progress = 1);
+      await _refreshServerMessages(markRead: false);
+    } on ApiException catch (error) {
+      if (mounted && !upload.cancelled) {
+        setState(() => _messageError = error.message);
+        _snack(context, error.message);
+      }
+    } catch (_) {
+      if (mounted && !upload.cancelled) {
+        _snack(context, 'Faylni biriktirib bo‘lmadi');
+      }
+    } finally {
+      if (mounted) setState(() => _pendingUploads.remove(upload));
     }
   }
 
@@ -21855,6 +22900,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _cancelUpload(_PendingChatUpload upload) {
+    upload.cancelled = true;
     _uploadTimers.remove(upload.id)?.cancel();
     setState(() => _pendingUploads.remove(upload));
     _snack(context, 'Подготовка вложения отменена');
@@ -21874,13 +22920,25 @@ class _ChatScreenState extends State<ChatScreen> {
         _finishRecordTicker();
       });
       if (path != null) {
-        store.sendAttachment(
-          widget.threadIdx,
-          kind: ChatMessageKind.voice,
-          path: path,
-          label: 'Voice message',
-          duration: duration,
-        );
+        if (_liveThreadId != null) {
+          await _uploadServerAttachment(
+            _PreparedChatAttachment(
+              path: path,
+              name: _portableFileName(path),
+              choice: _AttachmentChoice.file,
+              messageKind: ChatMessageKind.voice,
+              caption: 'Voice message',
+            ),
+          );
+        } else {
+          store.sendAttachment(
+            widget.threadIdx,
+            kind: ChatMessageKind.voice,
+            path: path,
+            label: 'Voice message',
+            duration: duration,
+          );
+        }
         _scrollToEnd();
       }
       return;
@@ -22548,6 +23606,35 @@ class _ChatScreenState extends State<ChatScreen> {
                   );
                 },
               ),
+            if (_loadingMessages)
+              LinearProgressIndicator(
+                minHeight: 2,
+                color: c.primary,
+                backgroundColor: c.surface2,
+              ),
+            if (_messageError != null && !_loadingMessages)
+              InkWell(
+                onTap: () =>
+                    _refreshServerMessages(showLoading: true, showErrors: true),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 7,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.sync_problem_rounded, size: 16, color: c.warn),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          'Не удалось обновить чат · нажмите, чтобы повторить',
+                          style: RefType.ui(size: 10.5, color: c.muted),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(color: c.bg),
@@ -22563,6 +23650,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   itemBuilder: (context, index) => _ReferenceConversationBubble(
                     message: thread.messages[index],
                     time: _messageTime(index),
+                    threadId: meta.serverId,
                     reaction: store.reactionFor(thread.messages[index]),
                     edited: _editedMessages.contains(thread.messages[index]),
                     replyText: _replyTargets[thread.messages[index]]?.text,
@@ -22805,6 +23893,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _messageTime(int index) {
+    final store = AppScope.of(context);
+    if (widget.threadIdx < store.threads.length &&
+        index < store.threads[widget.threadIdx].messages.length) {
+      final created = store.threads[widget.threadIdx].messages[index].createdAt;
+      if (created != null) {
+        final local = created.toLocal();
+        return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+      }
+    }
     const values = ['10:24', '10:26', '10:27', '10:29', '10:31', '10:34'];
     return values[index % values.length];
   }
@@ -23767,6 +24864,7 @@ class _ReferenceConversationBubble extends StatelessWidget {
     required this.message,
     required this.time,
     required this.onLongPress,
+    this.threadId,
     this.reaction,
     this.edited = false,
     this.replyText,
@@ -23774,6 +24872,7 @@ class _ReferenceConversationBubble extends StatelessWidget {
 
   final ChatMsg message;
   final String time;
+  final String? threadId;
   final VoidCallback onLongPress;
   final String? reaction;
   final bool edited;
@@ -23783,8 +24882,23 @@ class _ReferenceConversationBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final mine = message.mine;
-    final displayTime = edited ? '$time · изменено' : time;
-    final messageBody = message.kind == ChatMessageKind.text
+    final displayTime = message.delivery == ChatDeliveryState.sending
+        ? '$time · отправка'
+        : message.delivery == ChatDeliveryState.failed
+        ? '$time · ошибка'
+        : edited
+        ? '$time · изменено'
+        : time;
+    final messageBody =
+        message.attachmentKeys.isNotEmpty &&
+            message.path == null &&
+            threadId != null
+        ? _RemoteChatMessageBody(
+            message: message,
+            threadId: threadId!,
+            time: displayTime,
+          )
+        : message.kind == ChatMessageKind.text
         ? (message.text.startsWith('📎 ')
               ? _ChatFileMessageBody(
                   label: message.text.substring(2).trim(),
@@ -23871,6 +24985,103 @@ class _ReferenceConversationBubble extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RemoteChatMessageBody extends StatefulWidget {
+  const _RemoteChatMessageBody({
+    required this.message,
+    required this.threadId,
+    required this.time,
+  });
+
+  final ChatMsg message;
+  final String threadId;
+  final String time;
+
+  @override
+  State<_RemoteChatMessageBody> createState() => _RemoteChatMessageBodyState();
+}
+
+class _RemoteChatMessageBodyState extends State<_RemoteChatMessageBody> {
+  String? _url;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _resolve());
+  }
+
+  Future<void> _resolve() async {
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (session == null || widget.message.attachmentKeys.isEmpty) return;
+    setState(() => _error = null);
+    try {
+      final value = await session.messageAttachmentDownloadUrl(
+        widget.threadId,
+        widget.message.attachmentKeys.first,
+      );
+      if (mounted) setState(() => _url = value);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final mine = widget.message.mine;
+    final url = _url;
+    if (url == null) {
+      return InkWell(
+        onTap: _error == null ? null : _resolve,
+        child: SizedBox(
+          width: 218,
+          height: 74,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_error == null)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(Icons.refresh_rounded, color: c.warn, size: 21),
+              const SizedBox(width: 9),
+              Flexible(
+                child: Text(
+                  _error == null ? 'Загрузка вложения…' : 'Повторить загрузку',
+                  style: RefType.ui(
+                    size: 10.5,
+                    color: mine ? c.surface : c.muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (widget.message.kind != ChatMessageKind.text) {
+      return _ChatMessageBody(
+        message: widget.message.copyWith(path: url),
+        mine: mine,
+        textColor: mine ? c.surface : c.ink,
+      );
+    }
+    final label = _portableFileName(widget.message.attachmentKeys.first);
+    return InkWell(
+      onTap: () =>
+          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      child: _ChatFileMessageBody(
+        label: label.isEmpty ? 'Вложение' : label,
+        mine: mine,
+        time: widget.time,
       ),
     );
   }
@@ -24564,6 +25775,23 @@ class _PendingChatUpload {
   final String id;
   final _PreparedChatAttachment attachment;
   double progress = 0;
+  bool cancelled = false;
+}
+
+String _chatContentType(String filename) {
+  final value = filename.toLowerCase().split('?').first;
+  if (value.endsWith('.jpg') || value.endsWith('.jpeg')) return 'image/jpeg';
+  if (value.endsWith('.png')) return 'image/png';
+  if (value.endsWith('.gif')) return 'image/gif';
+  if (value.endsWith('.webp')) return 'image/webp';
+  if (value.endsWith('.mp4') || value.endsWith('.m4v')) return 'video/mp4';
+  if (value.endsWith('.mov')) return 'video/quicktime';
+  if (value.endsWith('.m4a')) return 'audio/mp4';
+  if (value.endsWith('.mp3')) return 'audio/mpeg';
+  if (value.endsWith('.ogg') || value.endsWith('.opus')) return 'audio/ogg';
+  if (value.endsWith('.pdf')) return 'application/pdf';
+  if (value.endsWith('.txt')) return 'text/plain';
+  return 'application/octet-stream';
 }
 
 Future<_PreparedChatAttachment?> _pickChatAttachment({
@@ -25146,7 +26374,8 @@ class _ChatImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    final image = kIsWeb
+    final remote = _isRemoteChatPath(path);
+    final image = remote
         ? Image.network(
             path,
             fit: BoxFit.cover,
@@ -25158,18 +26387,18 @@ class _ChatImage extends StatelessWidget {
             errorBuilder: (_, _, _) => _imageError(c),
           );
     return InkWell(
-      onTap: kIsWeb
-          ? null
-          : () => showDialog<void>(
-              context: context,
-              builder: (_) => Dialog(
-                backgroundColor: Colors.black,
-                insetPadding: const EdgeInsets.all(12),
-                child: InteractiveViewer(
-                  child: Image.file(File(path), fit: BoxFit.contain),
-                ),
-              ),
-            ),
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (_) => Dialog(
+          backgroundColor: Colors.black,
+          insetPadding: const EdgeInsets.all(12),
+          child: InteractiveViewer(
+            child: remote
+                ? Image.network(path, fit: BoxFit.contain)
+                : Image.file(File(path), fit: BoxFit.contain),
+          ),
+        ),
+      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 244, maxHeight: 270),
         child: image,
@@ -25202,7 +26431,7 @@ class _VideoMessageState extends State<_VideoMessage> {
   @override
   void initState() {
     super.initState();
-    _controller = kIsWeb
+    _controller = _isRemoteChatPath(widget.path)
         ? VideoPlayerController.networkUrl(Uri.parse(widget.path))
         : VideoPlayerController.file(File(widget.path));
     _controller
@@ -25342,7 +26571,7 @@ class _VoiceMessageState extends State<_VoiceMessage> {
     });
     _player
         .setAudioSource(
-          kIsWeb
+          _isRemoteChatPath(widget.path)
               ? AudioSource.uri(Uri.parse(widget.path))
               : AudioSource.file(widget.path),
         )
@@ -25450,6 +26679,14 @@ class _VoiceMessageState extends State<_VoiceMessage> {
   }
 }
 
+bool _isRemoteChatPath(String value) {
+  final uri = Uri.tryParse(value);
+  return uri != null &&
+      (uri.scheme.toLowerCase() == 'https' ||
+          uri.scheme.toLowerCase() == 'http' ||
+          uri.scheme.toLowerCase() == 'blob');
+}
+
 String _durationLabel(Duration? duration) {
   final seconds = duration?.inSeconds ?? 0;
   final min = (seconds ~/ 60).toString();
@@ -25457,14 +26694,504 @@ String _durationLabel(Duration? duration) {
   return '$min:$sec';
 }
 
+/// Safe self-service cockpit for a role-native student. It reads only the two
+/// `/students/me/*` endpoints and never reuses an administrative dashboard or
+/// exposes organization-wide routes.
+class StudentSelfServiceScreen extends StatefulWidget {
+  const StudentSelfServiceScreen({
+    super.key,
+    required this.colors,
+    this.reportOnly = false,
+  });
+
+  final SfColors colors;
+  final bool reportOnly;
+
+  @override
+  State<StudentSelfServiceScreen> createState() =>
+      _StudentSelfServiceScreenState();
+}
+
+class _StudentSelfServiceScreenState extends State<StudentSelfServiceScreen> {
+  bool _started = false;
+  bool _loading = true;
+  String? _error;
+  Map<String, dynamic> _dashboard = const {};
+  Map<String, dynamic> _report = const {};
+
+  bool _isParentProfile(Map<String, dynamic> profile) {
+    bool matches(Object? value) {
+      if (value is Iterable && value is! String) {
+        return value.any(matches);
+      }
+      if (value is Map) {
+        final role = Map<String, dynamic>.from(value);
+        if (role['is_active'] == false) return false;
+        return const [
+          'principal_kind',
+          'account_kind',
+          'account_type_slug',
+          'role_slug',
+          'role_name',
+          'role',
+          'slug',
+          'name',
+          'code',
+        ].any((key) => matches(role[key]));
+      }
+      final alias = apiText(
+        value,
+      ).toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+      return const {'parent', 'guardian', 'caregiver'}.contains(alias);
+    }
+
+    return const [
+      'principal_kind',
+      'account_kind',
+      'account_type_slug',
+      'role_slug',
+      'role_name',
+      'role',
+      'role_memberships',
+    ].any((key) => matches(profile[key]));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    _load();
+  }
+
+  Future<void> _load() async {
+    final api = ApiScope.maybeOf(context)?.notifier;
+    if (api?.authenticated != true) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final profile = api!.me ?? const <String, dynamic>{};
+      if (_isParentProfile(profile)) {
+        await api.refresh('parentMyChildren', force: true);
+        if (!mounted) return;
+        setState(() {
+          final value = api.document('parentMyChildren');
+          _dashboard = <String, dynamic>{
+            'children': value is List
+                ? value
+                : value is Map
+                ? apiValue(Map<String, dynamic>.from(value), const [
+                        'results',
+                        'children',
+                        'students',
+                        'data',
+                      ]) ??
+                      const <Object>[]
+                : const <Object>[],
+          };
+          _report = const {};
+        });
+        return;
+      }
+      await Future.wait([
+        api.refresh('studentDashboard', force: true),
+        api.refresh('studentReport', force: true),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _dashboard = Map<String, dynamic>.from(
+          api.document('studentDashboard') as Map? ?? const {},
+        );
+        _report = Map<String, dynamic>.from(
+          api.document('studentReport') as Map? ?? const {},
+        );
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Map<String, dynamic> _map(Object? value) => value is Map
+      ? Map<String, dynamic>.from(value)
+      : const <String, dynamic>{};
+
+  List<Map<String, dynamic>> _rows(Object? value) => value is List
+      ? value
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList(growable: false)
+      : const <Map<String, dynamic>>[];
+
+  Widget _summaryCard(
+    SfColors c, {
+    required String label,
+    required String value,
+    required IconData icon,
+    RefMetricTone tone = RefMetricTone.primary,
+  }) => RefMetricCard(label: label, value: value, icon: icon, tone: tone);
+
+  Widget _listSection(
+    BuildContext context,
+    SfColors c, {
+    required String title,
+    required List<Map<String, dynamic>> rows,
+    required Iterable<String> titleKeys,
+    required Iterable<String> subtitleKeys,
+  }) {
+    return RefSurfaceCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 10),
+            child: Text(
+              title,
+              style: RefType.ui(
+                size: 13.5,
+                weight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+          ),
+          if (rows.isEmpty)
+            _emptyDataRow(context, c)
+          else
+            for (var i = 0; i < rows.length; i++)
+              Container(
+                padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: c.border)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.school_outlined, size: 18, color: c.primary),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            apiText(
+                              apiValue(rows[i], titleKeys),
+                              fallback: '—',
+                            ),
+                            style: RefType.ui(
+                              size: 12.5,
+                              weight: FontWeight.w700,
+                              color: c.ink,
+                            ),
+                          ),
+                          Text(
+                            apiText(
+                              apiPresentationValue(
+                                apiValue(rows[i], subtitleKeys),
+                              ),
+                              fallback: '—',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: RefType.ui(size: 10.5, color: c.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    final profile = ApiScope.maybeOf(context)?.notifier?.me ?? const {};
+    final parentProfile = _isParentProfile(profile);
+    final who = apiText(
+      apiValue(profile, const ['full_name', 'username']),
+      fallback: tx(context, uz: 'O‘quvchi', ru: 'Ученик', en: 'Student'),
+    );
+    final attendance = _map(_report['attendance']);
+    final rank = _map(_report['rank']);
+    final payment = _map(_report['payment']);
+    final lessons = _rows(_dashboard['next_lessons']);
+    final homework = _rows(_dashboard['open_homework']);
+    final grades = _rows(_dashboard['recent_grades']);
+    final children = _rows(_dashboard['children']);
+    final attendanceRate = apiText(attendance['rate'], fallback: '—');
+    final rankText = rank.isEmpty
+        ? '—'
+        : '${apiText(rank['rank'] ?? rank['position'], fallback: '—')} / '
+              '${apiText(rank['of'], fallback: '—')}';
+    return SfTheme(
+      colors: c,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          children: [
+            RefLargeHeader(
+              eyebrow: who,
+              title: widget.reportOnly
+                  ? parentProfile
+                        ? tx(
+                            context,
+                            uz: 'Farzandlarim',
+                            ru: 'Мои дети',
+                            en: 'My children',
+                          )
+                        : tx(
+                            context,
+                            uz: 'Mening natijalarim',
+                            ru: 'Мои результаты',
+                            en: 'My results',
+                          )
+                  : tx(
+                      context,
+                      uz: parentProfile
+                          ? 'Ota-ona kabineti'
+                          : 'Mening kabinetim',
+                      ru: parentProfile ? 'Кабинет родителя' : 'Мой кабинет',
+                      en: parentProfile ? 'Parent dashboard' : 'My dashboard',
+                    ),
+              subtitle: tx(
+                context,
+                uz: 'Faqat sizning shaxsiy ma’lumotlaringiz',
+                ru: 'Только ваши личные данные',
+                en: 'Only your own data',
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 28),
+              child: _loading
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: CircularProgressIndicator(),
+                      ),
+                    )
+                  : _error != null
+                  ? RefSurfaceCard(
+                      child: Column(
+                        children: [
+                          Icon(Icons.cloud_off_rounded, color: c.danger),
+                          const SizedBox(height: 8),
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: RefType.ui(size: 12, color: c.danger),
+                          ),
+                          const SizedBox(height: 10),
+                          TextButton.icon(
+                            onPressed: _load,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: Text(
+                              tx(
+                                context,
+                                uz: 'Qayta urinish',
+                                ru: 'Повторить',
+                                en: 'Retry',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (parentProfile) ...[
+                          _listSection(
+                            context,
+                            c,
+                            title: tx(
+                              context,
+                              uz: 'Farzandlar',
+                              ru: 'Дети',
+                              en: 'Children',
+                            ),
+                            rows: children,
+                            titleKeys: const [
+                              'full_name',
+                              'name',
+                              'student_name',
+                              'username',
+                            ],
+                            subtitleKeys: const [
+                              'group_name',
+                              'cohort_name',
+                              'level',
+                            ],
+                          ),
+                        ] else ...[
+                          RefAdaptiveGrid(
+                            minCellWidth: 145,
+                            children: [
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Guruh',
+                                  ru: 'Группа',
+                                  en: 'Group',
+                                ),
+                                value: apiText(
+                                  _dashboard['group'],
+                                  fallback: '—',
+                                ),
+                                icon: Icons.groups_rounded,
+                              ),
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Daraja',
+                                  ru: 'Уровень',
+                                  en: 'Level',
+                                ),
+                                value: apiText(
+                                  _dashboard['level'],
+                                  fallback: '—',
+                                ),
+                                icon: Icons.stairs_rounded,
+                                tone: RefMetricTone.success,
+                              ),
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Davomat',
+                                  ru: 'Посещаемость',
+                                  en: 'Attendance',
+                                ),
+                                value: attendanceRate == '—'
+                                    ? '—'
+                                    : '$attendanceRate%',
+                                icon: Icons.fact_check_rounded,
+                                tone: RefMetricTone.success,
+                              ),
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Reyting',
+                                  ru: 'Место',
+                                  en: 'Rank',
+                                ),
+                                value: rankText,
+                                icon: Icons.emoji_events_rounded,
+                              ),
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Uy vazifasi',
+                                  ru: 'Домашние задания',
+                                  en: 'Homework',
+                                ),
+                                value: apiText(
+                                  _dashboard['open_homework_count'],
+                                  fallback: '${homework.length}',
+                                ),
+                                icon: Icons.assignment_outlined,
+                              ),
+                              _summaryCard(
+                                c,
+                                label: tx(
+                                  context,
+                                  uz: 'Qarzdorlik',
+                                  ru: 'Задолженность',
+                                  en: 'Outstanding',
+                                ),
+                                value: fmtMoney(
+                                  num.tryParse(
+                                        apiText(_dashboard['outstanding_uzs']),
+                                      ) ??
+                                      0,
+                                ),
+                                icon: Icons.payments_outlined,
+                                tone: payment['has_overdue'] == true
+                                    ? RefMetricTone.warning
+                                    : RefMetricTone.success,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          _listSection(
+                            context,
+                            c,
+                            title: tx(
+                              context,
+                              uz: 'Keyingi darslar',
+                              ru: 'Ближайшие занятия',
+                              en: 'Next lessons',
+                            ),
+                            rows: lessons,
+                            titleKeys: const [
+                              'title',
+                              'subject',
+                              'cohort_name',
+                            ],
+                            subtitleKeys: const [
+                              'starts_at',
+                              'teacher_name',
+                              'room_name',
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          _listSection(
+                            context,
+                            c,
+                            title: widget.reportOnly
+                                ? tx(
+                                    context,
+                                    uz: 'So‘nggi baholar',
+                                    ru: 'Последние оценки',
+                                    en: 'Recent grades',
+                                  )
+                                : tx(
+                                    context,
+                                    uz: 'Ochiq vazifalar',
+                                    ru: 'Открытые задания',
+                                    en: 'Open homework',
+                                  ),
+                            rows: widget.reportOnly ? grades : homework,
+                            titleKeys: const ['title', 'subject', 'exam_name'],
+                            subtitleKeys: widget.reportOnly
+                                ? const ['score', 'grade', 'created_at']
+                                : const ['due_at', 'status'],
+                          ),
+                        ],
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Profile ────────────────────────────────────────────────────────────
 class ProfileScreen extends StatelessWidget {
   final RoleConfig cfg;
   final VoidCallback onSwitchRole;
+  final ValueChanged<String>? onNavigate;
   const ProfileScreen({
     super.key,
     required this.cfg,
     required this.onSwitchRole,
+    this.onNavigate,
   });
   @override
   Widget build(BuildContext context) {
@@ -25475,25 +27202,6 @@ class ProfileScreen extends StatelessWidget {
     final live = api?.authenticated == true;
     void openDesign() => showDesignPanel(context, cfg.role);
     void openEdit() {
-      final liveProfile = api?.me;
-      if (live && liveProfile != null) {
-        Navigator.of(context).push(
-          sfPageRoute(
-            LiveRecordDetailPage(
-              resource: 'users',
-              initial: liveProfile,
-              title: tx(
-                context,
-                uz: 'Mening server profilim',
-                ru: 'Мой серверный профиль',
-                en: 'My server profile',
-              ),
-              colors: c,
-            ),
-          ),
-        );
-        return;
-      }
       Navigator.of(context).push(
         sfPageRoute(
           SfTheme(
@@ -25620,7 +27328,7 @@ class ProfileScreen extends StatelessWidget {
       (
         tr(context, 'set_notifs'),
         tr(context, 'on'),
-        () => _showNotifications(context),
+        () => _showNotifications(context, onNavigate: onNavigate),
       ),
     ];
     return ListView(
@@ -25881,6 +27589,15 @@ class EditProfileScreen extends StatefulWidget {
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final TextEditingController _name = TextEditingController();
   final TextEditingController _title = TextEditingController();
+  final TextEditingController _firstName = TextEditingController();
+  final TextEditingController _middleName = TextEditingController();
+  final TextEditingController _lastName = TextEditingController();
+  final TextEditingController _phone = TextEditingController();
+  final TextEditingController _email = TextEditingController();
+  final TextEditingController _birthdate = TextEditingController();
+  String _gender = '';
+  String? _error;
+  bool _saving = false;
   bool _seeded = false;
 
   @override
@@ -25889,14 +27606,32 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (_seeded) return;
     _seeded = true;
     final store = AppScope.of(context);
-    _name.text = store.nameOverride ?? widget.cfg.who;
-    _title.text = store.titleOverride ?? widget.cfg.roleTitle;
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final profile = api?.me;
+    if (api?.authenticated == true && profile != null) {
+      _firstName.text = apiText(profile['first_name']);
+      _middleName.text = apiText(profile['middle_name']);
+      _lastName.text = apiText(profile['last_name']);
+      _phone.text = apiText(profile['phone']);
+      _email.text = apiText(profile['email']);
+      _birthdate.text = apiText(profile['birthdate']);
+      _gender = apiText(profile['gender']);
+    } else {
+      _name.text = store.nameOverride ?? widget.cfg.who;
+      _title.text = store.titleOverride ?? widget.cfg.roleTitle;
+    }
   }
 
   @override
   void dispose() {
     _name.dispose();
     _title.dispose();
+    _firstName.dispose();
+    _middleName.dispose();
+    _lastName.dispose();
+    _phone.dispose();
+    _email.dispose();
+    _birthdate.dispose();
     super.dispose();
   }
 
@@ -25904,8 +27639,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     SfColors c,
     String label,
     TextEditingController ctrl,
-    IconData icon,
-  ) {
+    IconData icon, {
+    TextInputType? keyboardType,
+    bool readOnly = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -25934,6 +27671,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               Expanded(
                 child: TextField(
                   controller: ctrl,
+                  keyboardType: keyboardType,
+                  readOnly: readOnly,
                   cursorColor: c.primary,
                   style: TextStyle(
                     fontFamily: SfType.ui,
@@ -25956,10 +27695,113 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
+  String _fullName() => [
+    _firstName.text.trim(),
+    _middleName.text.trim(),
+    _lastName.text.trim(),
+  ].where((part) => part.isNotEmpty).join(' ');
+
+  Widget _genderPicker(SfColors c) {
+    final choices = <(String, String)>[
+      ('', tx(context, uz: 'Ko‘rsatilmagan', ru: 'Не указан', en: 'Not set')),
+      ('m', tx(context, uz: 'Erkak', ru: 'Мужской', en: 'Male')),
+      ('f', tx(context, uz: 'Ayol', ru: 'Женский', en: 'Female')),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          tx(context, uz: 'JINS', ru: 'ПОЛ', en: 'GENDER'),
+          style: TextStyle(
+            fontFamily: SfType.ui,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: .5,
+            color: c.muted,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            for (final choice in choices)
+              ChoiceChip(
+                label: Text(choice.$2),
+                selected: _gender == choice.$1,
+                onSelected: (_) => setState(() => _gender = choice.$1),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Future<void> _saveProfile() async {
+    if (_saving) return;
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final live = api?.authenticated == true;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      if (live) {
+        await api!.updateMe({
+          'first_name': _firstName.text.trim(),
+          'middle_name': _middleName.text.trim(),
+          'last_name': _lastName.text.trim(),
+          'phone': _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          'email': _email.text.trim().isEmpty ? null : _email.text.trim(),
+          'birthdate': _birthdate.text.trim().isEmpty
+              ? null
+              : _birthdate.text.trim(),
+          'gender': _gender,
+        });
+      } else {
+        AppScope.of(context).setProfile(name: _name.text, title: _title.text);
+      }
+      if (!mounted) return;
+      Navigator.of(context).maybePop();
+      _snack(
+        context,
+        tr(context, 'profile_saved'),
+        bg: const Color(0xFF4F7B3B),
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      final fields = error.errors?.entries
+          .map((entry) => '${entry.key}: ${apiText(entry.value)}')
+          .where((value) => !value.endsWith(': '))
+          .join('\n');
+      setState(() {
+        _error = fields == null || fields.isEmpty ? error.message : fields;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = tx(
+          context,
+          uz: 'Profilni saqlab bo‘lmadi',
+          ru: 'Не удалось сохранить профиль',
+          en: 'Could not save the profile',
+        );
+      });
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final live = api?.authenticated == true;
+    final previewName = live
+        ? (_fullName().isEmpty ? widget.cfg.who : _fullName())
+        : (_name.text.trim().isEmpty ? widget.cfg.who : _name.text.trim());
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -25992,7 +27834,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 child: Stack(
                   children: [
                     SfAvatar(
-                      name: _name.text.isEmpty ? widget.cfg.who : _name.text,
+                      name: previewName,
                       size: 88,
                       color: widget.cfg.accent(c),
                       choice: store.avatarChoice,
@@ -26032,15 +27874,89 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               ),
             ),
             const SizedBox(height: 22),
-            _field(c, tr(context, 'stu_fname'), _name, Icons.person_rounded),
-            _field(
-              c,
-              tr(context, 'edit_jobtitle'),
-              _title,
-              Icons.badge_rounded,
-            ),
+            if (live) ...[
+              _field(
+                c,
+                tx(context, uz: 'Ism', ru: 'Имя', en: 'First name'),
+                _firstName,
+                Icons.person_rounded,
+              ),
+              _field(
+                c,
+                tx(
+                  context,
+                  uz: 'Otasining ismi',
+                  ru: 'Отчество',
+                  en: 'Middle name',
+                ),
+                _middleName,
+                Icons.person_outline_rounded,
+              ),
+              _field(
+                c,
+                tx(context, uz: 'Familiya', ru: 'Фамилия', en: 'Last name'),
+                _lastName,
+                Icons.badge_outlined,
+              ),
+              _field(
+                c,
+                tx(context, uz: 'Telefon', ru: 'Телефон', en: 'Phone'),
+                _phone,
+                Icons.phone_rounded,
+                keyboardType: TextInputType.phone,
+              ),
+              _field(
+                c,
+                'Email',
+                _email,
+                Icons.alternate_email_rounded,
+                keyboardType: TextInputType.emailAddress,
+              ),
+              _field(
+                c,
+                tx(
+                  context,
+                  uz: 'Tug‘ilgan sana · YYYY-MM-DD',
+                  ru: 'Дата рождения · ГГГГ-ММ-ДД',
+                  en: 'Birth date · YYYY-MM-DD',
+                ),
+                _birthdate,
+                Icons.cake_outlined,
+                keyboardType: TextInputType.datetime,
+              ),
+              _genderPicker(c),
+            ] else ...[
+              _field(c, tr(context, 'stu_fname'), _name, Icons.person_rounded),
+              _field(
+                c,
+                tr(context, 'edit_jobtitle'),
+                _title,
+                Icons.badge_rounded,
+              ),
+            ],
+            if (_error != null) ...[
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: c.danger.withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: c.danger.withValues(alpha: .3)),
+                ),
+                child: Text(
+                  _error!,
+                  style: TextStyle(
+                    fontFamily: SfType.ui,
+                    fontSize: 12,
+                    color: c.danger,
+                  ),
+                ),
+              ),
+            ],
             Text(
-              '${tr(context, 'set_role')}: '
+              key: const ValueKey('profile-role-readonly'),
+              '${tx(context, uz: 'Rol', ru: 'Роль', en: 'Role')}: '
               '${configLabel(context, widget.cfg.label)} · '
               '${configLabel(context, widget.cfg.scope)}',
               style: TextStyle(
@@ -26063,18 +27979,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             border: Border(top: BorderSide(color: c.border)),
           ),
           child: SfButton(
-            icon: Icons.check_rounded,
-            label: tr(context, 'save'),
+            icon: _saving ? Icons.hourglass_top_rounded : Icons.check_rounded,
+            label: _saving
+                ? tx(
+                    context,
+                    uz: 'Saqlanmoqda…',
+                    ru: 'Сохранение…',
+                    en: 'Saving…',
+                  )
+                : tr(context, 'save'),
             primary: true,
-            onTap: () {
-              store.setProfile(name: _name.text, title: _title.text);
-              Navigator.of(context).maybePop();
-              _snack(
-                context,
-                tr(context, 'profile_saved'),
-                bg: const Color(0xFF4F7B3B),
-              );
-            },
+            onTap: _saveProfile,
           ),
         ),
       ),
@@ -27124,16 +29039,23 @@ class _CreateSheetState extends State<_CreateSheet> {
 // ── Avatar picker (pushed route) ────────────────────────────────────────
 /// Lets the logged-in user pick a real-photo or emoji-badge avatar. The choice
 /// is stored on the [AppStore] so it updates everywhere the user appears.
-class AvatarPickerScreen extends StatelessWidget {
+class AvatarPickerScreen extends StatefulWidget {
   final SfColors colors;
   const AvatarPickerScreen({super.key, required this.colors});
+
+  @override
+  State<AvatarPickerScreen> createState() => _AvatarPickerScreenState();
+}
+
+class _AvatarPickerScreenState extends State<AvatarPickerScreen> {
+  bool _picking = false;
 
   bool _isSel(AvatarChoice? cur, AvatarChoice opt) =>
       cur?.photo == opt.photo && cur?.emoji == opt.emoji;
 
   @override
   Widget build(BuildContext context) {
-    final c = colors;
+    final c = widget.colors;
     final store = AppScope.of(context);
     final cur = store.avatarChoice;
     return SfTheme(
@@ -27175,6 +29097,25 @@ class AvatarPickerScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
+            SfButton(
+              icon: Icons.photo_library_rounded,
+              label: _picking
+                  ? tx(
+                      context,
+                      uz: 'Galereya ochilmoqda…',
+                      ru: 'Открываем галерею…',
+                      en: 'Opening gallery…',
+                    )
+                  : tx(
+                      context,
+                      uz: 'Galereyadan tanlash',
+                      ru: 'Выбрать из галереи',
+                      en: 'Choose from gallery',
+                    ),
+              primary: true,
+              onTap: _picking ? () {} : () => _pickGallery(context, store),
+            ),
+            const SizedBox(height: 20),
             _AvatarSection(
               title: tr(context, 'avatar_photos'),
               options: kAvatarPhotos,
@@ -27199,6 +29140,36 @@ class AvatarPickerScreen extends StatelessWidget {
   void _pick(BuildContext context, AppStore store, AvatarChoice ch) {
     store.setAvatar(ch);
     _snack(context, tr(context, 'avatar_saved'), bg: const Color(0xFF4F7B3B));
+  }
+
+  Future<void> _pickGallery(BuildContext context, AppStore store) async {
+    setState(() => _picking = true);
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 82,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      if (image == null || !context.mounted) return;
+      final bytes = await image.readAsBytes();
+      if (bytes.isEmpty || !context.mounted) return;
+      store.setAvatarBytes(bytes);
+      _snack(context, tr(context, 'avatar_saved'), bg: const Color(0xFF4F7B3B));
+    } catch (_) {
+      if (!context.mounted) return;
+      _snack(
+        context,
+        tx(
+          context,
+          uz: 'Rasmni ochib bo‘lmadi',
+          ru: 'Не удалось открыть фотографию',
+          en: 'Could not open the photo',
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _picking = false);
+    }
   }
 }
 

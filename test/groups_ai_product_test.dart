@@ -84,9 +84,14 @@ void main() {
 
       store.sendChat('Daromad prognozi');
 
-      expect(store.chat, hasLength(2));
-      expect(store.chat.last.text, contains('AI ещё не подключен'));
-      expect(store.chat.last.text, isNot(contains('1.34')));
+      expect(store.chat, hasLength(1));
+      expect(store.chat.single.mine, isTrue);
+      expect(store.chat.single.text, 'Daromad prognozi');
+      expect(
+        store.chat.where((turn) => !turn.mine),
+        isEmpty,
+        reason: 'Connection errors are UI state, not assistant messages.',
+      );
     });
 
     testWidgets('offline AI UI submits and explains that AI is not connected', (
@@ -107,6 +112,9 @@ void main() {
       // title, which is the intended post-send state.
       expect(find.text('Тестовый вопрос'), findsWidgets);
       expect(find.textContaining('AI ещё не подключен'), findsWidgets);
+      expect(find.byKey(const ValueKey('ai-service-error')), findsOneWidget);
+      expect(store.chat, hasLength(1));
+      expect(store.chat.single.mine, isTrue);
       expect(tester.takeException(), isNull);
     });
   });

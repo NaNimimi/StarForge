@@ -241,6 +241,36 @@ void main() {
         );
       }
     });
+
+    test('student exposes self-service routes only', () {
+      expect(
+        navigationRoutesFor(SfRole.student),
+        equals({
+          'dash',
+          'student_report',
+          'messages',
+          'notifications',
+          'settings',
+          'me',
+        }),
+      );
+      for (final forbidden in const [
+        'branches',
+        'comparison',
+        'students',
+        'groups',
+        'teachers',
+        'payments',
+        'permissions',
+        'audit',
+      ]) {
+        expect(roleCanNavigate(SfRole.student, forbidden), isFalse);
+        expect(
+          buildAdminPage(forbidden, SfColors.light, SfRole.student),
+          isNull,
+        );
+      }
+    });
   });
 
   for (final role in SfRole.values) {

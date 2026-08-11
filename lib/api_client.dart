@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_catalog.dart';
+import 'session_storage.dart';
 
 /// Native builds can be pointed at another server without changing source:
 /// `flutter build apk --dart-define=STARFORGE_API_BASE_URL=http://192.168.1.30:8000`.
@@ -19,6 +21,38 @@ const String _configuredApiBaseUrl = String.fromEnvironment(
 
 String get kDefaultApiBaseUrl =>
     kIsWeb ? Uri.base.origin : _configuredApiBaseUrl;
+
+/// Accepts either a server origin or a mistakenly supplied StarForge API/login
+/// URL and reduces it to the server base used by [_uri]. This keeps build-time
+/// values such as `https://host/api/v1` from producing
+/// `/api/v1/api/v1/...` requests on native builds.
+String normalizeStarforgeApiBaseUrl(String value) {
+  final raw = _trimUrl(value);
+  final parsed = Uri.tryParse(raw);
+  if (parsed == null || !parsed.hasScheme || !parsed.hasAuthority) return raw;
+
+  var path = parsed.path.replaceAll(RegExp(r'/+$'), '');
+  for (final suffix in const <String>[
+    '/api/v1/auth/role-login',
+    '/api/v1/auth/login',
+    '/api/v1',
+    '/api',
+  ]) {
+    if (path.endsWith(suffix)) {
+      path = path.substring(0, path.length - suffix.length);
+      break;
+    }
+  }
+
+  final normalized = Uri(
+    scheme: parsed.scheme,
+    userInfo: parsed.userInfo,
+    host: parsed.host,
+    port: parsed.hasPort ? parsed.port : null,
+    path: path,
+  );
+  return _trimUrl(normalized.toString());
+}
 
 abstract final class _HttpStatus {
   static const int badRequest = 400;
@@ -754,7 +788,7 @@ class StarforgeApiClient {
   VoidCallback? onUnauthorized;
 
   StarforgeApiClient({String? baseUrl})
-    : _baseUrl = _trimUrl(baseUrl ?? kDefaultApiBaseUrl),
+    : _baseUrl = normalizeStarforgeApiBaseUrl(baseUrl ?? kDefaultApiBaseUrl),
       _language = 'uz';
 
   String get baseUrl => _baseUrl;
@@ -764,7 +798,7 @@ class StarforgeApiClient {
 
   void configure({String? baseUrl, String? language, String? token}) {
     if (baseUrl != null && baseUrl.trim().isNotEmpty) {
-      _baseUrl = _trimUrl(baseUrl);
+      _baseUrl = normalizeStarforgeApiBaseUrl(baseUrl);
     }
     if (language != null && language.trim().isNotEmpty) {
       _language = language.trim();
@@ -807,7 +841,7 @@ class StarforgeApiClient {
                 payload?['origin'],
               ]
               .whereType<String>()
-              .map(_trimUrl)
+              .map(normalizeStarforgeApiBaseUrl)
               .where((item) => item.isNotEmpty)
               .firstOrNull;
       if (direct != null) {
@@ -827,7 +861,7 @@ class StarforgeApiClient {
         );
       }
       final resolved = host.startsWith('http')
-          ? _trimUrl(host)
+          ? normalizeStarforgeApiBaseUrl(host)
           : 'https://$host';
       _baseUrl = resolved;
       return resolved;
@@ -841,24 +875,44 @@ class StarforgeApiClient {
     required String username,
     required String password,
   }) async {
-    final body = {
-      'username': username.trim(),
-      'password': password,
-      'platform': 'mobile',
-    };
-    final data = await request(
-      'POST',
+    final body = {'username': username.trim(), 'password': password};
+    const paths = <String>[
+      // This is the public authentication boundary in the supplied OpenAPI
+      // contract and remains the preferred single-request path.
       '/api/v1/auth/login/',
-      body: body,
-      authenticate: false,
-    );
+      // The live deployment currently answers 404 on the published route but
+      // exposes role-login. Keep it as a compatibility fallback only after a
+      // missing route; never retry invalid credentials on another endpoint.
+      '/api/v1/auth/role-login/',
+      // Compatibility with proxies configured without APPEND_SLASH.
+      '/api/v1/auth/login',
+      '/api/v1/auth/role-login',
+    ];
+    dynamic data;
+    for (var index = 0; index < paths.length; index++) {
+      try {
+        data = await request(
+          'POST',
+          paths[index],
+          body: body,
+          authenticate: false,
+        );
+        break;
+      } on ApiException catch (error) {
+        final routeIsMissing =
+            error.status == _HttpStatus.notFound || error.status == 405;
+        if (!routeIsMissing || index == paths.length - 1) rethrow;
+      }
+    }
     final session = _asMap(data) ?? const <String, dynamic>{};
     final access =
-        _deepScalar(session, const {
+        _errorScalarText(data) ??
+        _deepScalar(data, const {
           'access',
           'access_token',
           'token',
           'session_key',
+          'key',
         }) ??
         _errorScalarText(session['session']) ??
         _errorScalarText(session['key']);
@@ -901,7 +955,7 @@ class StarforgeApiClient {
   }) => request(
     'POST',
     '/api/v1/auth/password/change/',
-    body: {'current_password': currentPassword, 'new_password': newPassword},
+    body: {'old_password': currentPassword, 'new_password': newPassword},
   );
 
   Future<void> logout() async {
@@ -1009,6 +1063,62 @@ class StarforgeApiClient {
     }
   }
 
+  /// Uploads bytes to the object-storage form returned by the messaging
+  /// upload-grant endpoint. The signed form is intentionally sent without the
+  /// StarForge bearer token because it targets storage, not the API origin.
+  Future<void> uploadMultipartBytes(
+    String url,
+    Uint8List bytes, {
+    required String filename,
+    required Map<String, String> fields,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+      throw ApiException(
+        status: 0,
+        code: 'invalid_upload_grant',
+        message: 'The server returned an invalid upload URL.',
+        requestId: _requestId(),
+      );
+    }
+    final client = http.Client();
+    try {
+      final request = http.MultipartRequest('POST', uri)
+        ..fields.addAll(fields)
+        ..files.add(
+          http.MultipartFile.fromBytes('file', bytes, filename: filename),
+        );
+      final response = await client.send(request).timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        await response.stream.drain<void>();
+        throw ApiException(
+          status: response.statusCode,
+          code: 'attachment_upload_failed',
+          message: 'Attachment upload failed.',
+          requestId: _requestId(),
+        );
+      }
+      await response.stream.drain<void>();
+    } on TimeoutException {
+      throw ApiException(
+        status: 0,
+        code: 'attachment_upload_timeout',
+        message: 'Attachment upload timed out.',
+        requestId: _requestId(),
+      );
+    } on http.ClientException catch (error) {
+      throw ApiException(
+        status: 0,
+        code: 'attachment_upload_transport_error',
+        message: 'Attachment upload failed: ${error.message}',
+        requestId: _requestId(),
+      );
+    } finally {
+      client.close();
+    }
+  }
+
   Object? _decode(String value) {
     try {
       return jsonDecode(value);
@@ -1076,18 +1186,45 @@ class StarforgeApiClient {
   /// dashboard totals and client-side filters do not stop at the first page.
   Future<ApiPage> list(String path, {Map<String, Object?>? query}) async {
     final requestedPage = _asInt(query?['page'], 1).clamp(1, 1 << 31);
-    final requestedSize = _asInt(query?['page_size'], 200).clamp(1, 1000);
+    // The deployed StarForge listing contract caps every ordinary collection
+    // at 100 rows. Sending the previous default of 200 is rejected by older
+    // deployments as `Invalid value for filter 'page_size'` instead of being
+    // silently capped. Keep the transport inside the strictest published
+    // contract and follow `has_next` until the full collection is loaded.
+    final requestedSize = _asInt(query?['page_size'], 100).clamp(1, 100);
     final firstPage = await listPage(
       path,
       query: query,
       page: requestedPage,
       pageSize: requestedSize,
     );
+    // A collection cache is a set of backend records, not a transcript of
+    // pages.  Some deployments have returned overlapping pages while rows
+    // were being inserted, and a few older proxies ignored `page` entirely.
+    // Canonicalise even a one-page response so the product never renders the
+    // same database row more than once.
+    final items = _deduplicate(firstPage.items);
     if (!firstPage.hasNext) {
-      return firstPage;
+      return ApiPage(
+        items: items,
+        pagination: {
+          ...?firstPage.pagination,
+          'page': firstPage.page,
+          'page_size': requestedSize,
+          'total': items.length,
+          'pages': 1,
+          'has_next': false,
+          'complete': true,
+        },
+      );
     }
 
-    final items = <Map<String, dynamic>>[...firstPage.items];
+    final itemKeys = <String>{
+      for (final row in items)
+        apiRecordId(row).isEmpty
+            ? jsonEncode(row)
+            : apiRecordId(row).toLowerCase(),
+    };
     var current = firstPage;
     // A finite guard protects the app from a malformed API that forever
     // advertises `next` while returning the same page.
@@ -1100,9 +1237,20 @@ class StarforgeApiClient {
         page: nextPage,
         pageSize: requestedSize,
       );
-      items.addAll(next.items);
-      if (next.page <= current.page || next.items.isEmpty) break;
+      var added = 0;
+      for (final row in next.items) {
+        final id = apiRecordId(row);
+        final key = id.isEmpty ? jsonEncode(row) : id.toLowerCase();
+        if (itemKeys.add(key)) {
+          items.add(row);
+          added++;
+        }
+      }
+      // Do not keep downloading a malformed/repeated first page. This is the
+      // source of the former multiplied student directory and slow sign-in.
+      if (next.page <= current.page || next.items.isEmpty || added == 0) break;
       current = next;
+      if (firstPage.total > 0 && items.length >= firstPage.total) break;
     }
     return ApiPage(
       items: items,
@@ -1110,11 +1258,13 @@ class StarforgeApiClient {
         ...?firstPage.pagination,
         'page': firstPage.page,
         'page_size': requestedSize,
-        'total': firstPage.total < items.length
-            ? items.length
-            : firstPage.total,
-        'pages': firstPage.pages,
+        // [list] is the fully materialised, canonical cache. Publishing the
+        // server's pre-deduplication total here would make dashboard counters
+        // disagree with the actual rows shown in the student directory.
+        'total': items.length,
+        'pages': 1,
         'has_next': false,
+        'complete': true,
       },
     );
   }
@@ -1132,7 +1282,7 @@ class StarforgeApiClient {
     int pageSize = 25,
   }) async {
     final safePage = page.clamp(1, 1 << 31);
-    final safePageSize = pageSize.clamp(1, 1000);
+    final safePageSize = pageSize.clamp(1, 100);
     final response = await request(
       'GET',
       path,
@@ -1161,6 +1311,107 @@ class StarforgeApiClient {
         'previous': map?['previous'] ?? map?['prev'],
     }..removeWhere((_, value) => value == null);
     return ApiPage(items: items, pagination: metadata);
+  }
+
+  /// Fetches one cursor-based collection page. Cursor endpoints reject the
+  /// ordinary `page` parameter, so they must never pass through [listPage].
+  Future<ApiPage> cursorPage(
+    String path, {
+    Map<String, Object?>? query,
+    int pageSize = 50,
+  }) async {
+    final safePageSize = pageSize.clamp(1, 100);
+    final response = await request(
+      'GET',
+      path,
+      query: {...?query, 'page_size': safePageSize},
+    );
+    final map = _asMap(response);
+    final items = _asMapList(map?['results'] ?? map?['data'] ?? response);
+    final published = _asMap(map?['pagination']);
+    final metadata = <String, dynamic>{
+      ...?published,
+      'page': published?['page'] ?? 1,
+      'page_size': published?['page_size'] ?? safePageSize,
+      if (map?['next'] != null || published?['next'] != null)
+        'next': map?['next'] ?? published?['next'],
+      if (map?['previous'] != null || published?['previous'] != null)
+        'previous': map?['previous'] ?? published?['previous'],
+    };
+    return ApiPage(items: items, pagination: metadata);
+  }
+
+  /// Fetches a complete cursor-backed feed by following the server's `next`
+  /// links. Notification history uses this contract and does not understand
+  /// numeric `page` values, so routing it through [list] can repeatedly fetch
+  /// the first page on a sufficiently long account history.
+  Future<ApiPage> cursorList(
+    String path, {
+    Map<String, Object?>? query,
+    int pageSize = 100,
+  }) async {
+    final safePageSize = pageSize.clamp(1, 100);
+    final items = <Map<String, dynamic>>[];
+    final itemKeys = <String>{};
+    final seenCursors = <String>{};
+    var pageQuery = <String, Object?>{...?query};
+    String? next;
+
+    // Keep a useful recent history without turning every app start/poll into
+    // hundreds of requests on long-lived accounts. Older rows remain on the
+    // server and can be exposed later through an explicit archive flow.
+    for (var requestCount = 0; requestCount < 5; requestCount++) {
+      final page = await cursorPage(
+        path,
+        query: pageQuery,
+        pageSize: safePageSize,
+      );
+      for (final row in page.items) {
+        final id = apiRecordId(row);
+        final key = id.isEmpty ? jsonEncode(row) : id.toLowerCase();
+        if (itemKeys.add(key)) items.add(row);
+      }
+      // Some deployments publish notifications as ordinary offset pages while
+      // older ones use a raw cursor envelope. Detect the shape returned by the
+      // server and continue numerically when pagination metadata is present.
+      if (requestCount == 0 && page.pagination?['pages'] != null) {
+        var currentPage = page.page;
+        final pages = page.pages;
+        while (currentPage < pages && currentPage < 5) {
+          currentPage++;
+          final numeric = await listPage(
+            path,
+            query: query,
+            page: currentPage,
+            pageSize: safePageSize,
+          );
+          for (final row in numeric.items) {
+            final id = apiRecordId(row);
+            final key = id.isEmpty ? jsonEncode(row) : id.toLowerCase();
+            if (itemKeys.add(key)) items.add(row);
+          }
+          if (numeric.items.isEmpty) break;
+        }
+        next = currentPage < pages ? 'offset:$currentPage' : null;
+        break;
+      }
+      next = apiText(page.pagination?['next']);
+      if (next.isEmpty) break;
+      final cursor = Uri.tryParse(next)?.queryParameters['cursor'];
+      if (cursor == null || cursor.isEmpty || !seenCursors.add(cursor)) break;
+      pageQuery = <String, Object?>{...?query, 'cursor': cursor};
+    }
+
+    return ApiPage(
+      items: items,
+      pagination: {
+        'page': 1,
+        'page_size': safePageSize,
+        'total': items.length,
+        'pages': 1,
+        'has_next': next != null && next.isNotEmpty,
+      },
+    );
   }
 }
 
@@ -1267,6 +1518,7 @@ const Set<String> kApiBootstrapResources = {
   'teachers',
   'groups',
   'parents',
+  'guardians',
   'payments',
   'invoices',
   'attendanceRecords',
@@ -1287,6 +1539,10 @@ const Set<String> kApiBootstrapResources = {
 /// Product pages start with the newest backend page and use filters/export for
 /// deeper history.
 const Set<String> kApiSinglePageResources = {'audit'};
+
+/// Complete cursor-backed feeds. Unlike audit, reading notifications does not
+/// itself append another notification, so following the full history is safe.
+const Set<String> kApiCursorResources = {'notifications'};
 
 /// Verb capabilities copied from the supplied OpenAPI paths. Generic screens
 /// consult these sets before exposing a mutation, so read-only collections can
@@ -1550,6 +1806,9 @@ const Map<String, String> _apiResourceReadPermissions = {
   'teachers': 'teachers:read',
   'groups': 'cohorts:read',
   'parents': 'parents:read',
+  // The deployed contract protects guardian links as safeguarding records,
+  // not as an ordinary parent directory.
+  'guardians': 'safeguarding:write',
   'payments': 'payments:read',
   'invoices': 'finance:read',
   'attendanceRecords': 'attendance:read',
@@ -1558,10 +1817,12 @@ const Map<String, String> _apiResourceReadPermissions = {
   'branches': 'org:read',
   'approvals': 'approvals:read',
   'meetings': 'meeting:read',
-  'threads': 'messaging:read',
+  // Messaging threads are participant-scoped by the endpoint itself.  The
+  // published contract does not require an RBAC capability here, and
+  // self-service profiles commonly publish an authoritative empty permission
+  // list.  Gating this feed on `messaging:read` therefore hid valid student
+  // and parent conversations without ever asking the server.
   'schedule': 'schedule:read',
-  'notifications': 'notifications:read',
-  'unreadNotifications': 'notifications:read',
   'studentRisk': 'intelligence:read',
   'audit': 'audit:read',
 };
@@ -1573,20 +1834,26 @@ class ApiSession extends ChangeNotifier {
   static const Duration _resourceFreshness = Duration(seconds: 30);
 
   final StarforgeApiClient client;
+  final ApiSessionStorage sessionStorage;
   final Map<String, List<Map<String, dynamic>>> collections = {};
   final Map<String, Map<String, dynamic>> collectionPagination = {};
   final Map<String, ApiException> lastResourceErrors = {};
   final Map<String, dynamic> documents = {};
   final Map<String, DateTime> _loadedAt = {};
   final Map<String, Future<void>> _refreshInFlight = {};
+  List<Map<String, dynamic>> messagingContacts = const [];
+  int? messagingSelfUserId;
   DateTime? _rateLimitedUntil;
   ApiException? _rateLimitCause;
   Map<String, dynamic>? me;
   bool loading = false;
   String? lastError;
+  bool sessionPersistenceAvailable = true;
+  int _sessionGeneration = 0;
 
-  ApiSession({StarforgeApiClient? client})
-    : client = client ?? StarforgeApiClient() {
+  ApiSession({StarforgeApiClient? client, ApiSessionStorage? sessionStorage})
+    : client = client ?? StarforgeApiClient(),
+      sessionStorage = sessionStorage ?? MemoryApiSessionStorage() {
     this.client.onUnauthorized = _expireSession;
   }
 
@@ -1620,6 +1887,7 @@ class ApiSession extends ChangeNotifier {
       if (direct != null) addValue(direct);
       for (final key in const [
         'permissions',
+        'effective_permissions',
         'permission_codes',
         'capabilities',
         'grants',
@@ -1630,11 +1898,13 @@ class ApiSession extends ChangeNotifier {
 
     for (final key in const [
       'permissions',
+      'effective_permissions',
       'permission_codes',
       'capabilities',
       'grants',
       'role',
       'roles',
+      'scopes',
     ]) {
       final value = profile[key];
       if (key == 'role' && value is String) continue;
@@ -1672,9 +1942,11 @@ class ApiSession extends ChangeNotifier {
           profile != null &&
           const [
             'permissions',
+            'effective_permissions',
             'permission_codes',
             'capabilities',
             'grants',
+            'scopes',
           ].any(profile.containsKey);
       // Compatibility for older profiles that genuinely omit capabilities.
       // Once the backend publishes an empty list it is authoritative and the
@@ -1696,6 +1968,74 @@ class ApiSession extends ChangeNotifier {
   bool _mayReadResource(String resource) {
     final permission = _apiResourceReadPermissions[resource];
     return permission == null || hasPermission(permission);
+  }
+
+  /// Student and parent credentials are intentionally bootstrapped with only
+  /// their own communication feeds. Older deployments omit permission arrays
+  /// from `/users/me/`; treating that omission as permission to preload every
+  /// staff directory made self-service login slow and could trigger throttles.
+  bool get _isSelfServicePrincipal {
+    final profile = me;
+    if (profile == null) return false;
+    final aliases = <String>{};
+
+    void collect(Object? value) {
+      if (value is Iterable && value is! String) {
+        for (final item in value) {
+          collect(item);
+        }
+        return;
+      }
+      final map = _asMap(value);
+      if (map != null) {
+        if (map['is_active'] == false) return;
+        for (final key in const [
+          'principal_kind',
+          'account_kind',
+          'account_type_slug',
+          'role',
+          'role_name',
+          'role_slug',
+          'user_role',
+          'slug',
+          'name',
+          'code',
+        ]) {
+          collect(map[key]);
+        }
+        collect(map['role_memberships']);
+        return;
+      }
+      if (value == null) return;
+      final normalized = apiText(
+        value,
+      ).toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+      if (normalized.isNotEmpty) aliases.add(normalized);
+    }
+
+    collect({
+      for (final key in const [
+        'principal_kind',
+        'account_kind',
+        'account_type_slug',
+        'role',
+        'role_name',
+        'role_slug',
+        'user_role',
+        'role_memberships',
+      ])
+        key: profile[key],
+    });
+    return aliases.any(
+      (value) => const {
+        'student',
+        'learner',
+        'pupil',
+        'parent',
+        'guardian',
+        'caregiver',
+      }.contains(value),
+    );
   }
 
   bool _isFresh(String resource) {
@@ -1742,14 +2082,121 @@ class ApiSession extends ChangeNotifier {
   }
 
   void _expireSession() {
+    _sessionGeneration++;
     collections.clear();
     collectionPagination.clear();
     lastResourceErrors.clear();
     documents.clear();
+    messagingContacts = const [];
+    messagingSelfUserId = null;
     me = null;
     _clearRequestState();
     lastError = 'Session expired. Sign in again.';
+    unawaited(_clearPersistedSession());
     notifyListeners();
+  }
+
+  Future<void> _persistSession() async {
+    final token = client.token;
+    final profile = me;
+    if (token == null || token.isEmpty || profile == null) return;
+    try {
+      await sessionStorage.write(
+        PersistedApiSession(
+          baseUrl: client.baseUrl,
+          token: token,
+          profile: Map<String, dynamic>.from(profile),
+        ),
+      );
+      sessionPersistenceAvailable = true;
+    } catch (_) {
+      // A keystore failure must not discard an otherwise valid live login.
+      sessionPersistenceAvailable = false;
+    }
+  }
+
+  Future<void> _clearPersistedSession() async {
+    try {
+      await sessionStorage.clear();
+      sessionPersistenceAvailable = true;
+    } catch (_) {
+      sessionPersistenceAvailable = false;
+    }
+  }
+
+  /// Restores the encrypted bearer session without ever persisting a password.
+  /// Temporary network/server failures keep the cached account identity so the
+  /// user is not signed out merely because the device started offline. A 401
+  /// or otherwise invalid account boundary clears the saved session.
+  Future<bool> restore({String language = 'uz'}) async {
+    if (loading) return authenticated && me != null;
+    loading = true;
+    lastError = null;
+    notifyListeners();
+    PersistedApiSession? saved;
+    try {
+      saved = await sessionStorage.read();
+      sessionPersistenceAvailable = true;
+    } catch (_) {
+      sessionPersistenceAvailable = false;
+      loading = false;
+      notifyListeners();
+      return false;
+    }
+    if (saved == null) {
+      loading = false;
+      notifyListeners();
+      return false;
+    }
+
+    client.configure(
+      baseUrl: saved.baseUrl,
+      language: language,
+      token: saved.token,
+    );
+    _sessionGeneration++;
+    me = Map<String, dynamic>.from(saved.profile);
+    try {
+      final profile = _asMap(await client.request('GET', '/api/v1/users/me/'));
+      if (profile == null) {
+        throw ApiException(
+          status: _HttpStatus.badGateway,
+          message: 'The server returned an invalid account profile.',
+          code: 'invalid_profile_response',
+          requestId: _requestId(),
+        );
+      }
+      me = profile;
+      await _persistSession();
+      loading = false;
+      notifyListeners();
+      unawaited(_bootstrapAfterAuthentication(_sessionGeneration));
+      return true;
+    } on ApiException catch (error) {
+      final temporary =
+          error.code != 'invalid_profile_response' &&
+          (error.status == 0 ||
+              error.status == _HttpStatus.tooManyRequests ||
+              error.status >= 500);
+      if (temporary && client.hasSession && saved.profile.isNotEmpty) {
+        me = Map<String, dynamic>.from(saved.profile);
+        lastError = error.message;
+        return true;
+      }
+      _clearLoginState();
+      await _clearPersistedSession();
+      return false;
+    } catch (_) {
+      // Unexpected/corrupt responses fail closed and require a fresh login.
+      _clearLoginState();
+      await _clearPersistedSession();
+      return false;
+    } finally {
+      if (loading) {
+        loading = false;
+        notifyListeners();
+      }
+    }
   }
 
   List<Map<String, dynamic>> records(String name) =>
@@ -1796,6 +2243,12 @@ class ApiSession extends ChangeNotifier {
     if (path == null) {
       throw ArgumentError.value(resource, 'resource', 'Unknown API resource');
     }
+    if (kApiSinglePageResources.contains(resource)) {
+      return client.cursorPage(path, query: parameters, pageSize: 100);
+    }
+    if (kApiCursorResources.contains(resource)) {
+      return client.cursorList(path, query: parameters, pageSize: 100);
+    }
     return client.list(path, query: parameters);
   }
 
@@ -1812,12 +2265,15 @@ class ApiSession extends ChangeNotifier {
     if (path == null) {
       throw ArgumentError.value(resource, 'resource', 'Unknown API resource');
     }
-    return client.listPage(
-      path,
-      query: parameters,
-      page: page,
-      pageSize: pageSize,
-    );
+    return kApiSinglePageResources.contains(resource) ||
+            kApiCursorResources.contains(resource)
+        ? client.cursorPage(path, query: parameters, pageSize: pageSize)
+        : client.listPage(
+            path,
+            query: parameters,
+            page: page,
+            pageSize: pageSize,
+          );
   }
 
   List<Map<String, dynamic>> relatedRecords(
@@ -2035,7 +2491,46 @@ class ApiSession extends ChangeNotifier {
         'guardians',
       ],
     );
-    return _deduplicate([...embedded, ...related]);
+    final parentIdentities = _recordIdentity(
+      parent,
+      extraKeys: const ['parent_id', 'parent_name'],
+    );
+    final guardianLinks = records('guardians').where(
+      (row) => _relatedTo(row, parentIdentities, const [
+        'parent',
+        'parent_id',
+        'parent_name',
+        'guardian',
+        'guardian_id',
+        'guardian_name',
+      ]),
+    );
+    final guardianChildren = <Map<String, dynamic>>[];
+    for (final link in guardianLinks) {
+      final embeddedStudent = apiValue(link, const ['student', 'child']);
+      if (embeddedStudent is Map) {
+        guardianChildren.add(Map<String, dynamic>.from(embeddedStudent));
+      }
+      final studentIdentities = _identityTokens(
+        apiValue(link, const [
+          'student',
+          'student_id',
+          'student_name',
+          'child',
+          'child_id',
+          'child_name',
+        ]),
+      );
+      guardianChildren.addAll(
+        records('students').where(
+          (student) => _recordIdentity(
+            student,
+            extraKeys: const ['student_id', 'student_name'],
+          ).any(studentIdentities.contains),
+        ),
+      );
+    }
+    return _deduplicate([...embedded, ...related, ...guardianChildren]);
   }
 
   List<Map<String, dynamic>> staffForDepartment(
@@ -2076,6 +2571,7 @@ class ApiSession extends ChangeNotifier {
     try {
       client.configure(baseUrl: endpoint, language: language);
       await client.login(username: username, password: password);
+      _sessionGeneration++;
       final profile = await client.request('GET', '/api/v1/users/me/');
       me = _asMap(profile);
       if (me == null) {
@@ -2086,13 +2582,22 @@ class ApiSession extends ChangeNotifier {
           requestId: _requestId(),
         );
       }
-      await reloadAll();
+      await _persistSession();
+      // Authentication is complete once the login boundary and `/users/me/`
+      // both succeed. Do not keep the user on the login screen while every
+      // dashboard collection is fetched. The authenticated workspace starts
+      // empty and is hydrated by this best-effort background bootstrap.
+      loading = false;
+      notifyListeners();
+      unawaited(_bootstrapAfterAuthentication(_sessionGeneration));
     } on ApiException catch (error) {
       _clearLoginState();
+      await _clearPersistedSession();
       lastError = error.message;
       rethrow;
     } catch (error) {
       _clearLoginState();
+      await _clearPersistedSession();
       final wrapped = ApiException(
         status: 0,
         message: 'Unexpected login failure (${error.runtimeType}).',
@@ -2102,17 +2607,41 @@ class ApiSession extends ChangeNotifier {
       lastError = wrapped.message;
       throw wrapped;
     } finally {
-      loading = false;
-      notifyListeners();
+      if (loading) {
+        loading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _bootstrapAfterAuthentication(int generation) async {
+    try {
+      await reloadAll();
+    } on ApiException catch (error) {
+      // A collection-level failure is rendered by the owning page. Login has
+      // already succeeded, so an optional slow/unavailable resource must not
+      // hold the authentication form open.
+      if (authenticated && generation == _sessionGeneration) {
+        lastError = error.message;
+        notifyListeners();
+      }
+    } catch (_) {
+      if (authenticated && generation == _sessionGeneration) {
+        lastError = 'Some data could not be loaded.';
+        notifyListeners();
+      }
     }
   }
 
   void _clearLoginState() {
+    _sessionGeneration++;
     client.clearSession();
     collections.clear();
     collectionPagination.clear();
     lastResourceErrors.clear();
     documents.clear();
+    messagingContacts = const [];
+    messagingSelfUserId = null;
     me = null;
     _clearRequestState();
   }
@@ -2149,6 +2678,16 @@ class ApiSession extends ChangeNotifier {
       currentPassword: currentPassword,
       newPassword: newPassword,
     );
+    try {
+      final refreshed = _asMap(
+        await client.request('GET', '/api/v1/users/me/'),
+      );
+      me = <String, dynamic>{...?me, ...?refreshed};
+    } on ApiException {
+      me = <String, dynamic>{...?me, 'must_change_password': false};
+    }
+    await _persistSession();
+    notifyListeners();
   }
 
   Future<String> resolveTenant(String slug) async {
@@ -2167,10 +2706,14 @@ class ApiSession extends ChangeNotifier {
   }
 
   Future<void> reloadAll() async {
+    final generation = _sessionGeneration;
+    const selfServiceBootstrap = {'threads', 'notifications'};
     final entries = kApiResources.entries
         .where(
           (entry) =>
               kApiBootstrapResources.contains(entry.key) &&
+              (!_isSelfServicePrincipal ||
+                  selfServiceBootstrap.contains(entry.key)) &&
               _mayReadResource(entry.key),
         )
         .toList(growable: false);
@@ -2211,6 +2754,7 @@ class ApiSession extends ChangeNotifier {
         }
       }),
     );
+    if (!authenticated || generation != _sessionGeneration) return;
     collections
       ..clear()
       ..addEntries(
@@ -2232,21 +2776,58 @@ class ApiSession extends ChangeNotifier {
         _loadedAt[entry.key] = loadedAt;
       }
     }
-    await _reloadDocuments();
+    await _reloadDocuments(generation: generation);
+    if (!authenticated || generation != _sessionGeneration) return;
+    _updateMessagingIdentity();
     notifyListeners();
   }
 
-  Future<ApiPage> _loadCollection(String name, String path) =>
-      kApiSinglePageResources.contains(name)
-      ? client.listPage(path, page: 1, pageSize: 200)
-      : client.list(path);
+  void _updateMessagingIdentity() {
+    // The supplied OpenAPI publishes threads, nested messages and the read
+    // marker, but no contacts collection. The authenticated account is the
+    // only authoritative source for ownership; probing an invented contacts
+    // route made every login slower and left student chat unavailable on 404.
+    messagingContacts = const [];
+    final profile = me;
+    if (profile == null) {
+      messagingSelfUserId = null;
+      return;
+    }
+    final raw = apiValue(profile, const [
+      'user_id',
+      'account_id',
+      'user',
+      'account',
+      'id',
+    ]);
+    final nested = _asMap(raw);
+    messagingSelfUserId = _asInt(
+      nested == null
+          ? raw
+          : apiValue(nested, const ['user_id', 'account_id', 'id', 'pk']),
+    );
+  }
 
-  Future<void> _reloadDocuments() async {
+  Future<ApiPage> _loadCollection(String name, String path) {
+    if (kApiSinglePageResources.contains(name)) {
+      return client.cursorPage(path, pageSize: 100);
+    }
+    if (kApiCursorResources.contains(name)) {
+      return client.cursorList(path, pageSize: 100);
+    }
+    return client.list(path);
+  }
+
+  Future<void> _reloadDocuments({int? generation}) async {
+    final expectedGeneration = generation ?? _sessionGeneration;
+    const selfServiceDocuments = {'unreadNotifications'};
     final values = await Future.wait(
       kApiDocuments.entries
           .where(
             (entry) =>
                 kApiBootstrapDocuments.contains(entry.key) &&
+                (!_isSelfServicePrincipal ||
+                    selfServiceDocuments.contains(entry.key)) &&
                 _mayReadResource(entry.key),
           )
           .map((entry) async {
@@ -2274,6 +2855,7 @@ class ApiSession extends ChangeNotifier {
             }
           }),
     );
+    if (!authenticated || expectedGeneration != _sessionGeneration) return;
     documents
       ..clear()
       ..addEntries(values);
@@ -2293,6 +2875,59 @@ class ApiSession extends ChangeNotifier {
     if (rateLimit != null) return Future<void>.error(rateLimit);
 
     final future = _refreshNow(collection);
+    _refreshInFlight[collection] = future;
+    future.then<void>(
+      (_) {
+        if (identical(_refreshInFlight[collection], future)) {
+          _refreshInFlight.remove(collection);
+        }
+      },
+      onError: (Object _, StackTrace _) {
+        if (identical(_refreshInFlight[collection], future)) {
+          _refreshInFlight.remove(collection);
+        }
+      },
+    );
+    return future;
+  }
+
+  /// Refresh only the newest cursor page used by background notification
+  /// polling. It merges the head with the bounded local history so polling
+  /// cannot repeatedly download every notification or trigger API throttling.
+  Future<void> refreshNotificationHead() async {
+    const collection = 'notifications';
+    final inFlight = _refreshInFlight[collection];
+    if (inFlight != null) return inFlight;
+    final rateLimit = _activeRateLimit();
+    if (rateLimit != null) return Future<void>.error(rateLimit);
+
+    final future = () async {
+      try {
+        final page = await client.cursorPage(
+          kApiResources[collection]!,
+          pageSize: 100,
+        );
+        final merged = _deduplicate([
+          ...page.items,
+          ...records(collection),
+        ]).take(500).toList(growable: false);
+        collections[collection] = merged;
+        collectionPagination[collection] = {
+          ...?page.pagination,
+          'page': 1,
+          'page_size': 100,
+          'total': merged.length,
+        };
+        lastResourceErrors.remove(collection);
+        _loadedAt[collection] = DateTime.now();
+        notifyListeners();
+      } on ApiException catch (error) {
+        _rememberRateLimit(error);
+        lastResourceErrors[collection] = error;
+        notifyListeners();
+        rethrow;
+      }
+    }();
     _refreshInFlight[collection] = future;
     future.then<void>(
       (_) {
@@ -2461,6 +3096,33 @@ class ApiSession extends ChangeNotifier {
     return _asMap(data);
   }
 
+  /// Update only the current account's published self-service fields.
+  /// Role, permissions, username and activation state are intentionally not
+  /// accepted here. Merging the response keeps permission metadata that some
+  /// legacy deployments omit from PATCH while returning it from GET.
+  Future<Map<String, dynamic>> updateMe(Map<String, Object?> changes) async {
+    const writable = <String>{
+      'first_name',
+      'last_name',
+      'middle_name',
+      'phone',
+      'email',
+      'birthdate',
+      'gender',
+    };
+    final body = <String, Object?>{
+      for (final entry in changes.entries)
+        if (writable.contains(entry.key)) entry.key: entry.value,
+    };
+    final result = _asMap(
+      await client.request('PATCH', '/api/v1/users/me/', body: body),
+    );
+    me = <String, dynamic>{...?me, ...?result};
+    await _persistSession();
+    notifyListeners();
+    return Map<String, dynamic>.unmodifiable(me!);
+  }
+
   Future<dynamic> action(
     String method,
     String path, {
@@ -2606,16 +3268,137 @@ class ApiSession extends ChangeNotifier {
 
   Future<ApiPage> threadMessages(Object threadId) {
     final id = Uri.encodeComponent(threadId.toString().trim());
-    return client.list('/api/v1/messaging/threads/$id/messages/');
+    if (id.isEmpty) {
+      throw ArgumentError.value(threadId, 'threadId', 'Missing thread id');
+    }
+    return client.list(
+      '/api/v1/messaging/threads/$id/messages/',
+      // 50 is accepted by strict deployments that reject the former 100-row
+      // filter. [list] still follows the published numeric pagination.
+      query: const {'page_size': 50},
+    );
   }
 
-  Future<void> sendThreadMessage(Object threadId, String text) async {
+  Future<Map<String, dynamic>?> sendThreadMessage(
+    Object threadId,
+    String text, {
+    List<String> attachments = const [],
+  }) async {
     final id = Uri.encodeComponent(threadId.toString().trim());
-    await action(
+    final body = text.trim();
+    if (id.isEmpty) {
+      throw ArgumentError.value(threadId, 'threadId', 'Missing thread id');
+    }
+    if (body.isEmpty && attachments.isEmpty) {
+      throw ArgumentError.value(text, 'text', 'Message is empty');
+    }
+    final result = await action(
       'POST',
       '/api/v1/messaging/threads/$id/messages/',
-      body: {'text': text.trim()},
+      body: {'body': body, 'attachments': attachments},
       refreshResources: const ['threads'],
+    );
+    return _asMap(result);
+  }
+
+  Future<void> markThreadRead(Object threadId) async {
+    final id = Uri.encodeComponent(threadId.toString().trim());
+    if (id.isEmpty) {
+      throw ArgumentError.value(threadId, 'threadId', 'Missing thread id');
+    }
+    await client.request(
+      'POST',
+      '/api/v1/messaging/threads/$id/read/',
+      body: const <String, Object?>{},
+    );
+  }
+
+  Future<Map<String, dynamic>?> createMessageThread({
+    required List<int> participantIds,
+    required String subject,
+    required String firstBody,
+    List<String> attachments = const [],
+  }) async {
+    if (participantIds.isEmpty) {
+      throw ArgumentError.value(
+        participantIds,
+        'participantIds',
+        'At least one participant is required',
+      );
+    }
+    final result = _asMap(
+      await action(
+        'POST',
+        '/api/v1/messaging/threads/',
+        body: {
+          'participant_ids': participantIds,
+          if (subject.trim().isNotEmpty) 'subject': subject.trim(),
+        },
+      ),
+    );
+    final threadId = result == null ? '' : apiRecordId(result);
+    if (threadId.isEmpty) {
+      // Without the created id the client cannot safely send or retry the
+      // first message: another POST could create a duplicate conversation.
+      await refresh('threads', force: true);
+      throw ApiException(
+        status: 0,
+        code: 'invalid_thread_response',
+        message: 'The server created a chat without returning its id.',
+        requestId: _requestId(),
+      );
+    }
+    if (firstBody.trim().isNotEmpty || attachments.isNotEmpty) {
+      await sendThreadMessage(threadId, firstBody, attachments: attachments);
+    } else {
+      await refresh('threads', force: true);
+    }
+    return result;
+  }
+
+  Future<String> uploadMessageAttachment({
+    required String filename,
+    required String contentType,
+    required Uint8List bytes,
+  }) async {
+    throw ApiException(
+      status: 501,
+      code: 'messaging_attachments_unpublished',
+      message:
+          'This server does not publish chat attachment uploads yet. '
+          'You can still send text messages.',
+      requestId: _requestId(),
+    );
+  }
+
+  Future<String> messageAttachmentDownloadUrl(
+    Object threadId,
+    String key,
+  ) async {
+    final id = Uri.encodeComponent(threadId.toString().trim());
+    final value = key.trim();
+    if (id.isEmpty || value.isEmpty) {
+      throw ArgumentError('Thread id and attachment key are required');
+    }
+    final uri = Uri.tryParse(value);
+    if (uri != null && uri.hasScheme && uri.hasAuthority) return value;
+    throw ApiException(
+      status: 501,
+      code: 'messaging_attachment_download_unpublished',
+      message: 'This server did not publish a download URL for the attachment.',
+      requestId: _requestId(),
+    );
+  }
+
+  Future<void> setThreadMuted(Object threadId, bool muted) async {
+    final id = Uri.encodeComponent(threadId.toString().trim());
+    if (id.isEmpty) {
+      throw ArgumentError.value(threadId, 'threadId', 'Missing thread id');
+    }
+    await client.request(
+      'PATCH',
+      '/api/v1/messaging/threads/$id/preferences/',
+      body: {'notifications_muted': muted},
     );
   }
 
@@ -2692,13 +3475,17 @@ class ApiSession extends ChangeNotifier {
       // Logging out locally is a privacy boundary, not a best-effort cache
       // refresh. Even if the revoke call fails, credentials and tenant data
       // must leave memory and the UI must leave its loading state.
+      _sessionGeneration++;
       client.clearSession();
       collections.clear();
       collectionPagination.clear();
       lastResourceErrors.clear();
       documents.clear();
+      messagingContacts = const [];
+      messagingSelfUserId = null;
       me = null;
       _clearRequestState();
+      await _clearPersistedSession();
       loading = false;
       notifyListeners();
     }
@@ -2706,6 +3493,10 @@ class ApiSession extends ChangeNotifier {
 
   @override
   void dispose() {
+    // Invalidate every background bootstrap before ChangeNotifier becomes
+    // unusable. Late network completions will observe the generation mismatch
+    // and return without touching caches or notifying a disposed session.
+    _sessionGeneration++;
     client.onUnauthorized = null;
     super.dispose();
   }
