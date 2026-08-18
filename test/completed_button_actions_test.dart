@@ -1,3 +1,4 @@
+import 'package:ceo_manager/api_client.dart';
 import 'package:ceo_manager/data.dart';
 import 'package:ceo_manager/screens.dart';
 import 'package:ceo_manager/settings.dart';
@@ -19,6 +20,59 @@ Widget _host(AppStore store, Widget child, {AppSettings? settings}) =>
         ),
       ),
     );
+
+Widget _liveHost(AppStore store, ApiSession session, Widget child) =>
+    SettingsScope(
+      settings: AppSettings(lang: SfLang.ru),
+      child: ApiScope(
+        session: session,
+        child: AppScope(
+          store: store,
+          child: MaterialApp(
+            theme: sfMaterialTheme(SfColors.light, dark: false),
+            home: SfTheme(colors: SfColors.light, child: child),
+          ),
+        ),
+      ),
+    );
+
+class _BranchTransferClient extends StarforgeApiClient {
+  _BranchTransferClient() {
+    configure(token: 'branch-transfer-session');
+  }
+
+  final calls = <({String method, String path, Object? body})>[];
+
+  @override
+  Future<dynamic> request(
+    String method,
+    String path, {
+    Map<String, Object?>? query,
+    Object? body,
+    bool authenticate = true,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    calls.add((method: method, path: path, body: body));
+    return {'id': 9, 'branch_id': 2};
+  }
+
+  @override
+  Future<ApiPage> list(String path, {Map<String, Object?>? query}) async {
+    if (path == '/api/v1/org/staff/') {
+      return const ApiPage(
+        items: [
+          {
+            'id': 9,
+            'username': 'live.teacher',
+            'full_name': 'Live Teacher',
+            'branch_id': 2,
+          },
+        ],
+      );
+    }
+    return const ApiPage(items: []);
+  }
+}
 
 void _phone(WidgetTester tester) {
   tester.view.devicePixelRatio = 1;
@@ -189,6 +243,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('${member.fullName} · ${member.branch}').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(DropdownButtonFormField<String>).last);
     await tester.pumpAndSettle();
     await tester.tap(find.text(target.name).last);
@@ -202,6 +260,76 @@ void main() {
       store.staff.firstWhere((item) => item.username == member.username).branch,
       target.name,
     );
+    expect(find.text('Перевод выполнен'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('live branch transfer patches the real staff relation', (
+    tester,
+  ) async {
+    _phone(tester);
+    const source = Branch('Source', 0, 0, 0, 0, Colors.green);
+    const target = Branch('Target', 0, 0, 0, 0, Colors.green);
+    const member = StaffMember(
+      serverId: '9',
+      firstName: 'Live',
+      lastName: 'Teacher',
+      username: 'live.teacher',
+      phone: '+998900000000',
+      email: 'live@example.test',
+      branch: 'Source',
+      department: 'Education',
+      subject: 'English',
+      qualification: 'Teacher',
+      salaryType: 'fixed',
+      rate: '0',
+      gender: '—',
+      hireDate: '01.01.2026',
+    );
+    final store = AppStore.empty(SfRole.ceo)
+      ..replaceServerSnapshot(
+        branches: const [source, target],
+        staff: const [member],
+      );
+    final client = _BranchTransferClient();
+    final session = ApiSession(client: client)
+      ..me = {'id': 1, 'role': 'ceo'}
+      ..collections['staff'] = [
+        {'id': 9, 'username': 'live.teacher', 'branch_id': 1},
+      ]
+      ..collections['branches'] = [
+        {'id': 1, 'name': 'Source'},
+        {'id': 2, 'name': 'Target'},
+      ];
+    addTearDown(store.dispose);
+    addTearDown(session.dispose);
+
+    await tester.pumpWidget(
+      _liveHost(
+        store,
+        session,
+        const BranchConfigureScreen(branch: source, colors: SfColors.light),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Live Teacher · Source').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Target').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Xodimni o‘tkazish'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Перевести'));
+    await tester.pumpAndSettle();
+
+    final patch = client.calls.singleWhere(
+      (call) => call.method == 'PATCH' && call.path == '/api/v1/org/staff/9/',
+    );
+    expect(patch.body, {'branch_id': 2});
+    expect(store.staff.single.branch, 'Target');
     expect(find.text('Перевод выполнен'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

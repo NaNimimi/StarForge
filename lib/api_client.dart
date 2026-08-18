@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, mapEquals, visibleForTesting;
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import 'api_catalog.dart';
 import 'session_storage.dart';
@@ -676,6 +678,24 @@ bool _relatedTo(
     final tokens = _identityTokens(apiValue(row, [key]));
     if (tokens.any(identities.contains)) return true;
   }
+  // Staff responsibilities are published as nested role memberships by the
+  // current backend. Treat those memberships as relations as well so branch
+  // and department screens do not lose staff whose serializer has no legacy
+  // top-level `branch`/`department` fields.
+  final memberships = apiValue(row, const [
+    'role_memberships',
+    'memberships',
+    'account_type_assignments',
+  ]);
+  if (memberships is Iterable && memberships is! String) {
+    for (final membership in memberships.whereType<Map>()) {
+      final nested = Map<String, dynamic>.from(membership);
+      for (final key in relationKeys) {
+        final tokens = _identityTokens(apiValue(nested, [key]));
+        if (tokens.any(identities.contains)) return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -877,16 +897,17 @@ class StarforgeApiClient {
   }) async {
     final body = {'username': username.trim(), 'password': password};
     const paths = <String>[
-      // This is the public authentication boundary in the supplied OpenAPI
-      // contract and remains the preferred single-request path.
-      '/api/v1/auth/login/',
-      // The live deployment currently answers 404 on the published route but
-      // exposes role-login. Keep it as a compatibility fallback only after a
-      // missing route; never retry invalid credentials on another endpoint.
+      // Role-native CEO, manager, audit, teacher, student and parent accounts
+      // authenticate here on the deployed tenant. Trying the platform-admin
+      // route first adds a guaranteed failing request to every app login and
+      // can consume rate-limit budget.
       '/api/v1/auth/role-login/',
+      // Compatibility with older deployments that expose only the published
+      // generic login route. Invalid credentials are never retried.
+      '/api/v1/auth/login/',
       // Compatibility with proxies configured without APPEND_SLASH.
-      '/api/v1/auth/login',
       '/api/v1/auth/role-login',
+      '/api/v1/auth/login',
     ];
     dynamic data;
     for (var index = 0; index < paths.length; index++) {
@@ -1070,6 +1091,7 @@ class StarforgeApiClient {
     String url,
     Uint8List bytes, {
     required String filename,
+    required String contentType,
     required Map<String, String> fields,
     Duration timeout = const Duration(seconds: 60),
   }) async {
@@ -1087,7 +1109,16 @@ class StarforgeApiClient {
       final request = http.MultipartRequest('POST', uri)
         ..fields.addAll(fields)
         ..files.add(
-          http.MultipartFile.fromBytes('file', bytes, filename: filename),
+          http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: filename,
+            // The storage policy publishes a required `Content-Type` field.
+            // Also set the MIME type on the file part: several Android HTTP
+            // stacks otherwise send recorded M4A data as octet-stream, and
+            // object storage can reject or misclassify the voice upload.
+            contentType: MediaType.parse(contentType),
+          ),
         );
       final response = await client.send(request).timeout(timeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1100,6 +1131,66 @@ class StarforgeApiClient {
         );
       }
       await response.stream.drain<void>();
+    } on TimeoutException {
+      throw ApiException(
+        status: 0,
+        code: 'attachment_upload_timeout',
+        message: 'Attachment upload timed out.',
+        requestId: _requestId(),
+      );
+    } on http.ClientException catch (error) {
+      throw ApiException(
+        status: 0,
+        code: 'attachment_upload_transport_error',
+        message: 'Attachment upload failed: ${error.message}',
+        requestId: _requestId(),
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Uploads a file to a presigned PUT grant. Object storage, not StarForge,
+  /// is the destination, therefore no API bearer token is attached.
+  Future<void> uploadPutBytes(
+    String url,
+    Uint8List bytes, {
+    required String contentType,
+    Map<String, String> headers = const {},
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
+      throw ApiException(
+        status: 0,
+        code: 'invalid_upload_grant',
+        message: 'The server returned an invalid upload URL.',
+        requestId: _requestId(),
+      );
+    }
+    final client = http.Client();
+    try {
+      final response = await client
+          .put(
+            uri,
+            headers: <String, String>{
+              ...headers,
+              if (!headers.keys.any(
+                (key) => key.toLowerCase() == 'content-type',
+              ))
+                'Content-Type': contentType,
+            },
+            body: bytes,
+          )
+          .timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw ApiException(
+          status: response.statusCode,
+          code: 'attachment_upload_failed',
+          message: 'Attachment upload failed.',
+          requestId: _requestId(),
+        );
+      }
     } on TimeoutException {
       throw ApiException(
         status: 0,
@@ -1205,6 +1296,15 @@ class StarforgeApiClient {
     // same database row more than once.
     final items = _deduplicate(firstPage.items);
     if (!firstPage.hasNext) {
+      if (firstPage.total > firstPage.items.length) {
+        throw ApiException(
+          status: _HttpStatus.badGateway,
+          code: 'invalid_pagination',
+          message:
+              'The server ended pagination before all records were returned.',
+          requestId: _requestId(),
+        );
+      }
       return ApiPage(
         items: items,
         pagination: {
@@ -1252,6 +1352,16 @@ class StarforgeApiClient {
       current = next;
       if (firstPage.total > 0 && items.length >= firstPage.total) break;
     }
+    if (current.hasNext &&
+        (firstPage.total <= 0 || items.length < firstPage.total)) {
+      throw ApiException(
+        status: _HttpStatus.badGateway,
+        code: 'invalid_pagination',
+        message:
+            'The server repeated or stopped pagination before all records were returned.',
+        requestId: _requestId(),
+      );
+    }
     return ApiPage(
       items: items,
       pagination: {
@@ -1291,6 +1401,32 @@ class StarforgeApiClient {
     final map = _asMap(response);
     final items = _asMapList(map?['data'] ?? map?['results'] ?? response);
     final published = _asMap(map?['pagination']);
+    final declaredTotal = _asInt(
+      published?['total'] ??
+          published?['count'] ??
+          published?['total_count'] ??
+          map?['total'] ??
+          map?['count'] ??
+          map?['total_count'],
+    );
+    final hasPublishedPageSize =
+        published?.containsKey('page_size') == true ||
+        published?.containsKey('per_page') == true ||
+        published?.containsKey('limit') == true ||
+        map?.containsKey('page_size') == true ||
+        map?.containsKey('per_page') == true ||
+        map?.containsKey('limit') == true;
+    // A few StarForge deployments cap a page internally but omit
+    // `page_size` from the response. Treating the requested 100 as the actual
+    // size then makes `total=40, data.length=2` look like a one-page result.
+    // Infer the effective size from the returned page whenever the server
+    // publishes a larger total, so [list] continues until every row is read.
+    final effectivePageSize =
+        !hasPublishedPageSize &&
+            items.isNotEmpty &&
+            declaredTotal > items.length
+        ? items.length
+        : safePageSize;
     final metadata = <String, dynamic>{
       ...?published,
       if (published == null || !published.containsKey('page'))
@@ -1300,7 +1436,7 @@ class StarforgeApiClient {
             map?['page_size'] ??
             map?['per_page'] ??
             map?['limit'] ??
-            safePageSize,
+            effectivePageSize,
       if (published == null || !published.containsKey('total'))
         'total': map?['total'] ?? map?['count'] ?? map?['total_count'],
       if (published == null || !published.containsKey('pages'))
@@ -1846,6 +1982,7 @@ class ApiSession extends ChangeNotifier {
   DateTime? _rateLimitedUntil;
   ApiException? _rateLimitCause;
   Map<String, dynamic>? me;
+  Set<String> _serverProfileFields = const {};
   bool loading = false;
   String? lastError;
   bool sessionPersistenceAvailable = true;
@@ -2090,6 +2227,7 @@ class ApiSession extends ChangeNotifier {
     messagingContacts = const [];
     messagingSelfUserId = null;
     me = null;
+    _serverProfileFields = const {};
     _clearRequestState();
     lastError = 'Session expired. Sign in again.';
     unawaited(_clearPersistedSession());
@@ -2106,6 +2244,7 @@ class ApiSession extends ChangeNotifier {
           baseUrl: client.baseUrl,
           token: token,
           profile: Map<String, dynamic>.from(profile),
+          serverProfileFields: _serverProfileFields.toList(growable: false),
         ),
       );
       sessionPersistenceAvailable = true;
@@ -2156,6 +2295,8 @@ class ApiSession extends ChangeNotifier {
     );
     _sessionGeneration++;
     me = Map<String, dynamic>.from(saved.profile);
+    _updateMessagingIdentity();
+    _serverProfileFields = Set<String>.unmodifiable(saved.serverProfileFields);
     try {
       final profile = _asMap(await client.request('GET', '/api/v1/users/me/'));
       if (profile == null) {
@@ -2166,7 +2307,17 @@ class ApiSession extends ChangeNotifier {
           requestId: _requestId(),
         );
       }
-      me = profile;
+      _serverProfileFields = Set<String>.unmodifiable(profile.keys);
+      // Older deployments omit gender/birthdate. Preserve their encrypted app
+      // preferences while every field returned by this server stays
+      // authoritative.
+      me = <String, dynamic>{
+        for (final key in const ['gender', 'birthdate'])
+          if (!profile.containsKey(key) && saved.profile.containsKey(key))
+            key: saved.profile[key],
+        ...profile,
+      };
+      _updateMessagingIdentity();
       await _persistSession();
       loading = false;
       notifyListeners();
@@ -2180,6 +2331,9 @@ class ApiSession extends ChangeNotifier {
               error.status >= 500);
       if (temporary && client.hasSession && saved.profile.isNotEmpty) {
         me = Map<String, dynamic>.from(saved.profile);
+        _serverProfileFields = Set<String>.unmodifiable(
+          saved.serverProfileFields,
+        );
         lastError = error.message;
         return true;
       }
@@ -2220,6 +2374,8 @@ class ApiSession extends ChangeNotifier {
   }
 
   ApiException? resourceError(String resource) => lastResourceErrors[resource];
+
+  bool isRefreshing(String resource) => _refreshInFlight.containsKey(resource);
 
   dynamic document(String name) => documents[name];
 
@@ -2582,6 +2738,8 @@ class ApiSession extends ChangeNotifier {
           requestId: _requestId(),
         );
       }
+      _serverProfileFields = Set<String>.unmodifiable(me!.keys);
+      _updateMessagingIdentity();
       await _persistSession();
       // Authentication is complete once the login boundary and `/users/me/`
       // both succeed. Do not keep the user on the login screen while every
@@ -2643,6 +2801,7 @@ class ApiSession extends ChangeNotifier {
     messagingContacts = const [];
     messagingSelfUserId = null;
     me = null;
+    _serverProfileFields = const {};
     _clearRequestState();
   }
 
@@ -2682,6 +2841,9 @@ class ApiSession extends ChangeNotifier {
       final refreshed = _asMap(
         await client.request('GET', '/api/v1/users/me/'),
       );
+      if (refreshed != null) {
+        _serverProfileFields = Set<String>.unmodifiable(refreshed.keys);
+      }
       me = <String, dynamic>{...?me, ...?refreshed};
     } on ApiException {
       me = <String, dynamic>{...?me, 'must_change_password': false};
@@ -2779,21 +2941,22 @@ class ApiSession extends ChangeNotifier {
     await _reloadDocuments(generation: generation);
     if (!authenticated || generation != _sessionGeneration) return;
     _updateMessagingIdentity();
+    await _reloadMessagingDirectory(generation: generation);
+    if (!authenticated || generation != _sessionGeneration) return;
     notifyListeners();
   }
 
   void _updateMessagingIdentity() {
-    // The supplied OpenAPI publishes threads, nested messages and the read
-    // marker, but no contacts collection. The authenticated account is the
-    // only authoritative source for ownership; probing an invented contacts
-    // route made every login slower and left student chat unavailable on 404.
-    messagingContacts = const [];
     final profile = me;
     if (profile == null) {
       messagingSelfUserId = null;
       return;
     }
     final raw = apiValue(profile, const [
+      // Messaging has its own user namespace on the live backend.  A staff
+      // profile id (for example CEO profile 4) is not the same value as the
+      // messaging participant id (for example user 10).
+      'messaging_user_id',
       'user_id',
       'account_id',
       'user',
@@ -2807,6 +2970,113 @@ class ApiSession extends ChangeNotifier {
           : apiValue(nested, const ['user_id', 'account_id', 'id', 'pk']),
     );
   }
+
+  Future<void> _reloadMessagingDirectory({required int generation}) async {
+    if (!_mayReadResource('threads')) return;
+    try {
+      final page = await client.list(
+        '/api/v1/messaging/contacts/',
+        query: const {'page_size': 100},
+      );
+      if (!authenticated || generation != _sessionGeneration) return;
+      final participantIds = <String>{};
+      for (final thread in records('threads')) {
+        final rawParticipants = apiValue(thread, const [
+          'participants',
+          'participant_ids',
+          'members',
+        ]);
+        if (rawParticipants is! Iterable || rawParticipants is String) {
+          continue;
+        }
+        for (final participant in rawParticipants) {
+          final map = _asMap(participant);
+          final id = apiText(
+            map == null
+                ? participant
+                : apiValue(map, const ['user', 'user_id', 'id', 'pk']),
+          );
+          if (id.isNotEmpty) participantIds.add(id);
+        }
+      }
+      final enriched = <Map<String, dynamic>>[];
+      for (final contact in page.items) {
+        final contactId = apiText(
+          apiValue(contact, const ['user_id', 'user', 'id', 'pk']),
+        );
+        enriched.add(
+          participantIds.contains(contactId)
+              ? await _contactWithPublishedAvatar(contact)
+              : contact,
+        );
+      }
+      if (!authenticated || generation != _sessionGeneration) return;
+      messagingContacts = enriched;
+      final directorySelfId = _asInt(page.pagination?['self_user_id']);
+      if (directorySelfId != 0) messagingSelfUserId = directorySelfId;
+    } on ApiException catch (error) {
+      _rememberRateLimit(error);
+      // The supplied schema does not yet advertise the directory. Older
+      // deployments remain usable through profile identity/thread subjects.
+      if (error.status != _HttpStatus.notFound &&
+          error.status != _HttpStatus.forbidden &&
+          error.status != 405) {
+        lastResourceErrors['threads'] = error;
+      }
+    }
+  }
+
+  /// The compact messaging directory intentionally contains identity and
+  /// presence only. For student contacts that already participate in a chat,
+  /// the leadership profile is the published source of the photo download
+  /// URL. Fetching only active participants avoids one request per student in
+  /// large tenants while still allowing real avatars in the conversation UI.
+  Future<Map<String, dynamic>> _contactWithPublishedAvatar(
+    Map<String, dynamic> contact,
+  ) async {
+    final existing = apiText(
+      apiValue(contact, const [
+        'avatar_url',
+        'profile_photo_url',
+        'photo_url',
+        'image_url',
+      ]),
+    );
+    if (existing.isNotEmpty) return contact;
+    final kind = apiText(
+      apiValue(contact, const ['principal_kind', 'category', 'role_slug']),
+    ).toLowerCase();
+    if (kind != 'student') return contact;
+    final profileId = apiText(
+      apiValue(contact, const ['profile_id', 'principal_id', 'student_id']),
+    );
+    if (profileId.isEmpty) return contact;
+    try {
+      final profile = _asMap(
+        await client.request(
+          'GET',
+          '/api/v1/students/${Uri.encodeComponent(profileId)}/leadership-profile/',
+        ),
+      );
+      final identity = _asMap(profile?['identity']);
+      final photo = _asMap(identity?['photo']);
+      final url = apiText(
+        apiValue(photo ?? const <String, dynamic>{}, const [
+          'download_url',
+          'url',
+          'file_url',
+        ]),
+      );
+      if (url.isEmpty) return contact;
+      return <String, dynamic>{...contact, 'avatar_url': url};
+    } on ApiException catch (error) {
+      _rememberRateLimit(error);
+      return contact;
+    }
+  }
+
+  @visibleForTesting
+  void updateMessagingIdentityForTest() => _updateMessagingIdentity();
 
   Future<ApiPage> _loadCollection(String name, String path) {
     if (kApiSinglePageResources.contains(name)) {
@@ -2955,6 +3225,13 @@ class ApiSession extends ChangeNotifier {
         } else {
           collectionPagination[collection] = page.pagination!;
         }
+        if (collection == 'threads') {
+          // A thread subject is not a participant name. Refresh the
+          // authoritative messaging directory in the same transaction so a
+          // newly created/external conversation cannot remain labelled with
+          // a technical subject such as "Chat verification".
+          await _reloadMessagingDirectory(generation: _sessionGeneration);
+        }
         lastResourceErrors.remove(collection);
         _loadedAt[collection] = DateTime.now();
         notifyListeners();
@@ -3096,31 +3373,260 @@ class ApiSession extends ChangeNotifier {
     return _asMap(data);
   }
 
+  /// Resolve the actual user account behind a student/staff profile before a
+  /// direct-message thread is created. Student list serializers used by the
+  /// deployed backend expose `username` but do not expose the related user
+  /// primary key, while messaging correctly requires that user id. Looking up
+  /// an exact account here avoids substituting a student profile id and keeps
+  /// presence (`last_seen_at`) tied to the authoritative user record.
+  Future<Map<String, dynamic>?> resolveMessagingContact({
+    Object? userId,
+    String? username,
+    String? fullName,
+  }) async {
+    final requestedId = apiText(userId);
+    final rawUsername = apiText(username).trim();
+    final requestedUsername =
+        const {'', '—', '-', 'null'}.contains(rawUsername.toLowerCase())
+        ? ''
+        : rawUsername.toLowerCase();
+    final requestedName = apiText(fullName).toLowerCase();
+
+    bool matches(Map<String, dynamic> row) {
+      final id = apiRecordId(row);
+      final messagingId = apiText(
+        apiValue(row, const ['user_id', 'account_id', 'user', 'id', 'pk']),
+      );
+      final accountUsername = apiText(
+        apiValue(row, const [
+          'username',
+          'login',
+          'phone',
+          'email',
+          'identifier',
+        ]),
+      ).toLowerCase();
+      var accountName = apiText(
+        apiValue(row, const ['full_name', 'name', 'display_name']),
+      ).toLowerCase();
+      if (accountName.isEmpty) {
+        accountName = [
+          apiText(row['first_name']),
+          apiText(row['middle_name']),
+          apiText(row['last_name']),
+        ].where((part) => part.isNotEmpty).join(' ').toLowerCase();
+      }
+      if (requestedId.isNotEmpty &&
+          (messagingId == requestedId || id == requestedId)) {
+        return true;
+      }
+      if (requestedUsername.isNotEmpty &&
+          accountUsername == requestedUsername) {
+        return true;
+      }
+      return requestedUsername.isEmpty &&
+          requestedName.isNotEmpty &&
+          accountName == requestedName;
+    }
+
+    Map<String, dynamic>? cachedMatch() {
+      for (final row in messagingContacts) {
+        if (matches(row)) return row;
+      }
+      for (final row in records('users')) {
+        if (matches(row)) return row;
+      }
+      return null;
+    }
+
+    Future<Map<String, dynamic>> publishContact(
+      Map<String, dynamic> row,
+    ) async {
+      final enriched = await _contactWithPublishedAvatar(row);
+      final id = apiRecordId(enriched);
+      final index = messagingContacts.indexWhere(
+        (candidate) => id.isNotEmpty && apiRecordId(candidate) == id,
+      );
+      if (index < 0) {
+        messagingContacts = <Map<String, dynamic>>[
+          ...messagingContacts,
+          enriched,
+        ];
+      } else if (!mapEquals(messagingContacts[index], enriched)) {
+        final updated = [...messagingContacts];
+        updated[index] = enriched;
+        messagingContacts = updated;
+      }
+      return enriched;
+    }
+
+    void cache(Map<String, dynamic> row) {
+      final users = collections.putIfAbsent(
+        'users',
+        () => <Map<String, dynamic>>[],
+      );
+      final id = apiRecordId(row);
+      final index = users.indexWhere(
+        (candidate) => id.isNotEmpty && apiRecordId(candidate) == id,
+      );
+      if (index < 0) {
+        users.add(row);
+      } else {
+        users[index] = row;
+      }
+    }
+
+    final cached = cachedMatch();
+    if (cached != null) return publishContact(cached);
+
+    if (requestedId.isNotEmpty) {
+      try {
+        final record = await detail('users', requestedId);
+        // Never replace a known messaging id with an unrelated profile row
+        // returned by a permissive/legacy detail route.
+        if (record != null && matches(record)) {
+          cache(record);
+          return publishContact(record);
+        }
+      } on ApiException catch (error) {
+        if (error.status != _HttpStatus.notFound &&
+            error.status != _HttpStatus.forbidden) {
+          rethrow;
+        }
+      }
+    }
+
+    final searches = <String>{
+      if (requestedUsername.isNotEmpty) requestedUsername,
+      if (requestedName.isNotEmpty) requestedName,
+    };
+    // The deployed messaging service publishes bridge-user ids and real
+    // presence here. It is a better source than `/users/` (which some roles
+    // cannot read) and avoids confusing profile ids with participant ids.
+    for (final search in searches) {
+      try {
+        final page = await client.list(
+          '/api/v1/messaging/contacts/',
+          query: {'search': search, 'page_size': 50},
+        );
+        messagingContacts = <Map<String, dynamic>>[
+          ...messagingContacts.where(
+            (cached) => !page.items.any(
+              (fresh) => apiRecordId(fresh) == apiRecordId(cached),
+            ),
+          ),
+          ...page.items,
+        ];
+        for (final row in page.items) {
+          if (matches(row)) return publishContact(row);
+        }
+      } on ApiException catch (error) {
+        // Keep compatibility with the supplied schema, which does not yet
+        // advertise this endpoint, by falling through to `/users/` only when
+        // contacts is genuinely unavailable to the current deployment/role.
+        if (error.status != _HttpStatus.notFound &&
+            error.status != _HttpStatus.forbidden &&
+            error.status != 405) {
+          rethrow;
+        }
+      }
+    }
+    for (final search in searches) {
+      final page = await client.list(
+        '/api/v1/users/',
+        query: {'search': search, 'page_size': 50},
+      );
+      for (final row in page.items) {
+        cache(row);
+        if (matches(row)) return publishContact(row);
+      }
+    }
+    return null;
+  }
+
   /// Update only the current account's published self-service fields.
   /// Role, permissions, username and activation state are intentionally not
   /// accepted here. Merging the response keeps permission metadata that some
   /// legacy deployments omit from PATCH while returning it from GET.
   Future<Map<String, dynamic>> updateMe(Map<String, Object?> changes) async {
-    const writable = <String>{
+    const serverWritable = <String>{
       'first_name',
       'last_name',
       'middle_name',
       'phone',
       'email',
-      'birthdate',
-      'gender',
     };
+    const optionalProfileFields = <String>{'birthdate', 'gender'};
+    final requestedOptional = changes.keys
+        .where(optionalProfileFields.contains)
+        .toSet();
+    if (requestedOptional.isNotEmpty && _serverProfileFields.isEmpty) {
+      final refreshed = _asMap(
+        await client.request('GET', '/api/v1/users/me/'),
+      );
+      if (refreshed == null) {
+        throw ApiException(
+          status: _HttpStatus.badGateway,
+          code: 'invalid_profile_response',
+          message: 'The server returned an invalid account profile.',
+          requestId: _requestId(),
+        );
+      }
+      _serverProfileFields = Set<String>.unmodifiable(refreshed.keys);
+      me = <String, dynamic>{...?me, ...refreshed};
+    }
+    final unsupported = requestedOptional.difference(_serverProfileFields);
+    if (unsupported.isNotEmpty) {
+      throw ApiException(
+        status: _HttpStatus.badRequest,
+        code: 'profile_field_not_supported',
+        message:
+            'This server does not support updating: ${unsupported.join(', ')}.',
+        errors: {
+          for (final field in unsupported)
+            field: ['This field is not published by /users/me/.'],
+        },
+        requestId: _requestId(),
+      );
+    }
     final body = <String, Object?>{
       for (final entry in changes.entries)
-        if (writable.contains(entry.key)) entry.key: entry.value,
+        if (serverWritable.contains(entry.key) ||
+            optionalProfileFields.contains(entry.key) &&
+                _serverProfileFields.contains(entry.key))
+          entry.key: entry.value,
     };
-    final result = _asMap(
-      await client.request('PATCH', '/api/v1/users/me/', body: body),
-    );
+    final result = body.isEmpty
+        ? null
+        : _asMap(
+            await client.request('PATCH', '/api/v1/users/me/', body: body),
+          );
     me = <String, dynamic>{...?me, ...?result};
+    if (result != null) {
+      _serverProfileFields = Set<String>.unmodifiable({
+        ..._serverProfileFields,
+        ...result.keys,
+      });
+    }
     await _persistSession();
     notifyListeners();
     return Map<String, dynamic>.unmodifiable(me!);
+  }
+
+  /// Whether the active `/users/me/` contract publishes a writable profile
+  /// field. Optional demographic inputs are hidden when a deployment does not
+  /// expose them, instead of allowing a form submission that must fail.
+  bool supportsProfileField(String field) {
+    const core = <String>{
+      'first_name',
+      'last_name',
+      'middle_name',
+      'phone',
+      'email',
+    };
+    return core.contains(field) ||
+        _serverProfileFields.contains(field) ||
+        (me?.containsKey(field) ?? false);
   }
 
   Future<dynamic> action(
@@ -3266,17 +3772,49 @@ class ApiSession extends ChangeNotifier {
     return _asMap(result);
   }
 
-  Future<ApiPage> threadMessages(Object threadId) {
+  Future<ApiPage> threadMessages(
+    Object threadId, {
+    int page = 1,
+    int pageSize = 50,
+  }) {
     final id = Uri.encodeComponent(threadId.toString().trim());
     if (id.isEmpty) {
       throw ArgumentError.value(threadId, 'threadId', 'Missing thread id');
     }
-    return client.list(
+    return client.listPage(
       '/api/v1/messaging/threads/$id/messages/',
-      // 50 is accepted by strict deployments that reject the former 100-row
-      // filter. [list] still follows the published numeric pagination.
-      query: const {'page_size': 50},
+      page: page,
+      pageSize: pageSize,
     );
+  }
+
+  /// Returns the backend's newest bounded message page.
+  ///
+  /// The deployed endpoint is oldest-first and currently ignores
+  /// `ordering=-created_at`. Page one therefore contains old messages in a
+  /// long conversation. Read it once for the authoritative page count and
+  /// request the last page when necessary.
+  Future<ApiPage> latestThreadMessages(
+    Object threadId, {
+    int pageSize = 50,
+  }) async {
+    final first = await threadMessages(threadId, page: 1, pageSize: pageSize);
+    final latestPage = first.pages;
+    if (latestPage <= 1) return first;
+    return threadMessages(threadId, page: latestPage, pageSize: pageSize);
+  }
+
+  Future<Map<String, dynamic>?> rereadThreadMessage(
+    Object threadId,
+    Object messageId,
+  ) async {
+    final wanted = messageId.toString().trim();
+    if (wanted.isEmpty) return null;
+    final page = await latestThreadMessages(threadId);
+    for (final row in page.items) {
+      if (apiRecordId(row) == wanted) return row;
+    }
+    return null;
   }
 
   Future<Map<String, dynamic>?> sendThreadMessage(
@@ -3292,13 +3830,61 @@ class ApiSession extends ChangeNotifier {
     if (body.isEmpty && attachments.isEmpty) {
       throw ArgumentError.value(text, 'text', 'Message is empty');
     }
-    final result = await action(
+    final result = await client.request(
       'POST',
       '/api/v1/messaging/threads/$id/messages/',
       body: {'body': body, 'attachments': attachments},
-      refreshResources: const ['threads'],
     );
     return _asMap(result);
+  }
+
+  Future<Map<String, dynamic>?> editMessage(
+    Object messageId,
+    String text,
+  ) async {
+    final id = Uri.encodeComponent(messageId.toString().trim());
+    final body = text.trim();
+    if (id.isEmpty || body.isEmpty) {
+      throw ArgumentError('Message id and body are required');
+    }
+    return _asMap(
+      await client.request(
+        'PATCH',
+        '/api/v1/messaging/messages/$id/',
+        body: {'body': body},
+      ),
+    );
+  }
+
+  Future<void> deleteServerMessage(Object messageId) async {
+    final id = Uri.encodeComponent(messageId.toString().trim());
+    if (id.isEmpty) throw ArgumentError('Message id is required');
+    await client.request('DELETE', '/api/v1/messaging/messages/$id/');
+  }
+
+  Future<void> addMessageReaction(Object messageId, String emoji) async {
+    final id = Uri.encodeComponent(messageId.toString().trim());
+    final value = emoji.trim();
+    if (id.isEmpty || value.isEmpty) {
+      throw ArgumentError('Message id and emoji are required');
+    }
+    await client.request(
+      'POST',
+      '/api/v1/messaging/messages/$id/reactions/',
+      body: {'emoji': value},
+    );
+  }
+
+  Future<void> removeMessageReaction(Object messageId, String emoji) async {
+    final id = Uri.encodeComponent(messageId.toString().trim());
+    final value = Uri.encodeComponent(emoji.trim());
+    if (id.isEmpty || value.isEmpty) {
+      throw ArgumentError('Message id and emoji are required');
+    }
+    await client.request(
+      'DELETE',
+      '/api/v1/messaging/messages/$id/reactions/$value/',
+    );
   }
 
   Future<void> markThreadRead(Object threadId) async {
@@ -3333,6 +3919,8 @@ class ApiSession extends ChangeNotifier {
         body: {
           'participant_ids': participantIds,
           if (subject.trim().isNotEmpty) 'subject': subject.trim(),
+          if (firstBody.trim().isNotEmpty) 'first_body': firstBody.trim(),
+          if (attachments.isNotEmpty) 'attachments': attachments,
         },
       ),
     );
@@ -3348,10 +3936,15 @@ class ApiSession extends ChangeNotifier {
         requestId: _requestId(),
       );
     }
-    if (firstBody.trim().isNotEmpty || attachments.isNotEmpty) {
-      await sendThreadMessage(threadId, firstBody, attachments: attachments);
-    } else {
+    // `first_body` makes creation atomic: a network failure can no longer
+    // leave an empty direct thread followed by a duplicate retry. The current
+    // backend creates the first message in the same transaction.
+    try {
       await refresh('threads', force: true);
+    } on ApiException {
+      // The atomic POST already created both the direct thread and its first
+      // message. A transient/rate-limited follow-up refresh must not turn that
+      // success into a retryable failure and create a duplicate conversation.
     }
     return result;
   }
@@ -3361,14 +3954,59 @@ class ApiSession extends ChangeNotifier {
     required String contentType,
     required Uint8List bytes,
   }) async {
-    throw ApiException(
-      status: 501,
-      code: 'messaging_attachments_unpublished',
-      message:
-          'This server does not publish chat attachment uploads yet. '
-          'You can still send text messages.',
-      requestId: _requestId(),
+    final grant = _asMap(
+      await client.request(
+        'POST',
+        '/api/v1/messaging/attachments/upload-url/',
+        body: {
+          'filename': filename,
+          'content_type': contentType,
+          'size_bytes': bytes.length,
+        },
+      ),
     );
+    final url = apiText(grant?['url']);
+    final key = apiText(grant?['key']);
+    final rawFields = grant?['fields'];
+    final fields = rawFields is Map
+        ? <String, String>{
+            for (final entry in rawFields.entries)
+              '${entry.key}': '${entry.value}',
+          }
+        : const <String, String>{};
+    final method = apiText(
+      apiValue(grant ?? const <String, dynamic>{}, const [
+        'method',
+        'http_method',
+        'upload_method',
+      ]),
+      fallback: fields.isEmpty ? 'PUT' : 'POST',
+    ).toUpperCase();
+    if (url.isEmpty || key.isEmpty || (method != 'POST' && method != 'PUT')) {
+      throw ApiException(
+        status: _HttpStatus.badGateway,
+        code: 'invalid_upload_grant',
+        message: 'The server returned an invalid attachment upload grant.',
+        requestId: _requestId(),
+      );
+    }
+    if (method == 'PUT') {
+      await client.uploadPutBytes(
+        url,
+        bytes,
+        contentType: contentType,
+        headers: fields,
+      );
+    } else {
+      await client.uploadMultipartBytes(
+        url,
+        bytes,
+        filename: filename,
+        contentType: contentType,
+        fields: fields,
+      );
+    }
+    return key;
   }
 
   Future<String> messageAttachmentDownloadUrl(
@@ -3380,14 +4018,26 @@ class ApiSession extends ChangeNotifier {
     if (id.isEmpty || value.isEmpty) {
       throw ArgumentError('Thread id and attachment key are required');
     }
-    final uri = Uri.tryParse(value);
-    if (uri != null && uri.hasScheme && uri.hasAuthority) return value;
-    throw ApiException(
-      status: 501,
-      code: 'messaging_attachment_download_unpublished',
-      message: 'This server did not publish a download URL for the attachment.',
-      requestId: _requestId(),
+    final direct = Uri.tryParse(value);
+    if (direct != null && direct.hasScheme && direct.hasAuthority) return value;
+    final result = _asMap(
+      await client.request(
+        'GET',
+        '/api/v1/messaging/threads/$id/attachments/download/',
+        query: {'key': value},
+      ),
     );
+    final url = apiText(result?['url']);
+    final parsed = Uri.tryParse(url);
+    if (parsed == null || !parsed.hasScheme || !parsed.hasAuthority) {
+      throw ApiException(
+        status: _HttpStatus.badGateway,
+        code: 'invalid_attachment_download',
+        message: 'The server did not return an attachment download URL.',
+        requestId: _requestId(),
+      );
+    }
+    return url;
   }
 
   Future<void> setThreadMuted(Object threadId, bool muted) async {
@@ -3484,6 +4134,7 @@ class ApiSession extends ChangeNotifier {
       messagingContacts = const [];
       messagingSelfUserId = null;
       me = null;
+      _serverProfileFields = const {};
       _clearRequestState();
       await _clearPersistedSession();
       loading = false;

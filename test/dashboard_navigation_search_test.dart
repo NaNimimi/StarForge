@@ -1,3 +1,4 @@
+import 'package:ceo_manager/api_client.dart';
 import 'package:ceo_manager/console.dart';
 import 'package:ceo_manager/data.dart';
 import 'package:ceo_manager/screens.dart';
@@ -8,21 +9,35 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-Widget _dashboardHost(AppStore store) => SettingsScope(
-  settings: AppSettings(),
-  child: AppScope(
-    store: store,
-    child: MaterialApp(
-      theme: sfMaterialTheme(SfColors.light, dark: false),
-      home: SfTheme(
-        colors: SfColors.light,
-        child: Scaffold(
-          body: DashboardScreen(cfg: kRoleConfigs[SfRole.ceo]!, go: (_) {}),
+class _DashboardClient extends StarforgeApiClient {
+  _DashboardClient() {
+    configure(baseUrl: 'https://api.test', token: 'dashboard-session');
+  }
+}
+
+Widget _dashboardHost(
+  AppStore store, {
+  AppSettings? settings,
+  ApiSession? session,
+}) {
+  final appSettings = settings ?? AppSettings();
+  final content = SettingsScope(
+    settings: appSettings,
+    child: AppScope(
+      store: store,
+      child: MaterialApp(
+        theme: sfMaterialTheme(SfColors.light, dark: false),
+        home: SfTheme(
+          colors: SfColors.light,
+          child: Scaffold(
+            body: DashboardScreen(cfg: kRoleConfigs[SfRole.ceo]!, go: (_) {}),
+          ),
         ),
       ),
     ),
-  ),
-);
+  );
+  return session == null ? content : ApiScope(session: session, child: content);
+}
 
 Widget _consoleHost(AppStore store) => SettingsScope(
   settings: AppSettings(layout: 2),
@@ -146,4 +161,101 @@ void main() {
     expect(find.text('Tanlangan 6 oy jami'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'authenticated Russian dashboard hides Live control and keeps empty attendance still',
+    (tester) async {
+      _surface(tester, const Size(430, 1000));
+      final session = ApiSession(client: _DashboardClient())
+        ..me = const {'id': 1, 'role': 'ceo', 'full_name': 'CEO'};
+      addTearDown(session.dispose);
+      await tester.pumpWidget(
+        _dashboardHost(
+          AppStore.seed(SfRole.ceo),
+          settings: AppSettings(lang: SfLang.ru),
+          session: session,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('LIVE'), findsNothing);
+      expect(find.textContaining('Live'), findsNothing);
+      expect(find.text('СЕГОДНЯ / ЦЕНТР УПРАВЛЕНИЯ'), findsOneWidget);
+
+      final attendance = find.byKey(
+        const ValueKey('dashboard-attendance-health'),
+      );
+      for (var index = 0; index < 8 && attendance.evaluate().isEmpty; index++) {
+        await tester.drag(find.byType(Scrollable).first, const Offset(0, -600));
+        await tester.pumpAndSettle();
+      }
+      expect(attendance, findsOneWidget);
+
+      final progress = tester.widget<LinearProgressIndicator>(
+        find.byKey(const ValueKey('dashboard-attendance-progress')),
+      );
+      expect(progress.value, 0);
+      expect(find.text('Данных о посещаемости пока нет'), findsOneWidget);
+      expect(find.text('Рейтинг преподавателей'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'live dashboard shows newest backend activity in plain language',
+    (tester) async {
+      _surface(tester, const Size(430, 1000));
+      final store = AppStore.empty(SfRole.ceo)
+        ..activities.addAll(const [
+          ActivityEvent(
+            icon: Icons.person_rounded,
+            title: 'login',
+            detail: 'ceo · users.User #10',
+            time: '13:10',
+            kind: 'users.User',
+          ),
+          ActivityEvent(
+            icon: Icons.policy_outlined,
+            title: 'update',
+            detail: 'ceo · org.StaffProfile #10',
+            time: '13:09',
+            kind: 'org.StaffProfile',
+          ),
+        ]);
+      final session = ApiSession(client: _DashboardClient())
+        ..me = const {
+          'id': 1,
+          'role': 'ceo',
+          'full_name': 'CEO',
+          'permissions': ['audit:read'],
+        };
+      addTearDown(store.dispose);
+      addTearDown(session.dispose);
+
+      await tester.pumpWidget(
+        _dashboardHost(
+          store,
+          settings: AppSettings(lang: SfLang.ru),
+          session: session,
+        ),
+      );
+      await tester.pump();
+
+      final activity = find.byKey(const ValueKey('dashboard-recent-activity'));
+      await tester.dragUntilVisible(
+        activity,
+        find.byType(Scrollable).first,
+        const Offset(0, -500),
+      );
+      await tester.pumpAndSettle();
+
+      expect(activity, findsOneWidget);
+      expect(find.text('Последние события'), findsOneWidget);
+      expect(find.text('Из журнала backend'), findsOneWidget);
+      expect(find.text('Вход в систему'), findsOneWidget);
+      expect(find.text('Данные изменены'), findsOneWidget);
+      expect(find.text('ceo · users.User #10 · 13:10'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

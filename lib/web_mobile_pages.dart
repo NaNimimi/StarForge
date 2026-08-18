@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'api_client.dart';
+import 'api_store_adapter.dart';
 import 'data.dart';
 import 'i18n.dart';
 import 'reference_ui.dart';
@@ -1886,10 +1888,69 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
   int _folder = 0;
   int _page = 1;
   final int _pageSize = 1000000;
+  bool _loadingContacts = false;
 
   Future<void> _openConversationPicker(AppStore store) async {
     final c = SfTheme.of(context);
-    final index = await showModalBottomSheet<int>(
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (_loadingContacts) return;
+    if (session?.authenticated == true) {
+      setState(() => _loadingContacts = true);
+      try {
+        await session!.refresh('threads', force: true);
+        if (mounted) syncProductStoreFromApi(session, store);
+      } on ApiException catch (error) {
+        // Cached threads and contacts remain usable while offline. Only show
+        // the refresh failure when there is nothing useful to present.
+        if (mounted &&
+            store.threads.isEmpty &&
+            session!.messagingContacts.isEmpty) {
+          ScaffoldMessenger.of(context)
+            ..clearSnackBars()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(error.message),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+        }
+      } finally {
+        if (mounted) setState(() => _loadingContacts = false);
+      }
+    }
+    if (!mounted) return;
+    final liveContacts = session?.authenticated == true
+        ? session!.messagingContacts
+        : const <Map<String, dynamic>>[];
+    String contactId(Map<String, dynamic> contact) =>
+        apiText(apiValue(contact, const ['user_id', 'account_id', 'id', 'pk']));
+    String contactName(Map<String, dynamic> contact) => apiText(
+      apiValue(contact, const [
+        'display_name',
+        'full_name',
+        'name',
+        'username',
+      ]),
+      fallback: 'Контакт',
+    );
+    final selfId = '${session?.messagingSelfUserId ?? ''}';
+    final threadedParticipants = <String>{};
+    for (final thread in store.threads) {
+      if (thread.meta.isGroup) continue;
+      final participants = thread.meta.participantIds
+          .where((id) => id.isNotEmpty && id != selfId)
+          .toSet();
+      if (participants.length == 1) {
+        threadedParticipants.add(participants.single);
+      }
+    }
+    final availableContacts = liveContacts
+        .where((contact) {
+          final id = contactId(contact);
+          return id.isNotEmpty && !threadedParticipants.contains(id);
+        })
+        .toList(growable: false);
+    final target = await showModalBottomSheet<Object>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -1924,28 +1985,95 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
                     padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
                     child: RefSectionHeader(
                       title: 'Начать разговор',
-                      subtitle: '${store.threads.length} доступных контактов',
+                      subtitle:
+                          '${store.threads.length + availableContacts.length} доступных контактов',
                     ),
                   ),
                   Expanded(
-                    child: ListView.separated(
-                      controller: controller,
-                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
-                      itemCount: store.threads.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 7),
-                      itemBuilder: (context, index) {
-                        final thread = store.threads[index].meta;
-                        return RefStatusTile(
-                          icon: thread.isGroup
-                              ? Icons.groups_rounded
-                              : Icons.person_outline_rounded,
-                          title: thread.name,
-                          subtitle: thread.group,
-                          tone: RefMetricTone.neutral,
-                          onTap: () => Navigator.of(sheetContext).pop(index),
-                        );
-                      },
-                    ),
+                    child: store.threads.isEmpty && availableContacts.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Text(
+                                'Backend не вернул доступных контактов',
+                                textAlign: TextAlign.center,
+                                style: RefType.ui(size: 12, color: c.muted),
+                              ),
+                            ),
+                          )
+                        : ListView(
+                            controller: controller,
+                            padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+                            children: [
+                              if (store.threads.isNotEmpty) ...[
+                                RefSectionHeader(
+                                  title: 'Существующие диалоги',
+                                  subtitle: '${store.threads.length}',
+                                ),
+                                const SizedBox(height: 7),
+                                for (
+                                  var index = 0;
+                                  index < store.threads.length;
+                                  index++
+                                ) ...[
+                                  Builder(
+                                    builder: (context) {
+                                      final thread = store.threads[index].meta;
+                                      return RefStatusTile(
+                                        icon: thread.isGroup
+                                            ? Icons.groups_rounded
+                                            : Icons.person_outline_rounded,
+                                        title: thread.name,
+                                        subtitle: thread.group,
+                                        tone: RefMetricTone.neutral,
+                                        onTap: () => Navigator.of(
+                                          sheetContext,
+                                        ).pop(index),
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(height: 7),
+                                ],
+                              ],
+                              if (availableContacts.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                RefSectionHeader(
+                                  title: 'Новый диалог',
+                                  subtitle: '${availableContacts.length}',
+                                ),
+                                const SizedBox(height: 7),
+                                for (final contact in availableContacts) ...[
+                                  RefStatusTile(
+                                    key: ValueKey(
+                                      'messaging-contact-${contactId(contact)}',
+                                    ),
+                                    icon:
+                                        apiText(
+                                          apiValue(contact, const [
+                                            'principal_kind',
+                                            'category',
+                                          ]),
+                                        ).toLowerCase().contains('teacher')
+                                        ? Icons.school_outlined
+                                        : Icons.badge_outlined,
+                                    title: contactName(contact),
+                                    subtitle: apiText(
+                                      apiValue(contact, const [
+                                        'role_label',
+                                        'principal_kind',
+                                        'username',
+                                      ]),
+                                      fallback: 'Сотрудник',
+                                    ),
+                                    tone: RefMetricTone.primary,
+                                    onTap: () =>
+                                        Navigator.of(sheetContext).pop(contact),
+                                  ),
+                                  const SizedBox(height: 7),
+                                ],
+                              ],
+                            ],
+                          ),
                   ),
                 ],
               ),
@@ -1954,10 +2082,22 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
         ),
       ),
     );
-    if (index == null || !mounted) return;
-    await Navigator.of(
-      context,
-    ).push(sfPageRoute(ChatScreen(threadIdx: index, colors: c)));
+    if (target == null || !mounted) return;
+    if (target is int) {
+      await Navigator.of(
+        context,
+      ).push(sfPageRoute(ChatScreen(threadIdx: target, colors: c)));
+      return;
+    }
+    if (target is Map) {
+      final contact = Map<String, dynamic>.from(target);
+      await openDirectMessagingContact(
+        context,
+        userId: contactId(contact),
+        username: apiText(apiValue(contact, const ['username', 'login'])),
+        fullName: contactName(contact),
+      );
+    }
   }
 
   @override
@@ -2003,11 +2143,17 @@ class _WebMessagesPageState extends State<WebMessagesPage> {
           title: 'Xabarlar',
           subtitle: 'Muloqotlar va ichki kanallar',
           actions: [
-            RefIconAction(
-              icon: Icons.edit_outlined,
-              tooltip: 'Yangi xabar',
-              onPressed: () => _openConversationPicker(store),
-            ),
+            if (store.role != SfRole.audit)
+              RefIconAction(
+                key: const ValueKey('messages-new-conversation'),
+                icon: _loadingContacts
+                    ? Icons.sync_rounded
+                    : Icons.edit_outlined,
+                tooltip: 'Yangi xabar',
+                onPressed: _loadingContacts
+                    ? null
+                    : () => _openConversationPicker(store),
+              ),
           ],
         ),
         Expanded(
@@ -2585,22 +2731,16 @@ class _WebEmpty extends StatelessWidget {
   final IconData icon;
   final String text;
   @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return RefSurfaceCard(
-      padding: const EdgeInsets.symmetric(vertical: 34, horizontal: 16),
-      child: Column(
-        children: [
-          Icon(icon, size: 30, color: c.muted),
-          const SizedBox(height: 10),
-          Text(
-            text,
-            style: RefType.ui(size: 13, weight: FontWeight.w700, color: c.ink2),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RefEmptyState(
+    icon: icon,
+    title: tx(
+      context,
+      uz: 'Hozircha ma’lumot yo‘q',
+      ru: 'Пока нет данных',
+      en: 'Nothing here yet',
+    ),
+    message: text,
+  );
 }
 
 void _showInfo(BuildContext context, String title, String message) {

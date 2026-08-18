@@ -9,16 +9,19 @@ class PersistedApiSession {
     required this.baseUrl,
     required this.token,
     required this.profile,
+    this.serverProfileFields = const <String>[],
   });
 
   final String baseUrl;
   final String token;
   final Map<String, dynamic> profile;
+  final List<String> serverProfileFields;
 
   Map<String, dynamic> toJson() => {
     'base_url': baseUrl,
     'token': token,
     'profile': profile,
+    'server_profile_fields': serverProfileFields,
   };
 
   static PersistedApiSession? fromJson(Object? value) {
@@ -32,6 +35,12 @@ class PersistedApiSession {
       baseUrl: baseUrl,
       token: token,
       profile: Map<String, dynamic>.from(rawProfile),
+      serverProfileFields:
+          (map['server_profile_fields'] as List?)
+              ?.map((value) => '$value'.trim())
+              .where((value) => value.isNotEmpty)
+              .toList(growable: false) ??
+          const <String>[],
     );
   }
 }

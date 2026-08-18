@@ -107,7 +107,7 @@ void main() {
               serverId: '91',
               participantIds: ['7', '8'],
             ),
-            const [ChatMsg('Cached preview', mine: false)],
+            [ChatMsg('Cached preview', mine: false)],
           ),
         );
       addTearDown(session.dispose);
@@ -140,11 +140,40 @@ void main() {
       );
       expect(find.byType(TextField), findsOneWidget);
       expect(find.byIcon(Icons.send_rounded), findsNothing);
+      expect(find.byKey(const ValueKey('chat-send-action')), findsNothing);
+      expect(find.byKey(const ValueKey('chat-voice-action')), findsNothing);
+      expect(find.byKey(const ValueKey('chat-attachment')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('messages-new-conversation')),
+        findsNothing,
+      );
+      expect(find.text('👍'), findsNothing);
       expect(
         client.calls,
         contains(('GET', '/api/v1/messaging/threads/91/messages/')),
       );
       expect(client.calls.every((call) => call.$1 == 'GET'), isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'shared messages resolver keeps audit on oversight instead of writable chat',
+    (tester) async {
+      final page = buildAdminPage('messages', SfColors.light, SfRole.audit);
+      expect(page, isNotNull);
+
+      await _pumpPhone(tester, page!);
+
+      expect(find.textContaining('Audit rejimi'), findsOneWidget);
+      expect(find.textContaining('faqat o‘qish'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('messages-new-conversation')),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('chat-send-action')), findsNothing);
+      expect(find.byKey(const ValueKey('chat-voice-action')), findsNothing);
+      expect(find.byKey(const ValueKey('chat-attachment')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

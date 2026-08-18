@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
@@ -25,6 +25,7 @@ import 'i18n.dart';
 import 'modules.dart';
 import 'pages.dart';
 import 'live_pages.dart';
+import 'push_notification_service.dart';
 import 'reference_ui.dart';
 import 'widgets.dart';
 
@@ -1715,7 +1716,19 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                   : '12',
               icon: Icons.flag_rounded,
               tone: RefMetricTone.danger,
-              detail: live ? 'Intelligence risk API' : '3 ta yuqori',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'Xavf ma’lumotlari',
+                      ru: 'Данные о рисках',
+                      en: 'Risk intelligence',
+                    )
+                  : tx(
+                      context,
+                      uz: '3 ta yuqori',
+                      ru: '3 высоких',
+                      en: '3 high',
+                    ),
               onTap: () => go('anomalies'),
             ),
             RefMetricCard(
@@ -1724,8 +1737,18 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               icon: Icons.push_pin_rounded,
               tone: RefMetricTone.primary,
               detail: live
-                  ? 'Case endpoint hali e’lon qilinmagan'
-                  : '2 ta jiddiy',
+                  ? tx(
+                      context,
+                      uz: 'Ishlar bo‘yicha ma’lumot yo‘q',
+                      ru: 'Данных по делам пока нет',
+                      en: 'No case data yet',
+                    )
+                  : tx(
+                      context,
+                      uz: '2 ta jiddiy',
+                      ru: '2 серьёзных',
+                      en: '2 critical',
+                    ),
               onTap: () => go('cases'),
             ),
             RefMetricCard(
@@ -1733,7 +1756,19 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               value: live ? '—' : '2.4%',
               icon: Icons.analytics_outlined,
               tone: RefMetricTone.warning,
-              detail: live ? 'API bu KPI ni qaytarmadi' : 'tranzaksiyalar',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'Ko‘rsatkich hozircha mavjud emas',
+                      ru: 'Показатель пока недоступен',
+                      en: 'Metric is not available yet',
+                    )
+                  : tx(
+                      context,
+                      uz: 'tranzaksiyalar',
+                      ru: 'транзакции',
+                      en: 'transactions',
+                    ),
               onTap: () => go('anomalies'),
             ),
             RefMetricCard(
@@ -1741,7 +1776,14 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               value: live ? '—' : '96.8%',
               icon: Icons.shield_rounded,
               tone: RefMetricTone.success,
-              detail: live ? 'API bu KPI ni qaytarmadi' : '+1.2%',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'Ko‘rsatkich hozircha mavjud emas',
+                      ru: 'Показатель пока недоступен',
+                      en: 'Metric is not available yet',
+                    )
+                  : '+1.2%',
               onTap: () => go('cases'),
             ),
           ]
@@ -1752,7 +1794,12 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               icon: Icons.trending_up_rounded,
               tone: RefMetricTone.success,
               detail: live
-                  ? '${api.totalFor('payments') > 0 ? api.totalFor('payments') : payments.length} API to‘lov'
+                  ? tx(
+                      context,
+                      uz: '${api.totalFor('payments') > 0 ? api.totalFor('payments') : payments.length} ta to‘lov',
+                      ru: 'Платежей: ${api.totalFor('payments') > 0 ? api.totalFor('payments') : payments.length}',
+                      en: '${api.totalFor('payments') > 0 ? api.totalFor('payments') : payments.length} payments',
+                    )
                   : '+12.4%',
               onTap: () => go(ceo ? 'report' : 'payments'),
             ),
@@ -1761,7 +1808,14 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               value: '$students',
               icon: Icons.groups_rounded,
               tone: RefMetricTone.primary,
-              detail: live ? 'Backend ro‘yxati' : '+4.1%',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'O‘quvchilar ro‘yxati',
+                      ru: 'Список учеников',
+                      en: 'Student list',
+                    )
+                  : '+4.1%',
               onTap: () => go('students'),
             ),
             RefMetricCard(
@@ -1773,15 +1827,36 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                   : '$attendance%',
               icon: Icons.how_to_reg_rounded,
               tone: RefMetricTone.success,
-              detail: live ? 'Attendance records API' : '+0.8%',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'Davomat yozuvlari',
+                      ru: 'Записи посещаемости',
+                      en: 'Attendance records',
+                    )
+                  : '+0.8%',
               onTap: () => go('attendance'),
             ),
             RefMetricCard(
-              label: live ? 'Xodimlar' : tr(context, 'kpi_churn'),
+              label: live
+                  ? tx(context, uz: 'Xodimlar', ru: 'Сотрудники', en: 'Staff')
+                  : tr(context, 'kpi_churn'),
               value: live ? '${liveStaff.length}' : '3.4%',
               icon: live ? Icons.badge_rounded : Icons.trending_down_rounded,
               tone: live ? RefMetricTone.primary : RefMetricTone.danger,
-              detail: live ? 'Backend ro‘yxati' : 'Maqsad: < 4%',
+              detail: live
+                  ? tx(
+                      context,
+                      uz: 'Xodimlar ro‘yxati',
+                      ru: 'Список сотрудников',
+                      en: 'Staff list',
+                    )
+                  : tx(
+                      context,
+                      uz: 'Maqsad: < 4%',
+                      ru: 'Цель: < 4%',
+                      en: 'Target: < 4%',
+                    ),
               onTap: () => go(live ? 'teachers' : 'ai'),
             ),
             RefMetricCard(
@@ -1790,10 +1865,25 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               icon: Icons.account_balance_wallet_outlined,
               tone: RefMetricTone.warning,
               detail: live
-                  ? 'Student balances'
+                  ? tx(
+                      context,
+                      uz: 'O‘quvchilar balansi',
+                      ru: 'Балансы учеников',
+                      en: 'Student balances',
+                    )
                   : ceo
-                  ? '142 oila'
-                  : '38 oila',
+                  ? tx(
+                      context,
+                      uz: '142 oila',
+                      ru: '142 семьи',
+                      en: '142 families',
+                    )
+                  : tx(
+                      context,
+                      uz: '38 oila',
+                      ru: '38 семей',
+                      en: '38 families',
+                    ),
               onTap: () => go(
                 live
                     ? ceo
@@ -1804,7 +1894,12 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
             ),
             RefMetricCard(
               label: live
-                  ? 'O‘qituvchilar'
+                  ? tx(
+                      context,
+                      uz: 'O‘qituvchilar',
+                      ru: 'Преподаватели',
+                      en: 'Teachers',
+                    )
                   : ceo
                   ? tr(context, 'kpi_nps')
                   : tr(context, 'kpi_pending'),
@@ -1824,10 +1919,20 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                   ? RefMetricTone.accent
                   : RefMetricTone.warning,
               detail: live
-                  ? 'Jamoa va biriktirilgan guruhlar'
+                  ? tx(
+                      context,
+                      uz: 'Jamoa va biriktirilgan guruhlar',
+                      ru: 'Команда и закреплённые группы',
+                      en: 'Team and assigned groups',
+                    )
                   : ceo
-                  ? 'Ota-onalar'
-                  : "To'lov · ta'til",
+                  ? tx(context, uz: 'Ota-onalar', ru: 'Родители', en: 'Parents')
+                  : tx(
+                      context,
+                      uz: "To'lov · ta'til",
+                      ru: 'Платёж · отпуск',
+                      en: 'Payment · leave',
+                    ),
               onTap: () => go(
                 live
                     ? 'teachers'
@@ -1846,28 +1951,25 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
               : tr(context, ceo ? 'dash_eyebrow_ceo' : 'dash_eyebrow_manager'),
           title: title,
           subtitle: subtitle,
-          leading: RefPressable(
-            onPressed: () => Navigator.of(
-              context,
-            ).push(sfPageRoute(AvatarPickerScreen(colors: c))),
-            borderRadius: RefRadius.md,
-            semanticLabel: 'Profil rasmi',
-            child: SfAvatar(
-              name: cfg.who,
-              size: 38,
-              color: cfg.accent(c),
-              choice: store.avatarChoice,
-            ),
-          ),
           actions: [
             RefIconAction(
               icon: Icons.chat_bubble_outline_rounded,
-              tooltip: 'Xabarlar',
+              tooltip: tx(
+                context,
+                uz: 'Xabarlar',
+                ru: 'Сообщения',
+                en: 'Messages',
+              ),
               onPressed: () => go('messages'),
             ),
             RefIconAction(
               icon: Icons.notifications_none_rounded,
-              tooltip: 'Bildirishnomalar',
+              tooltip: tx(
+                context,
+                uz: 'Bildirishnomalar',
+                ru: 'Уведомления',
+                en: 'Notifications',
+              ),
               badge: unreadNotifications,
               onPressed: () => go('notifications'),
             ),
@@ -1890,13 +1992,18 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
           child: _CommandPulse(
             audit: audit,
-            live: live,
             revenue: live && payments.isEmpty ? '—' : fmtMoneyMln(revenue),
             students: students,
             signals: audit
                 ? (live ? api.records('studentRisk').length : 12)
                 : unreadNotifications,
-            onOpen: () => go(audit ? 'anomalies' : 'notifications'),
+            onOpen: () => go(
+              audit
+                  ? 'anomalies'
+                  : ceo
+                  ? 'report'
+                  : 'payments',
+            ),
           ),
         ),
         Padding(
@@ -1939,12 +2046,16 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                   ),
                 ),
               ),
-              if (!audit) ...[
+              if (!audit && !live) ...[
                 const SizedBox(height: 12),
-                _ReferenceDashboardContext(showBranches: ceo, live: live),
+                _ReferenceDashboardContext(showBranches: ceo),
               ],
               const SizedBox(height: 16),
-              RefAdaptiveGrid(children: metrics),
+              RefAdaptiveGrid(
+                children: audit
+                    ? metrics
+                    : [metrics[0], metrics[1], metrics[2], metrics[4]],
+              ),
               const SizedBox(height: 16),
               if (!audit)
                 _ReferenceRevenuePanel(
@@ -1956,40 +2067,25 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                 )
               else
                 _ReferenceAuditSignals(onTap: () => go('anomalies')),
-              const SizedBox(height: 12),
-              _ReferenceAiInsight(
-                quote: audit
-                    ? live
-                          ? '${api.records('studentRisk').length} ta live risk yozuvi mavjud. Tafsilotlar uchun Signal sahifasini oching.'
-                          : 'В Sebzor три сигнала: посещаемость, наличные и расхождение по карте.'
-                    : live
-                    ? 'Данные backend подключены. Откройте посещаемость и финансы из нужной карточки.'
-                    : 'AI ещё не подключен. Откройте ассистента, чтобы проверить backend и AI endpoint.',
-                onTap: () => go(
-                  audit
-                      ? 'anomalies'
-                      : ceo
-                      ? 'ai'
-                      : 'approvals',
-                ),
-                audit: audit,
-              ),
               const SizedBox(height: 20),
               if (audit)
                 _ReferenceAuditQueue(onTap: () => go('anomalies'))
               else ...[
-                _ReferenceTeacherRanking(
-                  store: store,
-                  colors: c,
-                  apiTeachers: live ? api.records('teachers') : null,
-                  onOpen: () => go('teachers'),
-                ),
-                const SizedBox(height: 20),
                 RefSectionHeader(
                   title: tr(context, 'card_branch_rank'),
                   subtitle: ceo
-                      ? 'Filiallar bo‘yicha joriy ko‘rsatkich'
-                      : 'Operatsion ustuvorliklar',
+                      ? tx(
+                          context,
+                          uz: 'Filiallar bo‘yicha joriy ko‘rsatkich',
+                          ru: 'Текущие показатели по филиалам',
+                          en: 'Current performance by branch',
+                        )
+                      : tx(
+                          context,
+                          uz: 'Operatsion ustuvorliklar',
+                          ru: 'Операционные приоритеты',
+                          en: 'Operational priorities',
+                        ),
                   trailing: TextButton(
                     onPressed: () => go(ceo ? 'branches' : 'groups'),
                     child: Text(
@@ -2006,9 +2102,18 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                 if (live)
                   RefStatusTile(
                     icon: Icons.account_tree_rounded,
-                    title: 'Filiallar',
-                    subtitle:
-                        '${api.records('branches').length} ta backend filiali',
+                    title: tx(
+                      context,
+                      uz: 'Filiallar',
+                      ru: 'Филиалы',
+                      en: 'Branches',
+                    ),
+                    subtitle: tx(
+                      context,
+                      uz: '${api.records('branches').length} ta filial',
+                      ru: 'Филиалов: ${api.records('branches').length}',
+                      en: '${api.records('branches').length} branches',
+                    ),
                     tone: RefMetricTone.primary,
                     trailing: const Icon(Icons.arrow_forward_rounded),
                     onTap: () => go(ceo ? 'branches' : 'groups'),
@@ -2026,7 +2131,12 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                 const SizedBox(height: 20),
                 RefSectionHeader(
                   title: tr(context, 'card_attendance_health'),
-                  subtitle: 'Bugungi holat',
+                  subtitle: tx(
+                    context,
+                    uz: 'Bugungi holat',
+                    ru: 'Состояние на сегодня',
+                    en: 'Today’s status',
+                  ),
                   trailing: TextButton(
                     onPressed: () => go('attendance'),
                     child: Text(
@@ -2047,12 +2157,37 @@ class _ReferenceDashboardPageState extends State<_ReferenceDashboardPage> {
                             : '${liveAttendance.toStringAsFixed(liveAttendance % 1 == 0 ? 0 : 1)}%'
                       : '91%',
                   subtitle: live
-                      ? '${api.records('attendanceRecords').length} ta attendance qaydi'
-                      : '72% yaxshi · 19% kuzatuv · 9% e’tibor',
+                      ? tx(
+                          context,
+                          uz: attendanceCount == 0
+                              ? 'Hozircha davomat ma’lumoti yo‘q'
+                              : '$attendanceCount ta davomat qaydi',
+                          ru: attendanceCount == 0
+                              ? 'Данных о посещаемости пока нет'
+                              : 'Записей посещаемости: $attendanceCount',
+                          en: attendanceCount == 0
+                              ? 'No attendance data yet'
+                              : '$attendanceCount attendance records',
+                        )
+                      : tx(
+                          context,
+                          uz: '72% yaxshi · 19% kuzatuv · 9% e’tibor',
+                          ru: '72% норма · 19% наблюдение · 9% внимание',
+                          en: '72% good · 19% watch · 9% attention',
+                        ),
                   fraction: attendance == null
-                      ? null
+                      ? 0
                       : (attendance / 100).clamp(0.0, 1.0).toDouble(),
                   onTap: () => go('attendance'),
+                ),
+              ],
+              if (!live || api.hasPermission('audit:read')) ...[
+                const SizedBox(height: 20),
+                _ReferenceRecentActivity(
+                  key: const ValueKey('dashboard-recent-activity'),
+                  events: store.activities,
+                  live: live,
+                  error: live ? api.resourceError('audit') : null,
                 ),
               ],
             ],
@@ -2398,7 +2533,6 @@ class _DashboardSearchSheetState extends State<_DashboardSearchSheet> {
 class _CommandPulse extends StatelessWidget {
   const _CommandPulse({
     required this.audit,
-    required this.live,
     required this.revenue,
     required this.students,
     required this.signals,
@@ -2406,7 +2540,6 @@ class _CommandPulse extends StatelessWidget {
   });
 
   final bool audit;
-  final bool live;
   final String revenue;
   final int students;
   final int signals;
@@ -2474,7 +2607,7 @@ class _CommandPulse extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < 410;
@@ -2500,9 +2633,12 @@ class _CommandPulse extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              live
-                                  ? 'LIVE CONTROL TOWER'
-                                  : 'TODAY / CONTROL TOWER',
+                              tx(
+                                context,
+                                uz: 'BUGUN / BOSHQARUV MARKAZI',
+                                ru: 'СЕГОДНЯ / ЦЕНТР УПРАВЛЕНИЯ',
+                                en: 'TODAY / CONTROL CENTER',
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: RefType.mono(
@@ -2516,7 +2652,12 @@ class _CommandPulse extends StatelessWidget {
                           RefPressable(
                             onPressed: onOpen,
                             borderRadius: RefRadius.pill,
-                            semanticLabel: 'Tafsilotlarni ochish',
+                            semanticLabel: tx(
+                              context,
+                              uz: 'Tafsilotlarni ochish',
+                              ru: 'Открыть подробности',
+                              en: 'Open details',
+                            ),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 11,
@@ -2538,37 +2679,83 @@ class _CommandPulse extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 11),
                       Text(
                         audit
-                            ? 'Signal va xavflar\nradardan chetda emas.'
-                            : 'Bugun nimani\nboshqarishingiz kerak.',
+                            ? tx(
+                                context,
+                                uz: 'Bugungi xavflar va tekshiruvlar',
+                                ru: 'Риски и проверки на сегодня',
+                                en: 'Today’s risks and reviews',
+                              )
+                            : tx(
+                                context,
+                                uz: 'Bugungi muhim ko‘rsatkichlar',
+                                ru: 'Важное на сегодня',
+                                en: 'Today’s essentials',
+                              ),
                         style: RefType.display(
-                          size: compact ? 33 : 39,
+                          size: compact ? 25 : 29,
                           color: foreground,
-                          height: .95,
+                          height: 1,
                         ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 14),
                       Wrap(
-                        spacing: 22,
-                        runSpacing: 14,
+                        spacing: compact ? 14 : 22,
+                        runSpacing: 11,
                         children: [
                           _CommandPulseStat(
                             value: audit ? '$signals' : revenue,
-                            label: audit ? 'ochiq signal' : 'bugungi oqim',
+                            label: audit
+                                ? tx(
+                                    context,
+                                    uz: 'ochiq signal',
+                                    ru: 'открытых сигналов',
+                                    en: 'open signals',
+                                  )
+                                : tx(
+                                    context,
+                                    uz: 'bugungi oqim',
+                                    ru: 'поток за сегодня',
+                                    en: 'today’s flow',
+                                  ),
                             color: c.accent,
                             foreground: foreground,
                           ),
                           _CommandPulseStat(
                             value: audit ? '96.8%' : '$students',
-                            label: audit ? 'compliance' : 'faol o‘quvchi',
+                            label: audit
+                                ? tx(
+                                    context,
+                                    uz: 'muvofiqlik',
+                                    ru: 'соответствие',
+                                    en: 'compliance',
+                                  )
+                                : tx(
+                                    context,
+                                    uz: 'faol o‘quvchi',
+                                    ru: 'активных учеников',
+                                    en: 'active students',
+                                  ),
                             color: c.primary.withValues(alpha: .92),
                             foreground: foreground,
                           ),
                           _CommandPulseStat(
                             value: audit ? '02' : '$signals',
-                            label: audit ? 'yuqori ustuvor' : 'yangi xabar',
+                            label: audit
+                                ? tx(
+                                    context,
+                                    uz: 'yuqori ustuvor',
+                                    ru: 'высокий приоритет',
+                                    en: 'high priority',
+                                  )
+                                : tx(
+                                    context,
+                                    uz: 'yangi xabar',
+                                    ru: 'новых сообщений',
+                                    en: 'new messages',
+                                  ),
                             color: c.warn,
                             foreground: foreground,
                           ),
@@ -2628,13 +2815,9 @@ class _CommandPulseStat extends StatelessWidget {
 }
 
 class _ReferenceDashboardContext extends StatelessWidget {
-  const _ReferenceDashboardContext({
-    required this.showBranches,
-    this.live = false,
-  });
+  const _ReferenceDashboardContext({required this.showBranches});
 
   final bool showBranches;
-  final bool live;
 
   String _short(DateTime date) {
     const months = [
@@ -2765,35 +2948,6 @@ class _ReferenceDashboardContext extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (live) {
-      return _ReferenceContextAction(
-        icon: Icons.cloud_done_outlined,
-        label: 'Live · область доступа backend',
-        onTap: () => _showDetailsSheet(
-          context,
-          title: 'Live-область данных',
-          subtitle: 'Параметры текущей API-сессии',
-          icon: Icons.cloud_done_outlined,
-          fields: const [
-            (
-              icon: Icons.security_rounded,
-              label: 'Доступ',
-              value: 'Определяется backend permissions',
-            ),
-            (
-              icon: Icons.account_tree_outlined,
-              label: 'Филиалы',
-              value: 'Только разрешённые API',
-            ),
-            (
-              icon: Icons.date_range_rounded,
-              label: 'Период',
-              value: 'Параметры live-запроса',
-            ),
-          ],
-        ),
-      );
-    }
     final store = AppScope.of(context);
     final items = <Widget>[
       _ReferenceContextAction(
@@ -3030,7 +3184,12 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Daromad ko‘rinishi',
+                            tx(
+                              context,
+                              uz: 'Daromad ko‘rinishi',
+                              ru: 'Динамика дохода',
+                              en: 'Revenue trend',
+                            ),
                             style: RefType.ui(
                               size: 14,
                               weight: FontWeight.w800,
@@ -3039,10 +3198,25 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
                           ),
                           Text(
                             widget.live
-                                ? '${widget.livePayments.length} ta live payment'
+                                ? tx(
+                                    context,
+                                    uz: '${widget.livePayments.length} ta to‘lov',
+                                    ru: 'Платежей: ${widget.livePayments.length}',
+                                    en: '${widget.livePayments.length} payments',
+                                  )
                                 : widget.ceo
-                                ? 'Barcha filiallar'
-                                : 'Joriy filial',
+                                ? tx(
+                                    context,
+                                    uz: 'Barcha filiallar',
+                                    ru: 'Все филиалы',
+                                    en: 'All branches',
+                                  )
+                                : tx(
+                                    context,
+                                    uz: 'Joriy filial',
+                                    ru: 'Текущий филиал',
+                                    en: 'Current branch',
+                                  ),
                             style: RefType.ui(size: 11, color: c.muted),
                           ),
                         ],
@@ -3067,8 +3241,12 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Tanlangan $_months oy jami'
-                '${widget.live ? ' · API to‘lovlari' : ''}',
+                tx(
+                  context,
+                  uz: 'Tanlangan $_months oy jami',
+                  ru: 'Итого за $_months месяцев',
+                  en: 'Total for $_months months',
+                ),
                 key: const ValueKey('dashboard-revenue-period-label'),
                 style: RefType.ui(
                   size: 12,
@@ -3080,7 +3258,12 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
               RefSegmentedControl<int>(
                 values: const [6, 12],
                 selected: _months,
-                labelOf: (value) => '$value oy',
+                labelOf: (value) => tx(
+                  context,
+                  uz: '$value oy',
+                  ru: '$value мес.',
+                  en: '$value mo.',
+                ),
                 onChanged: (value) => setState(() {
                   _months = value;
                   _selectedPoint = null;
@@ -3262,6 +3445,10 @@ class _ReferenceRevenuePanelState extends State<_ReferenceRevenuePanel> {
   }
 }
 
+// Retained as an opt-in dashboard building block; the compact default
+// dashboard intentionally does not render assistant content without a clear
+// user request.
+// ignore: unused_element
 class _ReferenceAiInsight extends StatelessWidget {
   const _ReferenceAiInsight({
     required this.quote,
@@ -3340,6 +3527,9 @@ class _ReferenceAiInsight extends StatelessWidget {
   }
 }
 
+// Kept for report/detail compositions only. Teacher ranking is deliberately
+// absent from the main dashboard and teacher directory.
+// ignore: unused_element
 class _ReferenceTeacherRanking extends StatelessWidget {
   const _ReferenceTeacherRanking({
     required this.store,
@@ -3384,14 +3574,29 @@ class _ReferenceTeacherRanking extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         RefSectionHeader(
-          title: 'O‘qituvchi reytingi',
+          title: tx(
+            context,
+            uz: 'O‘qituvchi reytingi',
+            ru: 'Рейтинг преподавателей',
+            en: 'Teacher ranking',
+          ),
           subtitle: apiTeachers == null
-              ? 'Eng barqaror natija ko‘rsatganlar'
-              : '${apiEntries.length} ta backend o‘qituvchisi',
+              ? tx(
+                  context,
+                  uz: 'Eng barqaror natija ko‘rsatganlar',
+                  ru: 'Самые стабильные результаты',
+                  en: 'Most consistent results',
+                )
+              : tx(
+                  context,
+                  uz: '${apiEntries.length} ta o‘qituvchi',
+                  ru: 'Преподавателей: ${apiEntries.length}',
+                  en: '${apiEntries.length} teachers',
+                ),
           trailing: TextButton(
             onPressed: onOpen,
             child: Text(
-              'Barchasi',
+              tx(context, uz: 'Barchasi', ru: 'Все', en: 'All'),
               style: RefType.ui(
                 size: 11.5,
                 weight: FontWeight.w700,
@@ -3416,7 +3621,12 @@ class _ReferenceTeacherRanking extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'Backend o‘qituvchi qaytarmadi',
+                    tx(
+                      context,
+                      uz: 'Hozircha o‘qituvchilar yo‘q',
+                      ru: 'Преподавателей пока нет',
+                      en: 'No teachers yet',
+                    ),
                     style: RefType.ui(size: 12, color: colors.muted),
                   ),
                 )
@@ -3558,8 +3768,12 @@ class _ReferenceBranchRank extends StatelessWidget {
         RefStatusTile(
           icon: Icons.account_tree_rounded,
           title: branch.name,
-          subtitle:
-              '${fmtMoneyMln(branch.revenue)} · ${branch.students} o‘quvchi',
+          subtitle: tx(
+            context,
+            uz: '${fmtMoneyMln(branch.revenue)} · ${branch.students} o‘quvchi',
+            ru: '${fmtMoneyMln(branch.revenue)} · учеников: ${branch.students}',
+            en: '${fmtMoneyMln(branch.revenue)} · ${branch.students} students',
+          ),
           tone: RefMetricTone.primary,
           trailing: RefPill(
             label: '${branch.attendance}%',
@@ -3594,6 +3808,7 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     return RefPressable(
+      key: const ValueKey('dashboard-attendance-health'),
       onPressed: onTap,
       borderRadius: RefRadius.lg,
       child: RefSurfaceCard(
@@ -3626,9 +3841,12 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    fraction == null
-                        ? 'Посещаемость ma’lumoti kutilmoqda'
-                        : 'Посещаемость holati',
+                    tx(
+                      context,
+                      uz: 'Davomat holati',
+                      ru: 'Состояние посещаемости',
+                      en: 'Attendance status',
+                    ),
                     style: RefType.ui(
                       size: 14,
                       weight: FontWeight.w800,
@@ -3639,7 +3857,8 @@ class _ReferenceAttendanceHealth extends StatelessWidget {
                   Text(subtitle, style: RefType.ui(size: 11.5, color: c.muted)),
                   const SizedBox(height: 9),
                   LinearProgressIndicator(
-                    value: fraction,
+                    key: const ValueKey('dashboard-attendance-progress'),
+                    value: fraction ?? 0,
                     minHeight: 6,
                     borderRadius: const BorderRadius.all(Radius.circular(5)),
                     color: c.success,
@@ -3770,6 +3989,179 @@ class _ReferenceAuditQueue extends StatelessWidget {
   );
 }
 
+String _activityDisplayTitle(BuildContext context, ActivityEvent event) {
+  final raw = event.title.trim();
+  final action = raw.toLowerCase().split('.').last.replaceAll('_', '-');
+  return switch (action) {
+    'login' => tx(
+      context,
+      uz: 'Tizimga kirildi',
+      ru: 'Вход в систему',
+      en: 'Signed in',
+    ),
+    'logout' => tx(
+      context,
+      uz: 'Tizimdan chiqildi',
+      ru: 'Выход из системы',
+      en: 'Signed out',
+    ),
+    'create' || 'created' || 'add' || 'added' => tx(
+      context,
+      uz: 'Yangi yozuv yaratildi',
+      ru: 'Создана новая запись',
+      en: 'Record created',
+    ),
+    'update' || 'updated' || 'change' || 'changed' => tx(
+      context,
+      uz: 'Ma’lumot yangilandi',
+      ru: 'Данные изменены',
+      en: 'Record updated',
+    ),
+    'delete' || 'deleted' || 'remove' || 'removed' => tx(
+      context,
+      uz: 'Yozuv o‘chirildi',
+      ru: 'Запись удалена',
+      en: 'Record deleted',
+    ),
+    'approve' || 'approved' => tx(
+      context,
+      uz: 'So‘rov tasdiqlandi',
+      ru: 'Запрос подтверждён',
+      en: 'Request approved',
+    ),
+    'reject' || 'rejected' => tx(
+      context,
+      uz: 'So‘rov rad etildi',
+      ru: 'Запрос отклонён',
+      en: 'Request rejected',
+    ),
+    _ =>
+      raw.isEmpty
+          ? tx(
+              context,
+              uz: 'Backend hodisasi',
+              ru: 'Событие backend',
+              en: 'Backend event',
+            )
+          : raw.replaceAll('_', ' '),
+  };
+}
+
+String _activityDisplayDetail(ActivityEvent event) {
+  final detail = event.detail.trim();
+  final time = event.time.trim();
+  if (detail.isEmpty) return time;
+  if (time.isEmpty || time == '—') return detail;
+  return '$detail · $time';
+}
+
+class _ReferenceRecentActivity extends StatelessWidget {
+  const _ReferenceRecentActivity({
+    super.key,
+    required this.events,
+    required this.live,
+    this.error,
+  });
+
+  final List<ActivityEvent> events;
+  final bool live;
+  final ApiException? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    final visible = events.take(3).toList(growable: false);
+    void openHistory() => Navigator.of(
+      context,
+    ).push(sfPageRoute(ActivityHistoryScreen(colors: c)));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RefSectionHeader(
+          title: tx(
+            context,
+            uz: 'So‘nggi hodisalar',
+            ru: 'Последние события',
+            en: 'Recent activity',
+          ),
+          subtitle: live
+              ? tx(
+                  context,
+                  uz: 'Backend audit jurnalidan',
+                  ru: 'Из журнала backend',
+                  en: 'From the backend audit log',
+                )
+              : tx(
+                  context,
+                  uz: 'Mahalliy ko‘rib chiqish',
+                  ru: 'Локальный предпросмотр',
+                  en: 'Local preview',
+                ),
+          trailing: TextButton(
+            onPressed: openHistory,
+            child: Text(
+              tr(context, 'link_all'),
+              style: RefType.ui(
+                size: 11.5,
+                weight: FontWeight.w700,
+                color: c.primary,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (visible.isEmpty)
+          RefStatusTile(
+            icon: error == null
+                ? Icons.history_toggle_off_rounded
+                : Icons.sync_problem_rounded,
+            title: error == null
+                ? tx(
+                    context,
+                    uz: 'Hozircha hodisalar yo‘q',
+                    ru: 'Пока событий нет',
+                    en: 'No activity yet',
+                  )
+                : tx(
+                    context,
+                    uz: 'Hodisalarni yangilab bo‘lmadi',
+                    ru: 'Не удалось обновить события',
+                    en: 'Could not refresh activity',
+                  ),
+            subtitle: error == null
+                ? tx(
+                    context,
+                    uz: 'Backendda yangi amal paydo bo‘lganda u shu yerda ko‘rinadi.',
+                    ru: 'Новое действие backend появится здесь автоматически.',
+                    en: 'New backend actions will appear here automatically.',
+                  )
+                : error!.message,
+            tone: error == null ? RefMetricTone.neutral : RefMetricTone.warning,
+            onTap: openHistory,
+          )
+        else
+          for (final event in visible) ...[
+            RefStatusTile(
+              icon: event.icon,
+              title: _activityDisplayTitle(context, event),
+              subtitle: _activityDisplayDetail(event),
+              tone: switch (event.kind.toLowerCase()) {
+                'payment' || 'payments' => RefMetricTone.success,
+                'audit' => RefMetricTone.warning,
+                _ => RefMetricTone.neutral,
+              },
+              trailing: const Icon(Icons.arrow_forward_rounded),
+              onTap: () => Navigator.of(context).push(
+                sfPageRoute(ActivityDetailScreen(event: event, colors: c)),
+              ),
+            ),
+            if (event != visible.last) const SizedBox(height: 8),
+          ],
+      ],
+    );
+  }
+}
+
 /// CEO-only decision feed at the bottom of the dashboard: teacher leaders and
 /// recent operational history are both tappable, instead of static screenshots.
 class _CeoDashboardExtras extends StatelessWidget {
@@ -3779,9 +4171,13 @@ class _CeoDashboardExtras extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = colors;
     final store = AppScope.of(context);
+    final live = ApiScope.maybeOf(context)?.notifier?.authenticated == true;
+    final recentEvents = store.activities.take(3).toList(growable: false);
     final topStudents = [...store.students]
       ..sort((a, b) {
-        final ratingOrder = studentRating(b).compareTo(studentRating(a));
+        final ratingOrder = (studentRating(b) ?? -1).compareTo(
+          studentRating(a) ?? -1,
+        );
         return ratingOrder != 0
             ? ratingOrder
             : b.attendance.compareTo(a.attendance);
@@ -3950,25 +4346,38 @@ class _CeoDashboardExtras extends StatelessWidget {
           child: Column(
             children: [
               const SfCardHeader('So‘nggi hodisalar'),
-              event(
-                Icons.trending_up_rounded,
-                c.success,
-                'Yangi to‘lov · 1.2 mln',
-                '2 daq',
-              ),
-              event(
-                Icons.notifications_active_rounded,
-                c.warn,
-                'Qarz eslatmasi yuborildi',
-                '14 daq',
-              ),
-              event(
-                Icons.flag_rounded,
-                c.danger,
-                'Audit flag · низкая посещаемость',
-                '2 soat',
-                last: true,
-              ),
+              if (live && recentEvents.isEmpty)
+                _emptyDataRow(context, c)
+              else if (live)
+                for (var i = 0; i < recentEvents.length; i++)
+                  event(
+                    recentEvents[i].icon,
+                    c.primary,
+                    _activityDisplayTitle(context, recentEvents[i]),
+                    recentEvents[i].time,
+                    last: i == recentEvents.length - 1,
+                  )
+              else ...[
+                event(
+                  Icons.trending_up_rounded,
+                  c.success,
+                  'Yangi to‘lov · 1.2 mln',
+                  '2 daq',
+                ),
+                event(
+                  Icons.notifications_active_rounded,
+                  c.warn,
+                  'Qarz eslatmasi yuborildi',
+                  '14 daq',
+                ),
+                event(
+                  Icons.flag_rounded,
+                  c.danger,
+                  'Audit flag · низкая посещаемость',
+                  '2 soat',
+                  last: true,
+                ),
+              ],
             ],
           ),
         ),
@@ -5127,6 +5536,7 @@ const _studentTones = {
   'debt': (PillTone.danger, 'Qarz'),
   'partial': (PillTone.warn, 'Qisman'),
   'left': (PillTone.neutral, 'Ketgan'),
+  'unknown': (PillTone.neutral, '—'),
 };
 
 String _studentPaymentLabel(BuildContext context, String status) =>
@@ -5135,6 +5545,12 @@ String _studentPaymentLabel(BuildContext context, String status) =>
       'debt' => tr(context, 'f_debtor'),
       'partial' => tr(context, 'f_partial'),
       'left' => tx(context, uz: 'Ketgan', ru: 'Выбыл(а)', en: 'Left'),
+      'unknown' => tx(
+        context,
+        uz: 'Ma’lumot yo‘q',
+        ru: 'Нет данных',
+        en: 'Not available',
+      ),
       _ => status,
     };
 
@@ -5150,15 +5566,39 @@ String studentTeacher(Student student) {
   return 'Nigora Karimova';
 }
 
-double studentRating(Student student) {
+double? studentRating(Student student) {
+  if (student.serverBacked) return student.rating;
   final debtPenalty = student.debt > 0 ? .18 : 0.0;
   return (3.9 + student.attendance / 100 - debtPenalty)
       .clamp(3.5, 5.0)
       .toDouble();
 }
 
-int studentAverageScore(Student student) =>
-    (student.attendance - (student.debt > 0 ? 5 : 1)).clamp(50, 100);
+int? studentAverageScore(Student student) => student.serverBacked
+    ? student.averageScore
+    : (student.attendance - (student.debt > 0 ? 5 : 1)).clamp(50, 100);
+
+String _studentAttendanceLabel(Student student) =>
+    student.attendanceKnown ? '${student.attendance}%' : '—';
+
+String _studentDebtLabel(Student student) => !student.debtKnown
+    ? '—'
+    : student.debt > 0
+    ? fmtMoneyShort(student.debt)
+    : '0';
+
+String _studentRatingLabel(Student student, {bool full = false}) {
+  final value = studentRating(student);
+  if (value == null) return '—';
+  return full
+      ? '★ ${value.toStringAsFixed(1)} / 5.0'
+      : value.toStringAsFixed(1);
+}
+
+String _studentAverageLabel(Student student) {
+  final value = studentAverageScore(student);
+  return value == null ? '—' : '$value%';
+}
 
 /// Maps "days since last parent call" to a tone + label key. Green ≤3 days,
 /// amber ≤14, red beyond — the recency-of-contact signal the founder wants
@@ -5203,10 +5643,12 @@ class _StudentsScreenState extends State<StudentsScreen>
   int pageSize = 1000000;
 
   bool _statusOk(Student s) => switch (statusSel) {
-    1 => s.debt > 0,
+    1 => s.debtKnown && s.debt > 0,
     2 => s.pay == 'paid',
     3 => s.pay == 'partial',
-    4 => s.attendance < 85 || s.debt >= 1000000,
+    4 =>
+      s.attendanceKnown && s.attendance < 85 ||
+          s.debtKnown && s.debt >= 1000000,
     5 => s.pay == 'left',
     _ => true,
   };
@@ -5545,6 +5987,66 @@ class _ReferenceStudentsPage extends StatelessWidget {
     final c = SfTheme.of(context);
     final enrolledRange = state.enrolledRange;
     final api = ApiScope.maybeOf(context)?.notifier;
+    final live = api?.authenticated == true;
+    final studentError = live ? api!.resourceError('students') : null;
+    final hasStudentSnapshot =
+        !live || api!.collections.containsKey('students');
+    if (live &&
+        (!hasStudentSnapshot || studentError != null) &&
+        AppScope.of(context).students.isEmpty) {
+      return ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          RefLargeHeader(
+            eyebrow: '0 ${tr(context, 'unit_student')}',
+            title: tr(context, 'students_title'),
+            subtitle: tx(
+              context,
+              uz: 'Backenddagi o‘quvchilar ro‘yxati',
+              ru: 'Список учеников из backend',
+              en: 'Student directory from the backend',
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+            child: studentError == null
+                ? RefLoadingState(
+                    title: tx(
+                      context,
+                      uz: 'O‘quvchilar yuklanmoqda',
+                      ru: 'Загружаем учеников',
+                      en: 'Loading students',
+                    ),
+                    message: tx(
+                      context,
+                      uz: 'Backenddagi barcha sahifalar tekshirilmoqda.',
+                      ru: 'Проверяем все страницы backend.',
+                      en: 'Checking every backend page.',
+                    ),
+                  )
+                : RefEmptyState(
+                    icon: Icons.cloud_off_rounded,
+                    title: tx(
+                      context,
+                      uz: 'O‘quvchilarni yuklab bo‘lmadi',
+                      ru: 'Не удалось загрузить учеников',
+                      en: 'Could not load students',
+                    ),
+                    message: studentError.message,
+                    actionLabel: tx(
+                      context,
+                      uz: 'Qayta urinish',
+                      ru: 'Повторить',
+                      en: 'Retry',
+                    ),
+                    onAction: () => unawaited(
+                      api!.refresh('students', force: true).catchError((_) {}),
+                    ),
+                  ),
+          ),
+        ],
+      );
+    }
     final all = api?.authenticated == true
         ? [...AppScope.of(context).students]
         : [...AppScope.of(context).students, ...kExitedStudents];
@@ -5625,7 +6127,8 @@ class _ReferenceStudentsPage extends StatelessWidget {
         (state.statusSel != 0 ? 1 : 0) +
         (state.callSel != 0 ? 1 : 0) +
         (state.branchSel != 0 ? 1 : 0) +
-        (state.levelSel != 0 ? 1 : 0);
+        (state.levelSel != 0 ? 1 : 0) +
+        (state.enrolledRange != null ? 1 : 0);
     final filters = [
       _StudentFilterGroup(
         label: tr(context, 'filter_status'),
@@ -5801,6 +6304,14 @@ class _ReferenceStudentsPage extends StatelessWidget {
                           child: _ReferenceStudentFilters(
                             activeCount: activeCount,
                             groups: filters,
+                            onReset: () => state._update(() {
+                              state.statusSel = 0;
+                              state.callSel = 0;
+                              state.branchSel = 0;
+                              state.levelSel = 0;
+                              state.enrolledRange = null;
+                              state.page = 1;
+                            }),
                           ),
                         )
                       : const SizedBox(
@@ -5913,10 +6424,12 @@ class _ReferenceStudentFilters extends StatelessWidget {
   const _ReferenceStudentFilters({
     required this.activeCount,
     required this.groups,
+    required this.onReset,
   });
 
   final int activeCount;
   final List<_StudentFilterGroup> groups;
+  final VoidCallback onReset;
 
   @override
   Widget build(BuildContext context) {
@@ -5951,8 +6464,18 @@ class _ReferenceStudentFilters extends StatelessWidget {
                   ),
                 ),
               ),
-              if (activeCount > 0)
+              if (activeCount > 0) ...[
                 RefPill(label: '$activeCount faol', tone: RefPillTone.primary),
+                const SizedBox(width: 6),
+                TextButton.icon(
+                  key: const ValueKey('students-reset-all-filters'),
+                  onPressed: onReset,
+                  icon: const Icon(Icons.restart_alt_rounded, size: 17),
+                  label: Text(
+                    tx(context, uz: 'Tozalash', ru: 'Сбросить', en: 'Reset'),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 14),
@@ -6104,45 +6627,29 @@ class _ReferenceStudentEmpty extends StatelessWidget {
   final bool hasQuery;
 
   @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: c.surface2,
-                shape: BoxShape.circle,
-              ),
-              child: SizedBox(
-                width: 66,
-                height: 66,
-                child: Icon(Icons.search_rounded, color: c.muted, size: 28),
-              ),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              hasQuery ? 'Hech narsa topilmadi' : 'Mos keladigan o‘quvchi yo‘q',
-              style: RefType.ui(
-                size: 17,
-                weight: FontWeight.w800,
-                color: c.ink,
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              'So‘rov yoki filtrlarni o‘zgartirib ko‘ring.',
-              textAlign: TextAlign.center,
-              style: RefType.ui(size: 12.5, color: c.muted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RefEmptyState(
+    icon: hasQuery ? Icons.search_off_rounded : Icons.person_search_rounded,
+    title: hasQuery
+        ? tx(
+            context,
+            uz: 'Hech narsa topilmadi',
+            ru: 'Ничего не найдено',
+            en: 'No results found',
+          )
+        : tx(
+            context,
+            uz: 'Mos o‘quvchilar yo‘q',
+            ru: 'Подходящих учеников пока нет',
+            en: 'No matching students yet',
+          ),
+    message: tx(
+      context,
+      uz: 'Qidiruv so‘rovini yoki tanlangan filtrlarni o‘zgartiring.',
+      ru: 'Измените поисковый запрос или выбранные фильтры.',
+      en: 'Try changing your search or selected filters.',
+    ),
+    compact: true,
+  );
 }
 
 class _ReferenceStudentCard extends StatelessWidget {
@@ -6163,7 +6670,9 @@ class _ReferenceStudentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final profile = studentProfile(student);
-    final attendanceColor = student.attendance >= 92
+    final attendanceColor = !student.attendanceKnown
+        ? c.muted
+        : student.attendance >= 92
         ? c.success
         : student.attendance >= 85
         ? c.warn
@@ -6181,7 +6690,7 @@ class _ReferenceStudentCard extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            SfAvatar(name: student.name, size: 42),
+            SfAvatar(name: student.name, size: 42, imageUrl: student.avatarUrl),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -6249,7 +6758,7 @@ class _ReferenceStudentCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '${student.attendance}%',
+                  _studentAttendanceLabel(student),
                   style: RefType.mono(
                     size: 13.5,
                     weight: FontWeight.w800,
@@ -6495,24 +7004,51 @@ List<Student> _studentsForFlow(
   List<Student> all,
   StudentFlowCategory category,
 ) {
-  final active = all.where((student) => student.pay != 'left').toList();
+  final active = all
+      .where(
+        (student) => !const {
+          'withdrawn',
+          'graduated',
+          'left',
+          'archived',
+          'inactive',
+        }.contains(student.lifecycleStatus.toLowerCase()),
+      )
+      .toList();
+  final admittedAfter = DateTime.now().subtract(const Duration(days: 30));
   return switch (category) {
-    StudentFlowCategory.newlyAdmitted => active.take(3).toList(),
+    StudentFlowCategory.newlyAdmitted => active.where((student) {
+      final enrolled = apiDate(student.enrolledAt);
+      return enrolled != null && !enrolled.isBefore(admittedAfter);
+    }).toList(),
     StudentFlowCategory.active => active,
     StudentFlowCategory.left =>
-      all.where((student) => student.pay == 'left').toList(),
+      all
+          .where(
+            (student) => const {
+              'withdrawn',
+              'left',
+              'archived',
+              'inactive',
+            }.contains(student.lifecycleStatus.toLowerCase()),
+          )
+          .toList(),
     StudentFlowCategory.graduated =>
-      active
-          .where((student) => student.attendance >= 95 && student.debt == 0)
+      all
+          .where(
+            (student) => student.lifecycleStatus.toLowerCase() == 'graduated',
+          )
           .toList(),
     StudentFlowCategory.risk =>
       active
           .where(
-            (student) => student.attendance < 85 || student.debt >= 1000000,
+            (student) =>
+                student.attendanceKnown && student.attendance < 85 ||
+                student.debtKnown && student.debt >= 1000000,
           )
           .toList(),
     StudentFlowCategory.debt =>
-      active.where((student) => student.debt > 0).toList(),
+      active.where((student) => student.debtKnown && student.debt > 0).toList(),
   };
 }
 
@@ -6758,7 +7294,7 @@ class _StudentRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              SfAvatar(name: s.name, size: 46),
+              SfAvatar(name: s.name, size: 46, imageUrl: s.avatarUrl),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -6962,7 +7498,7 @@ class StudentDetailScreen extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    SfAvatar(name: s.name, size: 62),
+                    SfAvatar(name: s.name, size: 62, imageUrl: s.avatarUrl),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
@@ -7215,15 +7751,17 @@ class StudentDetailScreen extends StatelessWidget {
               child: Column(
                 children: [
                   _InfoRow('O‘qituvchi', studentTeacher(s)),
+                  _InfoRow('Reyting', _studentRatingLabel(s, full: true)),
+                  _InfoRow('O‘rtacha baho', _studentAverageLabel(s)),
                   _InfoRow(
-                    'Reyting',
-                    '★ ${studentRating(s).toStringAsFixed(1)} / 5.0',
+                    'Uy vazifalari',
+                    s.serverBacked ? '—' : '18 / 20 topshirilgan',
                   ),
-                  _InfoRow('O‘rtacha baho', '${studentAverageScore(s)}%'),
-                  _InfoRow('Uy vazifalari', '18 / 20 topshirilgan'),
                   _InfoRow(
                     'Imtihonlar',
-                    '3 ta · oxirgisi ${studentAverageScore(s)}%',
+                    s.serverBacked
+                        ? '—'
+                        : '3 ta · oxirgisi ${_studentAverageLabel(s)}',
                     last: true,
                   ),
                 ],
@@ -7373,7 +7911,9 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
     final username =
         s.username ??
         '@${p.firstName.toLowerCase()}.${p.lastName.toLowerCase()}';
-    final attendanceColor = s.attendance >= 92
+    final attendanceColor = !s.attendanceKnown
+        ? colors.muted
+        : s.attendance >= 92
         ? colors.success
         : s.attendance >= 85
         ? colors.warn
@@ -7388,16 +7928,18 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
         ? colors.muted
         : colors.danger;
     final payment = _studentTones[s.pay]!;
-    final trend = <double>[
-      s.attendance.toDouble() - 7,
-      s.attendance.toDouble() - 3,
-      s.attendance.toDouble() - 5,
-      s.attendance.toDouble() - 1,
-      s.attendance.toDouble() - 3,
-      s.attendance.toDouble() + 1,
-      s.attendance.toDouble() - 2,
-      s.attendance.toDouble(),
-    ].map((value) => value.clamp(40, 100).toDouble()).toList();
+    final trend = s.serverBacked
+        ? const <double>[]
+        : <double>[
+            s.attendance.toDouble() - 7,
+            s.attendance.toDouble() - 3,
+            s.attendance.toDouble() - 5,
+            s.attendance.toDouble() - 1,
+            s.attendance.toDouble() - 3,
+            s.attendance.toDouble() + 1,
+            s.attendance.toDouble() - 2,
+            s.attendance.toDouble(),
+          ].map((value) => value.clamp(40, 100).toDouble()).toList();
     return SfTheme(
       colors: colors,
       child: Scaffold(
@@ -7444,7 +7986,11 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                           children: [
                             Row(
                               children: [
-                                SfAvatar(name: s.name, size: 64),
+                                SfAvatar(
+                                  name: s.name,
+                                  size: 64,
+                                  imageUrl: s.avatarUrl,
+                                ),
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Column(
@@ -7499,9 +8045,11 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                               children: [
                                 RefMetricCard(
                                   label: tr(context, 'stat_attendance'),
-                                  value: '${s.attendance}%',
+                                  value: _studentAttendanceLabel(s),
                                   icon: Icons.how_to_reg_rounded,
-                                  tone: s.attendance >= 92
+                                  tone: !s.attendanceKnown
+                                      ? RefMetricTone.neutral
+                                      : s.attendance >= 92
                                       ? RefMetricTone.success
                                       : s.attendance >= 85
                                       ? RefMetricTone.warning
@@ -7514,17 +8062,17 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                                 ),
                                 RefMetricCard(
                                   label: tr(context, 'stat_debt'),
-                                  value: s.debt > 0
-                                      ? fmtMoneyShort(s.debt)
-                                      : '0',
+                                  value: _studentDebtLabel(s),
                                   icon: Icons.account_balance_wallet_outlined,
-                                  tone: s.debt > 0
+                                  tone: !s.debtKnown
+                                      ? RefMetricTone.neutral
+                                      : s.debt > 0
                                       ? RefMetricTone.danger
                                       : RefMetricTone.success,
                                 ),
                                 RefMetricCard(
                                   label: tr(context, 'student_rating'),
-                                  value: studentRating(s).toStringAsFixed(1),
+                                  value: _studentRatingLabel(s),
                                   icon: Icons.star_rounded,
                                   tone: RefMetricTone.accent,
                                 ),
@@ -7608,9 +8156,15 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                   const SizedBox(height: 18),
                   RefSectionHeader(
                     title: tr(context, 'stu_trend'),
-                    subtitle:
-                        '${tr(context, 'attendance_estimated')} · '
-                        '${tr(context, 'attendance_last8')}',
+                    subtitle: trend.isEmpty
+                        ? tx(
+                            context,
+                            uz: 'Backend davrlar bo‘yicha ma’lumot bermadi',
+                            ru: 'Backend не вернул данные по периодам',
+                            en: 'The backend returned no period data',
+                          )
+                        : '${tr(context, 'attendance_estimated')} · '
+                              '${tr(context, 'attendance_last8')}',
                   ),
                   const SizedBox(height: 8),
                   RefSurfaceCard(
@@ -7626,26 +8180,45 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        InteractiveSparkline(
-                          key: const ValueKey('student-attendance-trend'),
-                          data: trend,
-                          color: attendanceColor,
-                          height: 58,
-                          labels: List.generate(
-                            trend.length,
-                            (index) =>
-                                '${tr(context, 'attendance_week')} ${index + 1}',
+                        if (trend.isEmpty)
+                          RefEmptyState(
+                            icon: Icons.query_stats_rounded,
+                            title: tx(
+                              context,
+                              uz: 'Davomat tarixi yo‘q',
+                              ru: 'Истории посещаемости пока нет',
+                              en: 'No attendance history yet',
+                            ),
+                            message: tx(
+                              context,
+                              uz: 'Yangi yozuvlar backenddan kelganda grafik paydo bo‘ladi.',
+                              ru: 'График появится после получения записей с backend.',
+                              en: 'The chart will appear when the backend returns records.',
+                            ),
+                            compact: true,
+                          )
+                        else ...[
+                          InteractiveSparkline(
+                            key: const ValueKey('student-attendance-trend'),
+                            data: trend,
+                            color: attendanceColor,
+                            height: 58,
+                            labels: List.generate(
+                              trend.length,
+                              (index) =>
+                                  '${tr(context, 'attendance_week')} ${index + 1}',
+                            ),
+                            valueFormatter: (value) => '${value.round()}%',
+                            selectionLabelBuilder: (index, label, value) =>
+                                '$label · ${value.round()}% · '
+                                '${tr(context, value >= 90 ? 'attendance_normal' : 'attendance_attention')}',
                           ),
-                          valueFormatter: (value) => '${value.round()}%',
-                          selectionLabelBuilder: (index, label, value) =>
-                              '$label · ${value.round()}% · '
-                              '${tr(context, value >= 90 ? 'attendance_normal' : 'attendance_attention')}',
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          tr(context, 'tap_chart_hint'),
-                          style: RefType.ui(size: 9.5, color: colors.muted),
-                        ),
+                          const SizedBox(height: 5),
+                          Text(
+                            tr(context, 'tap_chart_hint'),
+                            style: RefType.ui(size: 9.5, color: colors.muted),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -7711,123 +8284,195 @@ class _ReferenceStudentDetailPage extends StatelessWidget {
                       ),
                       _ReferenceDataRow(
                         tr(context, 'student_rating'),
-                        '★ ${studentRating(s).toStringAsFixed(1)} / 5.0',
+                        _studentRatingLabel(s, full: true),
                       ),
                       _ReferenceDataRow(
                         tr(context, 'student_average'),
-                        '${studentAverageScore(s)}%',
+                        _studentAverageLabel(s),
                       ),
                       _ReferenceDataRow(
                         tr(context, 'student_homework'),
-                        tx(
-                          context,
-                          uz: '18 / 20 topshirilgan',
-                          ru: '18 из 20 выполнено',
-                          en: '18 of 20 completed',
-                        ),
+                        s.serverBacked
+                            ? '—'
+                            : tx(
+                                context,
+                                uz: '18 / 20 topshirilgan',
+                                ru: '18 из 20 выполнено',
+                                en: '18 of 20 completed',
+                              ),
                       ),
                       _ReferenceDataRow(
                         tr(context, 'student_exams'),
-                        tx(
-                          context,
-                          uz: '3 ta · oxirgisi ${studentAverageScore(s)}%',
-                          ru: '3 · последний ${studentAverageScore(s)}%',
-                          en: '3 · latest ${studentAverageScore(s)}%',
-                        ),
+                        s.serverBacked
+                            ? '—'
+                            : tx(
+                                context,
+                                uz: '3 ta · oxirgisi ${_studentAverageLabel(s)}',
+                                ru: '3 · последний ${_studentAverageLabel(s)}',
+                                en: '3 · latest ${_studentAverageLabel(s)}',
+                              ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
                     title: tr(context, 'attendance_history').toUpperCase(),
-                    rows: [
-                      _ReferenceDataRow(
-                        tr(context, 'date_today'),
-                        tr(
-                          context,
-                          s.attendance >= 85
-                              ? 'attendance_present'
-                              : 'attendance_late',
-                        ),
-                      ),
-                      _ReferenceDataRow(
-                        tr(context, 'date_yesterday'),
-                        tr(context, 'attendance_present'),
-                      ),
-                      _ReferenceDataRow(
-                        tr(context, 'period_last30'),
-                        '${s.attendance}% · ${tr(context, s.attendance >= 90 ? 'status_stable' : 'attendance_attention')}',
-                      ),
-                    ],
+                    rows: s.serverBacked
+                        ? [
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Holat',
+                                ru: 'Состояние',
+                                en: 'Status',
+                              ),
+                              tx(
+                                context,
+                                uz: 'Backend tarixni qaytarmadi',
+                                ru: 'Backend не вернул историю',
+                                en: 'The backend returned no history',
+                              ),
+                            ),
+                          ]
+                        : [
+                            _ReferenceDataRow(
+                              tr(context, 'date_today'),
+                              tr(
+                                context,
+                                s.attendance >= 85
+                                    ? 'attendance_present'
+                                    : 'attendance_late',
+                              ),
+                            ),
+                            _ReferenceDataRow(
+                              tr(context, 'date_yesterday'),
+                              tr(context, 'attendance_present'),
+                            ),
+                            _ReferenceDataRow(
+                              tr(context, 'period_last30'),
+                              '${s.attendance}% · ${tr(context, s.attendance >= 90 ? 'status_stable' : 'attendance_attention')}',
+                            ),
+                          ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
                     title: tr(context, 'payment_history').toUpperCase(),
-                    rows: [
-                      _ReferenceDataRow(
-                        tx(
-                          context,
-                          uz: 'Iyul 2026',
-                          ru: 'Июль 2026',
-                          en: 'July 2026',
-                        ),
-                        s.debt > 0
-                            ? '${tr(context, 'status_pending')} · ${fmtMoney(s.debt)}'
-                            : tr(context, 'status_paid'),
-                        mono: s.debt > 0,
-                      ),
-                      _ReferenceDataRow(
-                        tx(
-                          context,
-                          uz: 'Iyun 2026',
-                          ru: 'Июнь 2026',
-                          en: 'June 2026',
-                        ),
-                        '${tr(context, 'status_paid')} · 600 000 so‘m',
-                      ),
-                      _ReferenceDataRow(
-                        tx(
-                          context,
-                          uz: 'May 2026',
-                          ru: 'Май 2026',
-                          en: 'May 2026',
-                        ),
-                        '${tr(context, 'status_paid')} · 600 000 so‘m',
-                      ),
-                    ],
+                    rows: s.serverBacked
+                        ? [
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Holat',
+                                ru: 'Состояние',
+                                en: 'Status',
+                              ),
+                              tx(
+                                context,
+                                uz: 'To‘lov yozuvlari topilmadi',
+                                ru: 'Платёжных записей пока нет',
+                                en: 'No payment records yet',
+                              ),
+                            ),
+                          ]
+                        : [
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Iyul 2026',
+                                ru: 'Июль 2026',
+                                en: 'July 2026',
+                              ),
+                              s.debt > 0
+                                  ? '${tr(context, 'status_pending')} · ${fmtMoney(s.debt)}'
+                                  : tr(context, 'status_paid'),
+                              mono: s.debt > 0,
+                            ),
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Iyun 2026',
+                                ru: 'Июнь 2026',
+                                en: 'June 2026',
+                              ),
+                              '${tr(context, 'status_paid')} · 600 000 so‘m',
+                            ),
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'May 2026',
+                                ru: 'Май 2026',
+                                en: 'May 2026',
+                              ),
+                              '${tr(context, 'status_paid')} · 600 000 so‘m',
+                            ),
+                          ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
                     title: tr(context, 'teacher_notes').toUpperCase(),
-                    rows: [
-                      _ReferenceDataRow(
-                        tr(context, 'date_today'),
-                        'Darsda faol, uy vazifasini vaqtida topshirdi.',
-                      ),
-                      const _ReferenceDataRow(
-                        '08.07.2026',
-                        'Keyingi mavzu bo‘yicha qo‘shimcha mashq tavsiya qilindi.',
-                      ),
-                    ],
+                    rows: s.serverBacked
+                        ? [
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Holat',
+                                ru: 'Состояние',
+                                en: 'Status',
+                              ),
+                              tx(
+                                context,
+                                uz: 'O‘qituvchi izohlari yo‘q',
+                                ru: 'Комментариев преподавателя пока нет',
+                                en: 'No teacher notes yet',
+                              ),
+                            ),
+                          ]
+                        : [
+                            _ReferenceDataRow(
+                              tr(context, 'date_today'),
+                              'Darsda faol, uy vazifasini vaqtida topshirdi.',
+                            ),
+                            const _ReferenceDataRow(
+                              '08.07.2026',
+                              'Keyingi mavzu bo‘yicha qo‘shimcha mashq tavsiya qilindi.',
+                            ),
+                          ],
                   ),
                   const SizedBox(height: 18),
                   _ReferenceDetailSection(
                     title: tr(context, 'recent_messages').toUpperCase(),
-                    rows: [
-                      _ReferenceDataRow(
-                        tr(context, 'stu_parents'),
-                        'Rahmat, uy vazifasini nazorat qilamiz.',
-                      ),
-                      _ReferenceDataRow(
-                        tx(
-                          context,
-                          uz: 'Administrator',
-                          ru: 'Администратор',
-                          en: 'Administrator',
-                        ),
-                        'Keyingi to‘lov muddati 20-iyul.',
-                      ),
-                    ],
+                    rows: s.serverBacked
+                        ? [
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Holat',
+                                ru: 'Состояние',
+                                en: 'Status',
+                              ),
+                              tx(
+                                context,
+                                uz: 'Xabarlar yo‘q',
+                                ru: 'Сообщений пока нет',
+                                en: 'No messages yet',
+                              ),
+                            ),
+                          ]
+                        : [
+                            _ReferenceDataRow(
+                              tr(context, 'stu_parents'),
+                              'Rahmat, uy vazifasini nazorat qilamiz.',
+                            ),
+                            _ReferenceDataRow(
+                              tx(
+                                context,
+                                uz: 'Administrator',
+                                ru: 'Администратор',
+                                en: 'Administrator',
+                              ),
+                              'Keyingi to‘lov muddati 20-iyul.',
+                            ),
+                          ],
                   ),
                 ],
               ),
@@ -7920,14 +8565,18 @@ Future<void> _showStudentAttendanceSummary(
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: student.attendance >= 90
+                    color: !student.attendanceKnown
+                        ? colors.surface2
+                        : student.attendance >= 90
                         ? colors.successSoft
                         : colors.warnSoft,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
                     Icons.fact_check_rounded,
-                    color: student.attendance >= 90
+                    color: !student.attendanceKnown
+                        ? colors.muted
+                        : student.attendance >= 90
                         ? colors.success
                         : colors.warn,
                   ),
@@ -7946,7 +8595,14 @@ Future<void> _showStudentAttendanceSummary(
                         ),
                       ),
                       Text(
-                        '${student.attendance}% · ${tr(context, student.attendance >= 90 ? 'attendance_normal' : 'attendance_attention')}',
+                        student.attendanceKnown
+                            ? '${student.attendance}% · ${tr(context, student.attendance >= 90 ? 'attendance_normal' : 'attendance_attention')}'
+                            : tx(
+                                context,
+                                uz: 'Backend ma’lumot bermadi',
+                                ru: 'Backend не вернул данные',
+                                en: 'The backend returned no data',
+                              ),
                         style: RefType.mono(size: 11, color: colors.ink2),
                       ),
                     ],
@@ -7956,26 +8612,34 @@ Future<void> _showStudentAttendanceSummary(
             ),
             const SizedBox(height: 14),
             Text(
-              tx(
-                context,
-                uz: 'Foiz oxirgi 30 kundagi qatnashilgan darslarning barcha rejalashtirilgan darslarga nisbatini ko‘rsatadi.',
-                ru: 'Процент показывает долю посещённых занятий от всех запланированных занятий за последние 30 дней.',
-                en: 'The percentage is attended lessons divided by all scheduled lessons over the last 30 days.',
-              ),
+              student.attendanceKnown
+                  ? tx(
+                      context,
+                      uz: 'Foiz oxirgi 30 kundagi qatnashilgan darslarning barcha rejalashtirilgan darslarga nisbatini ko‘rsatadi.',
+                      ru: 'Процент показывает долю посещённых занятий от всех запланированных занятий за последние 30 дней.',
+                      en: 'The percentage is attended lessons divided by all scheduled lessons over the last 30 days.',
+                    )
+                  : tx(
+                      context,
+                      uz: 'Davomat yozuvlari backendda paydo bo‘lganda bu yerda ko‘rsatiladi.',
+                      ru: 'Данные появятся здесь после добавления записей посещаемости на backend.',
+                      en: 'Data will appear here when attendance records exist on the backend.',
+                    ),
               style: RefType.ui(size: 12.5, color: colors.ink2, height: 1.45),
             ),
             const SizedBox(height: 10),
-            RefStatusTile(
-              icon: Icons.touch_app_rounded,
-              title: tr(context, 'tap_chart_hint'),
-              subtitle: tx(
-                context,
-                uz: 'Har bir haftaning aniq foizini ko‘rish mumkin.',
-                ru: 'На графике можно посмотреть точный процент каждой недели.',
-                en: 'The chart shows the exact percentage for each week.',
+            if (student.attendanceKnown)
+              RefStatusTile(
+                icon: Icons.touch_app_rounded,
+                title: tr(context, 'tap_chart_hint'),
+                subtitle: tx(
+                  context,
+                  uz: 'Har bir haftaning aniq foizini ko‘rish mumkin.',
+                  ru: 'На графике можно посмотреть точный процент каждой недели.',
+                  en: 'The chart shows the exact percentage for each week.',
+                ),
+                tone: RefMetricTone.primary,
               ),
-              tone: RefMetricTone.primary,
-            ),
           ],
         ),
       ),
@@ -8239,7 +8903,9 @@ class TopStudentsScreen extends StatelessWidget {
     final c = colors;
     final students = [...AppScope.of(context).students]
       ..sort((a, b) {
-        final ratingOrder = studentRating(b).compareTo(studentRating(a));
+        final ratingOrder = (studentRating(b) ?? -1).compareTo(
+          studentRating(a) ?? -1,
+        );
         return ratingOrder != 0
             ? ratingOrder
             : b.attendance.compareTo(a.attendance);
@@ -8315,7 +8981,7 @@ class _TopStudentPreviewRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            SfAvatar(name: student.name, size: 34),
+            SfAvatar(name: student.name, size: 34, imageUrl: student.avatarUrl),
             const SizedBox(width: 9),
             Expanded(
               child: Column(
@@ -8353,10 +9019,7 @@ class _TopStudentPreviewRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            Pill(
-              '★ ${studentRating(student).toStringAsFixed(1)}',
-              tone: PillTone.success,
-            ),
+            Pill('★ ${_studentRatingLabel(student)}', tone: PillTone.success),
           ],
         ),
       ),
@@ -8388,7 +9051,11 @@ class _TopStudentCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  SfAvatar(name: student.name, size: 48),
+                  SfAvatar(
+                    name: student.name,
+                    size: 48,
+                    imageUrl: student.avatarUrl,
+                  ),
                   const SizedBox(width: 11),
                   Expanded(
                     child: Column(
@@ -8415,7 +9082,7 @@ class _TopStudentCard extends StatelessWidget {
                     ),
                   ),
                   Pill(
-                    '★ ${studentRating(student).toStringAsFixed(1)}',
+                    '★ ${_studentRatingLabel(student)}',
                     tone: PillTone.success,
                   ),
                 ],
@@ -8433,7 +9100,7 @@ class _TopStudentCard extends StatelessWidget {
               ),
               _TopStudentData(
                 tr(context, 'student_average'),
-                '${studentAverageScore(student)}%',
+                _studentAverageLabel(student),
               ),
               _TopStudentData(
                 tx(
@@ -8511,6 +9178,88 @@ class _TopStudentData extends StatelessWidget {
   }
 }
 
+bool? _chatPresenceBoolean(Object? value) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  final normalized = '$value'.trim().toLowerCase();
+  if (const {'true', '1', 'yes', 'online', 'active'}.contains(normalized)) {
+    return true;
+  }
+  if (const {'false', '0', 'no', 'offline', 'inactive'}.contains(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+String _chatPresenceLabel(
+  BuildContext context, {
+  bool? online,
+  DateTime? lastSeenAt,
+}) {
+  final active = online ?? chatPresenceIsOnline(lastSeenAt);
+  if (active) return tr(context, 'online');
+  if (lastSeenAt == null) {
+    if (online == false) {
+      return tx(context, uz: 'oflayn', ru: 'не в сети', en: 'offline');
+    }
+    return tx(
+      context,
+      uz: 'holat mavjud emas',
+      ru: 'статус недоступен',
+      en: 'status unavailable',
+    );
+  }
+  final seen = lastSeenAt.toLocal();
+  final now = DateTime.now();
+  final elapsed = now.difference(seen);
+  if (!elapsed.isNegative && elapsed < const Duration(minutes: 1)) {
+    return tx(
+      context,
+      uz: 'hozirgina onlayn edi',
+      ru: 'был(а) в сети только что',
+      en: 'last seen just now',
+    );
+  }
+  if (!elapsed.isNegative && elapsed < const Duration(hours: 1)) {
+    final minutes = elapsed.inMinutes.clamp(1, 59);
+    return tx(
+      context,
+      uz: '$minutes daqiqa oldin onlayn edi',
+      ru: 'был(а) в сети $minutes мин назад',
+      en: 'last seen $minutes min ago',
+    );
+  }
+  final time =
+      '${seen.hour.toString().padLeft(2, '0')}:${seen.minute.toString().padLeft(2, '0')}';
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(seen.year, seen.month, seen.day);
+  final days = today.difference(day).inDays;
+  if (days == 0) {
+    return tx(
+      context,
+      uz: 'bugun $time da onlayn edi',
+      ru: 'был(а) в сети сегодня в $time',
+      en: 'last seen today at $time',
+    );
+  }
+  if (days == 1) {
+    return tx(
+      context,
+      uz: 'kecha $time da onlayn edi',
+      ru: 'был(а) в сети вчера в $time',
+      en: 'last seen yesterday at $time',
+    );
+  }
+  final date =
+      '${seen.day.toString().padLeft(2, '0')}.${seen.month.toString().padLeft(2, '0')}.${seen.year}';
+  return tx(
+    context,
+    uz: '$date $time da onlayn edi',
+    ru: 'был(а) в сети $date в $time',
+    en: 'last seen $date at $time',
+  );
+}
+
 /// Discord-style direct-message page with a student/family — message bubbles,
 /// a composer with quick actions, and reactions on the latest reply.
 class StudentChatScreen extends StatefulWidget {
@@ -8528,7 +9277,7 @@ class StudentChatScreen extends StatefulWidget {
 }
 
 class _StudentChatScreenState extends State<StudentChatScreen> {
-  static final Map<String, String> _drafts = <String, String>{};
+  final Map<String, String> _drafts = <String, String>{};
 
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scroll = ScrollController();
@@ -8553,7 +9302,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
   final List<ChatMsg> _msgs = <ChatMsg>[];
   int? _liveThreadIndex;
   int? _liveParticipantId;
+  DateTime? _liveLastSeenAt;
+  bool? _liveOnline;
+  Future<int?>? _liveContactLookup;
   bool _submittingFirstMessage = false;
+  final Set<String> _voiceInFlightPaths = <String>{};
 
   @override
   void initState() {
@@ -8563,31 +9316,162 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     if (_ctrl.text.isNotEmpty) {
       _drafts[widget.student.name] = _ctrl.text;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _resolveLiveChat());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _adoptCachedLiveThread();
+      unawaited(_resolveLiveChat());
+    });
   }
 
-  void _resolveLiveChat() {
+  void _adoptCachedLiveThread() {
     if (!mounted) return;
     final session = ApiScope.maybeOf(context)?.notifier;
     if (session == null || !session.authenticated) return;
     final participantId = int.tryParse(widget.student.serverUserId ?? '');
+    final index = _existingThreadIndex(
+      AppScope.of(context),
+      participantId,
+      selfUserId: session.messagingSelfUserId,
+    );
+    if (index >= 0) {
+      setState(() {
+        _liveParticipantId = participantId;
+        _liveThreadIndex = index;
+      });
+    }
+  }
+
+  Future<int?> _resolveLiveChat({bool showErrors = false}) {
+    final pending = _liveContactLookup;
+    if (pending != null) return pending;
+    final lookup = _loadLiveChat(showErrors: showErrors);
+    _liveContactLookup = lookup;
+    unawaited(
+      lookup.whenComplete(() {
+        if (identical(_liveContactLookup, lookup)) _liveContactLookup = null;
+      }),
+    );
+    return lookup;
+  }
+
+  Future<int?> _loadLiveChat({required bool showErrors}) async {
+    if (!mounted) return null;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (session == null || !session.authenticated) return null;
+    var participantId = int.tryParse(widget.student.serverUserId ?? '');
+    Map<String, dynamic>? contact;
+    try {
+      contact = await session.resolveMessagingContact(
+        userId: participantId,
+        username: widget.student.username,
+        fullName: widget.student.name,
+      );
+      // Threads are participant-scoped and can be created from another app.
+      // Refresh here so opening a student profile immediately discovers a
+      // conversation started by the student/parent app after CEO login.
+      await session.refresh('threads', force: true);
+    } on ApiException catch (error) {
+      if (showErrors && mounted) _snack(context, error.message);
+    }
+    if (contact != null) {
+      final publishedUserId = apiText(
+        apiValue(contact, const ['user_id', 'account_id']),
+      );
+      participantId =
+          int.tryParse(publishedUserId) ??
+          int.tryParse(apiRecordId(contact)) ??
+          participantId;
+    }
+    final lastSeenAt = contact == null
+        ? null
+        : apiDate(
+            apiValue(contact, const [
+              'last_seen_at',
+              'last_seen',
+              'last_active_at',
+              'last_login_at',
+            ]),
+          );
+    final online = contact == null
+        ? null
+        : _chatPresenceBoolean(
+            apiValue(contact, const ['online', 'is_online']),
+          );
+    if (!mounted) return participantId;
     final store = AppScope.of(context);
-    final index = _existingThreadIndex(store, participantId);
+    final index = _existingThreadIndex(
+      store,
+      participantId,
+      selfUserId: session.messagingSelfUserId,
+    );
     setState(() {
       _liveParticipantId = participantId;
       _liveThreadIndex = index < 0 ? null : index;
+      _liveLastSeenAt = lastSeenAt;
+      _liveOnline = online;
+    });
+    return participantId;
+  }
+
+  int _existingThreadIndex(
+    AppStore store,
+    int? participantId, {
+    int? selfUserId,
+  }) {
+    final wanted = participantId == null ? '' : '$participantId';
+    final self = selfUserId == null ? '' : '$selfUserId';
+    return store.threads.indexWhere((thread) {
+      final meta = thread.meta;
+      if (meta.isGroup) return false;
+      final ids = meta.participantIds.where((id) => id.isNotEmpty).toSet();
+      if (wanted.isNotEmpty && ids.contains(wanted)) {
+        if (self.isNotEmpty) ids.remove(self);
+        // A personal conversation has exactly one participant besides the
+        // current user. Never route a student message through a group whose
+        // participant list happens to contain the same account.
+        return ids.length == 1 && ids.contains(wanted);
+      }
+      return wanted.isEmpty &&
+          meta.name.trim().toLowerCase() ==
+              widget.student.name.trim().toLowerCase();
     });
   }
 
-  int _existingThreadIndex(AppStore store, int? participantId) {
-    return store.threads.indexWhere(
-      (thread) =>
-          participantId != null &&
-              thread.meta.participantIds.contains('$participantId') ||
-          !thread.meta.isGroup &&
-              thread.meta.name.trim().toLowerCase() ==
-                  widget.student.name.trim().toLowerCase(),
-    );
+  String _existingServerThreadId(ApiSession session, int? participantId) {
+    if (participantId == null) return '';
+    final wanted = '$participantId';
+    for (final row in session.records('threads')) {
+      final raw = apiValue(row, const [
+        'participants',
+        'participant_ids',
+        'members',
+      ]);
+      if (raw is! Iterable || raw is String) continue;
+      final ids = raw
+          .map((entry) {
+            if (entry is Map) {
+              return apiText(
+                apiValue(Map<String, dynamic>.from(entry), const [
+                  'user',
+                  'user_id',
+                  'id',
+                  'pk',
+                ]),
+              );
+            }
+            return apiText(entry);
+          })
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      if (!ids.contains(wanted)) continue;
+      final explicitGroup = _chatPresenceBoolean(
+        apiValue(row, const ['is_group', 'group_chat']),
+      );
+      if (explicitGroup == true) continue;
+      final self = session.messagingSelfUserId;
+      if (self != null) ids.remove('$self');
+      if (ids.length == 1 && ids.contains(wanted)) return apiRecordId(row);
+    }
+    return '';
   }
 
   @override
@@ -8611,16 +9495,35 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     final session = ApiScope.maybeOf(context)?.notifier;
     if (session != null && session.authenticated) {
       if (_submittingFirstMessage) return;
-      final participantId =
+      var participantId =
           _liveParticipantId ?? int.tryParse(widget.student.serverUserId ?? '');
-      final existingIndex = _existingThreadIndex(store, participantId);
-      final existingThreadId = existingIndex < 0
+      var existingIndex = _existingThreadIndex(
+        store,
+        participantId,
+        selfUserId: session.messagingSelfUserId,
+      );
+      var existingThreadId = existingIndex < 0
           ? ''
           : store.threads[existingIndex].meta.serverId?.trim() ?? '';
+      if (existingThreadId.isEmpty) {
+        participantId = await _resolveLiveChat(showErrors: true);
+        if (!mounted) return;
+        existingIndex = _existingThreadIndex(
+          store,
+          participantId,
+          selfUserId: session.messagingSelfUserId,
+        );
+        existingThreadId = existingIndex < 0
+            ? ''
+            : store.threads[existingIndex].meta.serverId?.trim() ?? '';
+        if (existingThreadId.isEmpty) {
+          existingThreadId = _existingServerThreadId(session, participantId);
+        }
+      }
       if (existingThreadId.isEmpty && participantId == null) {
         _snack(
           context,
-          'Для этого ученика сервер не вернул учётную запись чата',
+          'Для этого ученика не найдена активная учётная запись чата',
         );
         return;
       }
@@ -8638,7 +9541,8 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
         if (!mounted) return;
         _ctrl.clear();
         _drafts.remove(widget.student.name);
-        _resolveLiveChat();
+        _liveContactLookup = null;
+        await _resolveLiveChat();
       } on ApiException catch (error) {
         if (mounted) _snack(context, error.message);
       } finally {
@@ -8762,7 +9666,20 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
 
   Future<void> _toggleVoice() async {
     if (_recording) {
-      final path = await _recorder.stop();
+      String? path;
+      try {
+        path = await _recorder.stop();
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _recording = false;
+          _voiceLocked = false;
+          _recordStartedAt = null;
+          _finishRecordTicker();
+        });
+        _snack(context, 'Не удалось завершить запись голосового сообщения');
+        return;
+      }
       final duration = DateTime.now().difference(
         _recordStartedAt ?? DateTime.now(),
       );
@@ -8773,16 +9690,25 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
         _recordStartedAt = null;
         _finishRecordTicker();
       });
-      if (path != null) {
+      final recordedPath = path;
+      if (duration >= const Duration(milliseconds: 350) &&
+          recordedPath != null &&
+          await normalizeRecordedM4aBrand(recordedPath) &&
+          await _recordedVoiceHasPayload(recordedPath)) {
+        if (!mounted) return;
         final session = ApiScope.maybeOf(context)?.notifier;
         if (session != null && session.authenticated) {
           await _uploadFirstStudentAttachment(
             _PreparedChatAttachment(
-              path: path,
-              name: _portableFileName(path),
+              path: recordedPath,
+              name: _portableFileName(recordedPath),
               choice: _AttachmentChoice.file,
               messageKind: ChatMessageKind.voice,
-              caption: 'Voice message',
+              duration: duration,
+              // The attachment extension is the canonical voice marker.  A
+              // synthetic caption used to leak into the transcript as an
+              // ordinary text message on the live backend.
+              caption: '',
             ),
           );
         } else {
@@ -8792,11 +9718,19 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                 'Voice message',
                 mine: true,
                 kind: ChatMessageKind.voice,
-                path: path,
+                path: recordedPath,
                 duration: duration,
               ),
             );
           });
+        }
+      } else {
+        if (recordedPath != null) await _deleteLocalChatFile(recordedPath);
+        if (mounted) {
+          _snack(
+            context,
+            'Запись получилась пустой. Удерживайте кнопку немного дольше.',
+          );
         }
       }
       _scrollToEnd();
@@ -8811,7 +9745,15 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
           ? 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a'
           : '${(await _studentMediaDirectory()).path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _recorder.start(
-        const RecordConfig(encoder: AudioEncoder.aacLc),
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 48000,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
         path: path,
       );
       if (!mounted) return;
@@ -8928,42 +9870,246 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
     _PreparedChatAttachment attachment,
   ) async {
     final session = ApiScope.maybeOf(context)?.notifier;
-    final participantId = _liveParticipantId;
     if (session == null || !session.authenticated) return;
-    if (participantId == null) {
+
+    final store = AppScope.of(context);
+    var participantId =
+        _liveParticipantId ?? int.tryParse(widget.student.serverUserId ?? '');
+    var threadIndex = _existingThreadIndex(
+      store,
+      participantId,
+      selfUserId: session.messagingSelfUserId,
+    );
+    var threadId = threadIndex < 0
+        ? ''
+        : store.threads[threadIndex].meta.serverId?.trim() ?? '';
+
+    // Contact resolution and thread refresh run asynchronously when the page
+    // opens.  Do not reject a quick voice recording merely because that
+    // bootstrap has not completed yet.
+    if (threadId.isEmpty) {
+      participantId = await _resolveLiveChat(showErrors: true);
+      if (!mounted) return;
+      threadIndex = _existingThreadIndex(
+        store,
+        participantId,
+        selfUserId: session.messagingSelfUserId,
+      );
+      threadId = threadIndex < 0
+          ? ''
+          : store.threads[threadIndex].meta.serverId?.trim() ?? '';
+      if (threadId.isEmpty) {
+        threadId = _existingServerThreadId(session, participantId);
+      }
+    }
+    if (threadId.isEmpty && participantId == null) {
       _snack(context, 'Для этого ученика сервер не вернул учётную запись чата');
       return;
     }
+    final isVoice = attachment.messageKind == ChatMessageKind.voice;
+    if (isVoice && !_voiceInFlightPaths.add(attachment.path)) return;
     final upload = _PendingChatUpload(attachment);
-    setState(() => _pendingUploads.add(upload));
+    ChatMsg? optimisticVoice;
+    if (isVoice) {
+      optimisticVoice = ChatMsg(
+        '',
+        mine: true,
+        kind: ChatMessageKind.voice,
+        path: attachment.path,
+        duration: attachment.duration,
+        createdAt: DateTime.now(),
+        delivery: ChatDeliveryState.sending,
+        transferState: ChatTransferState.preparing,
+        mimeType: 'audio/mp4',
+      );
+      if (threadIndex >= 0) {
+        final current = store.threads[threadIndex].messages;
+        store.replaceThreadMessages(threadIndex, [...current, optimisticVoice]);
+      } else {
+        setState(() => _msgs.add(optimisticVoice!));
+      }
+      _scrollToEnd();
+    } else {
+      setState(() => _pendingUploads.add(upload));
+    }
+
+    void updateOptimisticVoice(
+      ChatDeliveryState delivery,
+      ChatTransferState transfer,
+    ) {
+      final pending = optimisticVoice;
+      if (pending == null) return;
+      if (threadIndex >= 0 && threadIndex < store.threads.length) {
+        final current = store.threads[threadIndex].messages;
+        final index = current.indexOf(pending);
+        if (index < 0) return;
+        final updated = [...current];
+        updated[index] = pending.copyWith(
+          delivery: delivery,
+          transferState: transfer,
+        );
+        store.replaceThreadMessages(threadIndex, updated);
+        return;
+      }
+      final index = _msgs.indexOf(pending);
+      if (mounted && index >= 0) {
+        setState(
+          () => _msgs[index] = pending.copyWith(
+            delivery: delivery,
+            transferState: transfer,
+          ),
+        );
+      }
+    }
+
+    var messageCreated = false;
     try {
       final bytes = await XFile(attachment.path).readAsBytes();
       if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = .18);
+      if (isVoice) {
+        updateOptimisticVoice(
+          ChatDeliveryState.sending,
+          ChatTransferState.uploading,
+        );
+      }
+      if (!isVoice) setState(() => upload.progress = .18);
+      final filename = isVoice
+          ? _voiceUploadFilename(attachment.name)
+          : attachment.name;
       final key = await session.uploadMessageAttachment(
-        filename: attachment.name,
-        contentType: _chatContentType(attachment.name),
+        filename: filename,
+        contentType: isVoice
+            ? 'audio/mp4'
+            : chatContentTypeForBytes(filename, bytes),
         bytes: bytes,
       );
       if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = .85);
-      await session.createMessageThread(
-        participantIds: [participantId],
-        subject: widget.student.name,
-        firstBody: attachment.caption,
-        attachments: [key],
-      );
-      if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = 1);
-      _resolveLiveChat();
+      if (isVoice) {
+        updateOptimisticVoice(
+          ChatDeliveryState.sending,
+          ChatTransferState.sending,
+        );
+      }
+      if (!isVoice) setState(() => upload.progress = .85);
+      Map<String, dynamic>? response;
+      String createdThreadId = threadId;
+      if (threadId.isNotEmpty) {
+        response = await session.sendThreadMessage(
+          threadId,
+          attachment.caption,
+          attachments: [key],
+        );
+      } else {
+        final createdThread = await session.createMessageThread(
+          participantIds: [participantId!],
+          subject: widget.student.name,
+          firstBody: attachment.caption,
+          attachments: [key],
+        );
+        createdThreadId = createdThread == null
+            ? ''
+            : apiRecordId(createdThread);
+      }
+      messageCreated = true;
+      if (isVoice) {
+        Map<String, dynamic>? permanent;
+        final createdMessageId = response == null ? '' : apiRecordId(response);
+        if (threadId.isNotEmpty && createdMessageId.isNotEmpty) {
+          try {
+            permanent = await session.rereadThreadMessage(
+              threadId,
+              createdMessageId,
+            );
+          } on ApiException {
+            // The POST succeeded; polling will reconcile the durable message.
+          }
+        } else if (createdThreadId.isNotEmpty) {
+          try {
+            final page = await session.latestThreadMessages(createdThreadId);
+            permanent = page.items.cast<Map<String, dynamic>?>().firstWhere((
+              row,
+            ) {
+              if (row == null) return false;
+              final attachments = apiValue(row, const [
+                'attachments',
+                'attachment_keys',
+                'files',
+              ]);
+              return attachments is Iterable &&
+                  attachments is! String &&
+                  attachments.isNotEmpty;
+            }, orElse: () => null);
+          } on ApiException {
+            // The atomic thread/message creation already succeeded.
+          }
+        }
+        final pending = optimisticVoice!;
+        if (permanent != null && apiRecordId(permanent).isNotEmpty) {
+          final accepted = apiChatMessage(session, permanent).copyWith(
+            localId: pending.localId,
+            duration: attachment.duration,
+            mimeType: 'audio/mp4',
+            sizeBytes: bytes.length,
+            delivery: ChatDeliveryState.sent,
+            transferState: ChatTransferState.sent,
+            clearPath: true,
+          );
+          if (threadIndex >= 0 && threadIndex < store.threads.length) {
+            store.acceptServerMessage(
+              threadIndex,
+              pending.localId,
+              accepted,
+              preserveLocalPath: false,
+            );
+          } else {
+            updateOptimisticVoice(
+              ChatDeliveryState.sent,
+              ChatTransferState.sent,
+            );
+            if (threadId.isEmpty && createdThreadId.isNotEmpty && !kIsWeb) {
+              await _deleteLocalChatFile(attachment.path);
+            }
+          }
+          if (!kIsWeb) {
+            try {
+              final file = File(attachment.path);
+              if (await file.exists()) await file.delete();
+            } on FileSystemException {
+              // The permanent server attachment remains authoritative.
+            }
+          }
+        } else {
+          updateOptimisticVoice(ChatDeliveryState.sent, ChatTransferState.sent);
+        }
+      } else if (mounted && !upload.cancelled) {
+        setState(() => upload.progress = 1);
+      }
+      if (mounted && !upload.cancelled) _resolveLiveChat();
     } on ApiException catch (error) {
-      if (mounted && !upload.cancelled) _snack(context, error.message);
+      if (!upload.cancelled) {
+        if (!messageCreated) {
+          updateOptimisticVoice(
+            ChatDeliveryState.failed,
+            ChatTransferState.failed,
+          );
+        }
+        if (mounted) _snack(context, error.message);
+      }
     } catch (_) {
-      if (mounted && !upload.cancelled) {
-        _snack(context, 'Не удалось прикрепить файл');
+      if (!upload.cancelled) {
+        if (!messageCreated) {
+          updateOptimisticVoice(
+            ChatDeliveryState.failed,
+            ChatTransferState.failed,
+          );
+        }
+        if (mounted) _snack(context, 'Не удалось прикрепить файл');
       }
     } finally {
-      if (mounted) setState(() => _pendingUploads.remove(upload));
+      if (isVoice) _voiceInFlightPaths.remove(attachment.path);
+      if (mounted && !isVoice) {
+        setState(() => _pendingUploads.remove(upload));
+      }
     }
   }
 
@@ -9186,7 +10332,12 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
               borderRadius: BorderRadius.circular(12),
               onTap: () => Navigator.of(context).push(
                 sfPageRoute(
-                  ChatCabinetScreen(student: widget.student, colors: c),
+                  ChatCabinetScreen(
+                    student: widget.student,
+                    online: _liveOnline,
+                    lastSeenAt: _liveLastSeenAt,
+                    colors: c,
+                  ),
                 ),
               ),
               child: Padding(
@@ -9195,7 +10346,11 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                   children: [
                     Stack(
                       children: [
-                        SfAvatar(name: widget.student.name, size: 34),
+                        SfAvatar(
+                          name: widget.student.name,
+                          size: 34,
+                          imageUrl: widget.student.avatarUrl,
+                        ),
                         Positioned(
                           right: 0,
                           bottom: 0,
@@ -9229,7 +10384,7 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                             ),
                           ),
                           Text(
-                            '${p.branch} · ${tr(context, 'online')}',
+                            '${p.branch} · ${_chatPresenceLabel(context, online: _liveOnline, lastSeenAt: _liveLastSeenAt)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -9399,13 +10554,23 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
           children: [
             _ChatConversationBar(
               name: widget.student.name,
-              subtitle: tr(context, 'online'),
+              avatarUrl: widget.student.avatarUrl,
+              subtitle: _chatPresenceLabel(
+                context,
+                online: _liveOnline,
+                lastSeenAt: _liveLastSeenAt,
+              ),
               group: false,
               onBack: () => Navigator.of(context).maybePop(),
               profileKey: const ValueKey('student-chat-profile-header'),
               onOpenProfile: () => Navigator.of(context).push(
                 sfPageRoute(
-                  ChatCabinetScreen(student: widget.student, colors: c),
+                  ChatCabinetScreen(
+                    student: widget.student,
+                    online: _liveOnline,
+                    lastSeenAt: _liveLastSeenAt,
+                    colors: c,
+                  ),
                 ),
               ),
               onSearch: _showStudentSearch,
@@ -9440,6 +10605,8 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                                 sfPageRoute(
                                   ChatCabinetScreen(
                                     student: widget.student,
+                                    online: _liveOnline,
+                                    lastSeenAt: _liveLastSeenAt,
                                     colors: c,
                                   ),
                                 ),
@@ -9495,13 +10662,20 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                 padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
                 itemCount: _msgs.length,
                 separatorBuilder: (_, index) => SizedBox(
-                  height: store.reactionFor(_msgs[index]) == null ? 8 : 18,
+                  height:
+                      store.reactionFor(_msgs[index]) == null &&
+                          _msgs[index].reactions.isEmpty
+                      ? 8
+                      : 18,
                 ),
                 itemBuilder: (_, index) => _ReferenceConversationBubble(
                   message: _msgs[index],
                   time: index.isEven ? '10:24' : '10:26',
                   reaction: store.reactionFor(_msgs[index]),
-                  edited: _editedMessages.contains(_msgs[index]),
+                  reactions: _msgs[index].reactions,
+                  edited:
+                      _msgs[index].edited ||
+                      _editedMessages.contains(_msgs[index]),
                   replyText: _replyTargets[_msgs[index]]?.text,
                   onLongPress: () =>
                       _studentMessageActions(_msgs[index], index),
@@ -9621,54 +10795,68 @@ class _StudentChatScreenState extends State<StudentChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 5),
-                  Semantics(
-                    button: true,
-                    label: hasText
-                        ? 'Отправить сообщение'
-                        : _recording
-                        ? 'Остановить и отправить голосовое сообщение'
-                        : 'Записать голосовое сообщение',
-                    onTap: hasText ? _send : _activateStudentVoiceButton,
-                    child: Tooltip(
-                      message: hasText
-                          ? 'Отправить'
-                          : _recording
-                          ? 'Отправить голосовое'
-                          : 'Удерживайте для записи',
-                      child: GestureDetector(
-                        onTap: hasText ? _send : _activateStudentVoiceButton,
-                        onLongPressStart: hasText
-                            ? null
-                            : (_) {
-                                _recordGestureActive = true;
-                                if (!_recording) _toggleVoice();
-                              },
-                        onLongPressMoveUpdate: hasText
-                            ? null
-                            : (details) {
-                                if (!_recording) return;
-                                if (details.offsetFromOrigin.dx < -64) {
-                                  _recordGestureActive = false;
-                                  _cancelVoice();
-                                } else if (details.offsetFromOrigin.dy < -48 &&
-                                    !_voiceLocked) {
-                                  setState(() => _voiceLocked = true);
-                                }
-                              },
-                        onLongPressEnd: hasText
-                            ? null
-                            : (_) {
-                                _recordGestureActive = false;
-                                if (_recording && !_voiceLocked) _toggleVoice();
-                              },
-                        child: _TelegramVoiceAction(
-                          hasText: hasText,
-                          recording: _recording,
-                          colors: c,
+                  if (hasText)
+                    Semantics(
+                      button: true,
+                      label: 'Отправить сообщение',
+                      child: Tooltip(
+                        message: 'Отправить',
+                        child: IconButton(
+                          key: const ValueKey('chat-send-action'),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 44,
+                            height: 44,
+                          ),
+                          onPressed: _send,
+                          icon: _TelegramVoiceAction(
+                            hasText: true,
+                            recording: false,
+                            colors: c,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Semantics(
+                      button: true,
+                      label: _recording
+                          ? 'Остановить и отправить голосовое сообщение'
+                          : 'Записать голосовое сообщение',
+                      child: Tooltip(
+                        message: _recording
+                            ? 'Отправить голосовое'
+                            : 'Удерживайте для записи',
+                        child: GestureDetector(
+                          key: const ValueKey('student-chat-voice-action'),
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _activateStudentVoiceButton,
+                          onLongPressStart: (_) {
+                            _recordGestureActive = true;
+                            if (!_recording) _toggleVoice();
+                          },
+                          onLongPressMoveUpdate: (details) {
+                            if (!_recording) return;
+                            if (details.offsetFromOrigin.dx < -64) {
+                              _recordGestureActive = false;
+                              _cancelVoice();
+                            } else if (details.offsetFromOrigin.dy < -48 &&
+                                !_voiceLocked) {
+                              setState(() => _voiceLocked = true);
+                            }
+                          },
+                          onLongPressEnd: (_) {
+                            _recordGestureActive = false;
+                            if (_recording && !_voiceLocked) _toggleVoice();
+                          },
+                          child: _TelegramVoiceAction(
+                            hasText: false,
+                            recording: _recording,
+                            colors: c,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ],
@@ -10746,43 +11934,8 @@ class _EmptyState extends StatelessWidget {
     required this.sub,
   });
   @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border.all(color: c.border),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, size: 34, color: c.success),
-          const SizedBox(height: 10),
-          Text(
-            title,
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
-              color: c.ink,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            sub,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 11.5,
-              color: c.muted,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      RefEmptyState(icon: icon, title: title, message: sub);
 }
 
 /// Reusable single-select chip row with a tonal selected state.
@@ -11677,7 +12830,67 @@ class _ReferenceBranchesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
+    final api = ApiScope.maybeOf(context)?.notifier;
     final branches = AppScope.of(context).branches;
+    final live = api?.authenticated == true;
+    final branchError = live ? api!.resourceError('branches') : null;
+    final hasBranchSnapshot = !live || api!.collections.containsKey('branches');
+    if (live &&
+        (!hasBranchSnapshot || branchError != null) &&
+        branches.isEmpty) {
+      return ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          RefLargeHeader(
+            eyebrow: '0 ${tr(context, 'unit_branch')}',
+            title: tr(context, 'branches_title'),
+            subtitle: tx(
+              context,
+              uz: 'Backenddagi filiallar ro‘yxati',
+              ru: 'Список филиалов из backend',
+              en: 'Branch directory from the backend',
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
+            child: branchError == null
+                ? RefLoadingState(
+                    title: tx(
+                      context,
+                      uz: 'Filiallar yuklanmoqda',
+                      ru: 'Загружаем филиалы',
+                      en: 'Loading branches',
+                    ),
+                    message: tx(
+                      context,
+                      uz: 'Backenddan dolzarb ma’lumot olinmoqda.',
+                      ru: 'Получаем актуальные данные из backend.',
+                      en: 'Fetching current data from the backend.',
+                    ),
+                  )
+                : RefEmptyState(
+                    icon: Icons.cloud_off_rounded,
+                    title: tx(
+                      context,
+                      uz: 'Filiallarni yuklab bo‘lmadi',
+                      ru: 'Не удалось загрузить филиалы',
+                      en: 'Could not load branches',
+                    ),
+                    message: branchError.message,
+                    actionLabel: tx(
+                      context,
+                      uz: 'Qayta urinish',
+                      ru: 'Повторить',
+                      en: 'Retry',
+                    ),
+                    onAction: () => unawaited(
+                      api!.refresh('branches', force: true).catchError((_) {}),
+                    ),
+                  ),
+          ),
+        ],
+      );
+    }
     final totalStudents = branches.fold<int>(
       0,
       (sum, branch) => sum + branch.students,
@@ -11701,32 +12914,19 @@ class _ReferenceBranchesPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (branches.isEmpty)
-                RefSurfaceCard(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 22),
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.account_tree_outlined,
-                          size: 34,
-                          color: c.muted,
-                        ),
-                        const SizedBox(height: 9),
-                        Text(
-                          tx(
-                            context,
-                            uz: 'Hozircha hech narsa yo‘q',
-                            ru: 'Пока ничего нет',
-                            en: 'Nothing here yet',
-                          ),
-                          style: RefType.ui(
-                            size: 14,
-                            weight: FontWeight.w700,
-                            color: c.ink2,
-                          ),
-                        ),
-                      ],
-                    ),
+                RefEmptyState(
+                  icon: Icons.account_tree_outlined,
+                  title: tx(
+                    context,
+                    uz: 'Hozircha ma’lumot yo‘q',
+                    ru: 'Пока нет данных',
+                    en: 'Nothing here yet',
+                  ),
+                  message: tx(
+                    context,
+                    uz: 'Filial yaratilganda uning ko‘rsatkichlari shu yerda paydo bo‘ladi.',
+                    ru: 'После создания филиала его показатели появятся здесь.',
+                    en: 'Branch metrics will appear here after a branch is created.',
                   ),
                 )
               else ...[
@@ -12108,28 +13308,42 @@ void _showBranchSheet(BuildContext context, Branch b) {
 
 Widget _emptyDataRow(BuildContext context, SfColors colors) => Padding(
   padding: const EdgeInsets.fromLTRB(14, 18, 14, 20),
-  child: Row(
+  child: Column(
     children: [
-      Icon(Icons.inbox_outlined, size: 20, color: colors.muted),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Text(
-          tx(
-            context,
-            uz: 'Hozircha hech narsa yo‘q',
-            ru: 'Пока ничего нет',
-            en: 'Nothing here yet',
-          ),
-          textAlign: TextAlign.center,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontFamily: SfType.ui,
-            fontSize: 12.5,
-            fontWeight: FontWeight.w700,
-            color: colors.muted,
-          ),
+      Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: colors.primarySoft,
+          borderRadius: BorderRadius.circular(13),
         ),
+        child: Icon(Icons.inbox_outlined, size: 20, color: colors.primary),
+      ),
+      const SizedBox(height: 9),
+      Text(
+        tx(
+          context,
+          uz: 'Hozircha yozuvlar yo‘q',
+          ru: 'Записей пока нет',
+          en: 'No records yet',
+        ),
+        textAlign: TextAlign.center,
+        style: RefType.ui(
+          size: 12.5,
+          weight: FontWeight.w800,
+          color: colors.ink,
+        ),
+      ),
+      const SizedBox(height: 3),
+      Text(
+        tx(
+          context,
+          uz: 'Ma’lumot paydo bo‘lganda u shu yerda ko‘rinadi.',
+          ru: 'Когда появятся данные, они будут показаны здесь.',
+          en: 'New information will appear here when it becomes available.',
+        ),
+        textAlign: TextAlign.center,
+        style: RefType.ui(size: 10.5, color: colors.muted, height: 1.4),
       ),
     ],
   ),
@@ -12259,6 +13473,27 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
               event.detail.toLowerCase().contains(b.name.toLowerCase()),
         )
         .toList(growable: false);
+    final branchGroups = _groupsFrom(
+      store.students,
+      store.extraGroups,
+    ).where((group) => group.branch == b.name && group.count > 0).toList();
+    final healthTotal = branchGroups.length;
+    final healthGoodCount = branchGroups
+        .where((group) => group.avgAtt > 90)
+        .length;
+    final healthMidCount = branchGroups
+        .where((group) => group.avgAtt >= 80 && group.avgAtt <= 90)
+        .length;
+    final hasAttendanceHealth = healthTotal > 0 && (!live || b.attendance > 0);
+    final healthGood = hasAttendanceHealth
+        ? (healthGoodCount * 100 / healthTotal).round()
+        : 0;
+    final healthMid = hasAttendanceHealth
+        ? (healthMidCount * 100 / healthTotal).round()
+        : 0;
+    final healthLow = hasAttendanceHealth
+        ? (100 - healthGood - healthMid).clamp(0, 100)
+        : 0;
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -12401,31 +13636,31 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                       children: [
                         Tooltip(
                           message:
-                              '${tr(context, 'legend_good')}: 72%\n'
-                              '${tr(context, 'legend_mid')}: 19%\n'
-                              '${tr(context, 'legend_low')}: 9%',
+                              '${tr(context, 'legend_good')}: $healthGood%\n'
+                              '${tr(context, 'legend_mid')}: $healthMid%\n'
+                              '${tr(context, 'legend_low')}: $healthLow%',
                           child: Donut(
                             key: const ValueKey('branch-attendance-donut'),
                             size: 92,
                             thickness: 14,
                             segments: [
                               DonutSegment(
-                                72,
+                                healthGood.toDouble(),
                                 c.success,
                                 label: tr(context, 'legend_good'),
-                                display: '72%',
+                                display: '$healthGood%',
                               ),
                               DonutSegment(
-                                19,
+                                healthMid.toDouble(),
                                 c.warn,
                                 label: tr(context, 'legend_mid'),
-                                display: '19%',
+                                display: '$healthMid%',
                               ),
                               DonutSegment(
-                                9,
+                                healthLow.toDouble(),
                                 c.danger,
                                 label: tr(context, 'legend_low'),
-                                display: '9%',
+                                display: '$healthLow%',
                               ),
                             ],
                             // This State's build context is above the local
@@ -12449,17 +13684,17 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                               LegendRow(
                                 c.success,
                                 '${tr(context, 'legend_good')} (>90%)',
-                                '72%',
+                                '$healthGood%',
                               ),
                               LegendRow(
                                 c.warn,
                                 '${tr(context, 'legend_mid')} (80–90%)',
-                                '19%',
+                                '$healthMid%',
                               ),
                               LegendRow(
                                 c.danger,
                                 '${tr(context, 'legend_low')} (<80%)',
-                                '9%',
+                                '$healthLow%',
                               ),
                             ],
                           ),
@@ -12533,8 +13768,8 @@ class _BranchWorkspaceScreenState extends State<BranchWorkspaceScreen> {
                       _branchEventRow(
                         c,
                         branchEvents[i].icon,
-                        branchEvents[i].title,
-                        branchEvents[i].detail,
+                        _activityDisplayTitle(context, branchEvents[i]),
+                        _activityDisplayDetail(branchEvents[i]),
                         c.primary,
                         last: i == branchEvents.length - 1,
                       )
@@ -12790,23 +14025,66 @@ class BranchConfigureScreen extends StatefulWidget {
 }
 
 class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
-  String? staffUsername;
-  late String target = widget.branch.name;
+  String? _staffSelection;
+  late String _targetSelection = _branchKey(widget.branch);
   String? _transferError;
   String? _lastTransfer;
+  bool _transferring = false;
+
+  static String _branchKey(Branch branch) {
+    final id = branch.serverId?.trim() ?? '';
+    return id.isEmpty ? 'name:${branch.name}' : 'server:$id';
+  }
+
+  static String _staffKey(StaffMember member, int index) {
+    final id = member.serverId?.trim() ?? '';
+    return id.isEmpty ? 'local:$index:${member.username}' : 'server:$id';
+  }
+
+  Map<String, dynamic>? _recordNamed(
+    List<Map<String, dynamic>> rows,
+    String value,
+    List<String> keys,
+  ) {
+    final wanted = value.trim().toLowerCase();
+    for (final row in rows) {
+      for (final key in keys) {
+        if (apiText(apiValue(row, [key])).trim().toLowerCase() == wanted) {
+          return row;
+        }
+      }
+    }
+    return null;
+  }
 
   Future<void> _transferStaff() async {
+    if (_transferring) return;
     final store = AppScope.of(context);
-    final username = staffUsername;
-    if (username == null) {
+    final selection = _staffSelection;
+    if (selection == null) {
       setState(() => _transferError = 'Сотрудник не выбран');
       return;
     }
-    final member = store.staff.firstWhere((item) => item.username == username);
-    if (member.branch == target) {
+    final memberIndex = List<int>.generate(store.staff.length, (index) => index)
+        .where((index) => _staffKey(store.staff[index], index) == selection)
+        .firstOrNull;
+    if (memberIndex == null) {
+      setState(() => _transferError = 'Сотрудник больше недоступен');
+      return;
+    }
+    final member = store.staff[memberIndex];
+    final targetBranch = store.branches
+        .where((branch) => _branchKey(branch) == _targetSelection)
+        .firstOrNull;
+    if (targetBranch == null) {
+      setState(() => _transferError = 'Филиал больше недоступен');
+      return;
+    }
+    final targetName = targetBranch.name;
+    if (member.branch == targetName) {
       setState(
         () => _transferError =
-            '${member.fullName} уже работает в филиале $target',
+            '${member.fullName} уже работает в филиале $targetName',
       );
       return;
     }
@@ -12818,7 +14096,7 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
           backgroundColor: widget.colors.surface,
           title: const Text('Подтвердить перевод'),
           content: Text(
-            '${member.fullName}\n${member.branch} → $target\n\nИзменение появится в профиле сотрудника и журнале действий.',
+            '${member.fullName}\n${member.branch} → $targetName\n\nИзменение появится в профиле сотрудника и журнале действий.',
           ),
           actions: [
             TextButton(
@@ -12836,19 +14114,93 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
     );
     if (confirmed != true || !mounted) return;
     final from = member.branch;
-    store.transferStaffToBranch(member, target);
     setState(() {
+      _transferring = true;
       _transferError = null;
-      _lastTransfer = '${member.fullName} · $from → $target';
     });
+    try {
+      final api = ApiScope.maybeOf(context)?.notifier;
+      if (api?.authenticated == true) {
+        final staffRecord = member.serverId?.trim().isNotEmpty == true
+            ? api!.recordById('staff', member.serverId)
+            : _recordNamed(api!.records('staff'), member.username, const [
+                'username',
+                'login',
+                'email',
+              ]);
+        final branchRecord = targetBranch.serverId == null
+            ? _recordNamed(api.records('branches'), targetName, const [
+                'name',
+                'title',
+                'slug',
+              ])
+            : api.recordById('branches', targetBranch.serverId);
+        final staffId = apiRecordId(staffRecord ?? const {});
+        final branchId = apiRecordId(branchRecord ?? const {});
+        if (staffId.isEmpty || branchId.isEmpty) {
+          throw const ApiException(
+            status: 422,
+            code: 'transfer_relation_missing',
+            message: 'Сервер не вернул ID сотрудника или филиала.',
+            requestId: 'local-branch-transfer',
+          );
+        }
+        final memberships = apiValue(staffRecord!, const [
+          'role_memberships',
+          'memberships',
+          'account_type_assignments',
+        ]);
+        final publishesDirectBranch =
+            staffRecord.containsKey('branch_id') ||
+            staffRecord.containsKey('branch');
+        if (!publishesDirectBranch && memberships is Iterable) {
+          throw const ApiException(
+            status: 501,
+            code: 'responsibility_workflow_not_published',
+            message:
+                'Перенос сотрудника управляется workflow назначений. Backend пока не опубликовал этот endpoint в API.',
+            requestId: 'local-branch-transfer',
+          );
+        }
+        final branchField = staffRecord.containsKey('branch_id')
+            ? 'branch_id'
+            : 'branch';
+        await api.update('staff', staffId, {
+          branchField: int.tryParse(branchId) ?? branchId,
+        });
+      }
+      store.transferStaffToBranch(member, targetName);
+      if (!mounted) return;
+      setState(() {
+        _lastTransfer = '${member.fullName} · $from → $targetName';
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _transferError = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _transferError = 'Не удалось выполнить перевод сотрудника.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _transferring = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
     final store = AppScope.of(context);
-    if (staffUsername == null && store.staff.isNotEmpty) {
-      staffUsername = store.staff.first.username;
+    final branchKeys = store.branches.map(_branchKey).toList(growable: false);
+    if (branchKeys.isNotEmpty && !branchKeys.contains(_targetSelection)) {
+      _targetSelection = branchKeys.first;
+    }
+    final staffKeys = [
+      for (var index = 0; index < store.staff.length; index++)
+        _staffKey(store.staff[index], index),
+    ];
+    if (_staffSelection != null && !staffKeys.contains(_staffSelection)) {
+      _staffSelection = null;
     }
     return SfScaffold(
       colors: c,
@@ -12856,18 +14208,23 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
-          SfCard(
-            child: Column(
-              children: [
-                const SfCardHeader('Filial ma’lumotlari'),
-                _InfoRow('Menejer', 'Dilnoza Yo‘ldosheva'),
-                _InfoRow(
-                  'Xodimlar',
-                  '${(widget.branch.students / 31).round()}',
+          RefSurfaceCard(
+            padding: const EdgeInsets.all(15),
+            child: RefStatusTile(
+              icon: Icons.account_tree_rounded,
+              title: widget.branch.name,
+              subtitle:
+                  '${widget.branch.students} o‘quvchi · ${widget.branch.attendance}% davomat',
+              tone: RefMetricTone.primary,
+              trailing: RefPill(
+                label: tx(
+                  context,
+                  uz: 'QABUL QILUVCHI',
+                  ru: 'ЦЕЛЕВОЙ',
+                  en: 'TARGET',
                 ),
-                _InfoRow('Xonalar', '12'),
-                _InfoRow('Ish vaqti', '08:00 — 21:00', last: true),
-              ],
+                tone: RefPillTone.primary,
+              ),
             ),
           ),
           const SizedBox(height: 14),
@@ -12882,49 +14239,48 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          SfCard(
+          RefSurfaceCard(
             padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: staffUsername,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Xodim'),
-                  items: store.staff
-                      .map(
-                        (member) => DropdownMenuItem(
-                          value: member.username,
-                          child: Text(
-                            '${member.fullName} · ${member.branch}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() {
-                    staffUsername = value;
-                    _transferError = null;
-                  }),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: target,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Yangi filial'),
-                  items: store.branches
-                      .map(
-                        (b) => DropdownMenuItem(
-                          value: b.name,
-                          child: Text(b.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() {
-                    target = value!;
-                    _transferError = null;
-                  }),
-                ),
+                if (store.staff.isEmpty || branchKeys.isEmpty)
+                  RefEmptyState(
+                    icon: Icons.badge_outlined,
+                    title: 'Перевод пока недоступен',
+                    message:
+                        'Для перевода API должен вернуть сотрудников и филиалы.',
+                    compact: true,
+                  )
+                else ...[
+                  _ManagedSelect<String>(
+                    label: 'Сотрудник',
+                    value: _staffSelection,
+                    items: staffKeys,
+                    display: (selection) {
+                      final index = staffKeys.indexOf(selection);
+                      final member = store.staff[index];
+                      return '${member.fullName} · ${member.branch}';
+                    },
+                    onChanged: (value) => setState(() {
+                      _staffSelection = value;
+                      _transferError = null;
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  _ManagedSelect<String>(
+                    label: 'Новый филиал',
+                    value: _targetSelection,
+                    items: branchKeys,
+                    display: (selection) => store.branches
+                        .firstWhere((branch) => _branchKey(branch) == selection)
+                        .name,
+                    onChanged: (value) => setState(() {
+                      _targetSelection = value;
+                      _transferError = null;
+                    }),
+                  ),
+                ],
                 if (_transferError != null) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -12943,8 +14299,10 @@ class _BranchConfigureScreenState extends State<BranchConfigureScreen> {
                 ],
                 const SizedBox(height: 14),
                 SfButton(
-                  icon: Icons.swap_horiz_rounded,
-                  label: 'Xodimni o‘tkazish',
+                  icon: _transferring
+                      ? Icons.hourglass_top_rounded
+                      : Icons.swap_horiz_rounded,
+                  label: _transferring ? 'Переводим…' : 'Xodimni o‘tkazish',
                   primary: true,
                   onTap: _transferStaff,
                 ),
@@ -16440,7 +17798,7 @@ class _AdmitStudentScreenState extends State<AdmitStudentScreen> {
 
 class _ManagedSelect<T> extends StatelessWidget {
   final String label;
-  final T value;
+  final T? value;
   final List<T> items;
   final ValueChanged<T> onChanged;
   final String Function(T)? display;
@@ -17331,6 +18689,22 @@ class StaffDetailScreen extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            SfButton(
+              icon: Icons.chat_bubble_outline_rounded,
+              label: tx(
+                context,
+                uz: 'Xabar yozish',
+                ru: 'Написать',
+                en: 'Message',
+              ),
+              primary: true,
+              onTap: () => openDirectMessagingContact(
+                context,
+                username: member.username,
+                fullName: member.fullName,
+              ),
+            ),
             const SizedBox(height: 14),
             SfCard(
               child: Column(
@@ -17814,6 +19188,13 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
     b ??= branches.length > 1 ? branches[1].name : branches.first.name;
     final first = branches.firstWhere((item) => item.name == a);
     final second = branches.firstWhere((item) => item.name == b);
+    final staff = AppScope.of(context).staff;
+    final firstStaff = staff
+        .where((member) => member.branch == first.name)
+        .length;
+    final secondStaff = staff
+        .where((member) => member.branch == second.name)
+        .length;
     final rows = [
       (
         'O‘quvchilar',
@@ -17833,12 +19214,7 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
         '${second.attendance}%',
         Icons.fact_check_rounded,
       ),
-      (
-        'Xodimlar',
-        '${(first.students / 31).round()}',
-        '${(second.students / 31).round()}',
-        Icons.badge_rounded,
-      ),
+      ('Xodimlar', '$firstStaff', '$secondStaff', Icons.badge_rounded),
     ];
     return SfTheme(
       colors: c,
@@ -17869,7 +19245,10 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
                     label: 'Branch A',
                     value: a!,
                     items: [for (final branch in branches) branch.name],
-                    onChanged: (v) => setState(() => a = v),
+                    onChanged: (v) => setState(() {
+                      if (v == b) b = a;
+                      a = v;
+                    }),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -17878,7 +19257,10 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
                     label: 'Branch B',
                     value: b!,
                     items: [for (final branch in branches) branch.name],
-                    onChanged: (v) => setState(() => b = v),
+                    onChanged: (v) => setState(() {
+                      if (v == a) a = b;
+                      b = v;
+                    }),
                   ),
                 ),
               ],
@@ -17928,38 +19310,30 @@ class _BranchComparisonScreenState extends State<BranchComparisonScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            _setSec(c, 'DAROMAD TENDENSIYASI'),
-            SfCard(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  children: [
-                    LegendRow(
-                      first.mark,
-                      first.name,
-                      fmtMoneyMln(first.revenue),
-                    ),
-                    LegendRow(
-                      second.mark,
-                      second.name,
-                      fmtMoneyMln(second.revenue),
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      height: 92,
-                      child: AreaChart(
-                        data: [
-                          first.revenue / 1e6,
-                          second.revenue / 1e6,
-                          (first.revenue + second.revenue) / 2e6,
-                          first.revenue / 1e6 * 1.04,
-                        ],
-                        color: c.primary,
-                      ),
-                    ),
-                  ],
-                ),
+            _setSec(
+              c,
+              tx(
+                context,
+                uz: 'DAROMAD TARIXI',
+                ru: 'ИСТОРИЯ ДОХОДА',
+                en: 'REVENUE HISTORY',
               ),
+            ),
+            RefEmptyState(
+              icon: Icons.query_stats_rounded,
+              title: tx(
+                context,
+                uz: 'Davrlar bo‘yicha ma’lumot yo‘q',
+                ru: 'Нет данных по периодам',
+                en: 'No period data available',
+              ),
+              message: tx(
+                context,
+                uz: 'Backend filiallar bo‘yicha tarixiy qator qaytarganda grafik paydo bo‘ladi.',
+                ru: 'График появится, когда backend вернёт исторический ряд по филиалам.',
+                en: 'The chart will appear when the backend returns branch history.',
+              ),
+              compact: true,
             ),
           ],
         ),
@@ -18146,7 +19520,7 @@ class _ActivityRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    event.title,
+                    _activityDisplayTitle(context, event),
                     style: TextStyle(
                       fontFamily: SfType.ui,
                       fontSize: 12.5,
@@ -18155,7 +19529,7 @@ class _ActivityRow extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    event.detail,
+                    _activityDisplayDetail(event),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -18220,7 +19594,7 @@ class ActivityDetailScreen extends StatelessWidget {
                 Icon(event.icon, size: 34, color: c.primary),
                 const SizedBox(height: 10),
                 Text(
-                  event.title,
+                  _activityDisplayTitle(context, event),
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontFamily: SfType.ui,
@@ -18782,7 +20156,11 @@ class _ParentChildCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              SfAvatar(name: student.name, size: 40),
+              SfAvatar(
+                name: student.name,
+                size: 40,
+                imageUrl: student.avatarUrl,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -21299,6 +22677,189 @@ class _PaymentLedgerRow extends StatelessWidget {
 }
 
 // ── Messages ───────────────────────────────────────────────────────────
+
+/// Opens an existing direct conversation for a published messaging contact,
+/// or atomically creates it together with the first message.  The backend
+/// user id is always resolved through the authenticated contact directory;
+/// staff/teacher profile ids are never guessed or submitted as participant
+/// ids.
+Future<void> openDirectMessagingContact(
+  BuildContext context, {
+  Object? userId,
+  required String username,
+  required String fullName,
+}) async {
+  final session = ApiScope.maybeOf(context)?.notifier;
+  final store = AppScope.of(context);
+  final colors = SfTheme.of(context);
+  if (session == null || !session.authenticated) {
+    _snack(context, 'Чат доступен после входа через API');
+    return;
+  }
+
+  int threadIndexFor(String participantId, {String? serverThreadId}) {
+    return store.threads.indexWhere((thread) {
+      final meta = thread.meta;
+      if (meta.isGroup) return false;
+      if (serverThreadId != null &&
+          serverThreadId.isNotEmpty &&
+          meta.serverId == serverThreadId) {
+        return true;
+      }
+      final participants = meta.participantIds
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      return participantId.isNotEmpty &&
+          participants.contains(participantId) &&
+          participants.length <= 2;
+    });
+  }
+
+  try {
+    final contact = await session.resolveMessagingContact(
+      userId: userId,
+      username: username,
+      fullName: fullName,
+    );
+    if (!context.mounted) return;
+    final participantId = apiText(
+      apiValue(contact ?? const <String, dynamic>{}, const [
+        'user_id',
+        'account_id',
+        'id',
+        'pk',
+      ]),
+    );
+    if (participantId.isEmpty) {
+      _snack(
+        context,
+        'Backend не вернул messaging user ID для этого сотрудника',
+      );
+      return;
+    }
+
+    var threadIndex = threadIndexFor(participantId);
+    if (threadIndex >= 0) {
+      await Navigator.of(
+        context,
+      ).push(sfPageRoute(ChatScreen(threadIdx: threadIndex, colors: colors)));
+      return;
+    }
+
+    final firstMessage = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) =>
+          _DirectMessageComposerDialog(fullName: fullName, colors: colors),
+    );
+    if (!context.mounted || firstMessage == null || firstMessage.isEmpty) {
+      return;
+    }
+
+    final created = await session.createMessageThread(
+      participantIds: [int.parse(participantId)],
+      subject: fullName,
+      firstBody: firstMessage,
+    );
+    syncProductStoreFromApi(session, store);
+    if (!context.mounted) return;
+    final serverThreadId = apiRecordId(created ?? const <String, dynamic>{});
+    threadIndex = threadIndexFor(participantId, serverThreadId: serverThreadId);
+    if (threadIndex < 0) {
+      await session.refresh('threads', force: true);
+      syncProductStoreFromApi(session, store);
+      threadIndex = threadIndexFor(
+        participantId,
+        serverThreadId: serverThreadId,
+      );
+    }
+    if (!context.mounted) return;
+    if (threadIndex < 0) {
+      _snack(context, 'Сообщение отправлено. Обновите список диалогов.');
+      return;
+    }
+    await Navigator.of(
+      context,
+    ).push(sfPageRoute(ChatScreen(threadIdx: threadIndex, colors: colors)));
+  } on FormatException {
+    if (context.mounted) {
+      _snack(context, 'Backend вернул некорректный messaging user ID');
+    }
+  } on ApiException catch (error) {
+    if (context.mounted) _snack(context, error.message);
+  }
+}
+
+class _DirectMessageComposerDialog extends StatefulWidget {
+  const _DirectMessageComposerDialog({
+    required this.fullName,
+    required this.colors,
+  });
+
+  final String fullName;
+  final SfColors colors;
+
+  @override
+  State<_DirectMessageComposerDialog> createState() =>
+      _DirectMessageComposerDialogState();
+}
+
+class _DirectMessageComposerDialogState
+    extends State<_DirectMessageComposerDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(
+      widget.fullName,
+      style: RefType.ui(
+        size: 17,
+        weight: FontWeight.w800,
+        color: widget.colors.ink,
+      ),
+    ),
+    content: TextField(
+      key: const ValueKey('direct-message-draft'),
+      controller: _controller,
+      autofocus: true,
+      minLines: 2,
+      maxLines: 5,
+      textInputAction: TextInputAction.newline,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        labelText: tx(
+          context,
+          uz: 'Birinchi xabar',
+          ru: 'Первое сообщение',
+          en: 'First message',
+        ),
+        hintText: tr(context, 'msg_hint'),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: Text(
+          tx(context, uz: 'Bekor qilish', ru: 'Отмена', en: 'Cancel'),
+        ),
+      ),
+      FilledButton.icon(
+        key: const ValueKey('direct-message-create'),
+        onPressed: _controller.text.trim().isEmpty
+            ? null
+            : () => Navigator.of(context).pop(_controller.text.trim()),
+        icon: const Icon(Icons.send_rounded, size: 18),
+        label: Text(tx(context, uz: 'Yuborish', ru: 'Отправить', en: 'Send')),
+      ),
+    ],
+  );
+}
+
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
   @override
@@ -21591,7 +23152,7 @@ class _ThreadRow extends StatelessWidget {
                 ),
               )
             else
-              SfAvatar(name: th.name, size: 34),
+              SfAvatar(name: th.name, size: 34, imageUrl: th.avatarUrl),
             const SizedBox(width: 11),
             Expanded(
               child: Column(
@@ -21686,12 +23247,16 @@ class ChatCabinetScreen extends StatefulWidget {
   final Thread? thread;
   final Student? student;
   final int? threadIdx;
+  final bool? online;
+  final DateTime? lastSeenAt;
   final SfColors colors;
   const ChatCabinetScreen({
     super.key,
     this.thread,
     this.student,
     this.threadIdx,
+    this.online,
+    this.lastSeenAt,
     required this.colors,
   }) : assert(thread != null || student != null);
 
@@ -21723,8 +23288,14 @@ class _ChatCabinetScreenState extends State<ChatCabinetScreen> {
     final isGroup = t?.isGroup ?? false;
     final name = t?.name ?? s!.name;
     final detail = t?.group ?? s!.group;
-    final online = t?.online ?? true;
-    final status = online ? tr(context, 'online') : tr(context, 'chat_offline');
+    final lastSeenAt = t?.lastSeenAt ?? widget.lastSeenAt;
+    final explicitOnline = t == null ? widget.online : t.online;
+    final online = explicitOnline ?? chatPresenceIsOnline(lastSeenAt);
+    final status = _chatPresenceLabel(
+      context,
+      online: explicitOnline,
+      lastSeenAt: lastSeenAt,
+    );
     final phone = s == null ? _phoneFor(name) : studentProfile(s).phone;
     final profile = s == null ? null : studentProfile(s);
     final username =
@@ -22272,7 +23843,11 @@ class _ChatCabinetScreenState extends State<ChatCabinetScreen> {
                             final student = participants[index];
                             return ListTile(
                               contentPadding: EdgeInsets.zero,
-                              leading: SfAvatar(name: student.name, size: 38),
+                              leading: SfAvatar(
+                                name: student.name,
+                                size: 38,
+                                imageUrl: student.avatarUrl,
+                              ),
                               title: Text(student.name),
                               subtitle: Text(
                                 '${student.group} · ${student.attendance}%',
@@ -22488,9 +24063,7 @@ class _CabinetMediaPreview extends StatelessWidget {
   );
 }
 
-class _ChatScreenState extends State<ChatScreen> {
-  static final Map<int, String> _drafts = <int, String>{};
-
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final TextEditingController _ctrl = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final FocusNode _composerFocus = FocusNode();
@@ -22511,24 +24084,45 @@ class _ChatScreenState extends State<ChatScreen> {
   Duration _recordElapsed = Duration.zero;
   Timer? _recordTicker;
   Timer? _messagePoller;
+  StreamSubscription<Map<String, dynamic>>? _pushSubscription;
   bool _loadingMessages = false;
   bool _refreshingMessages = false;
+  bool _loadingOlderMessages = false;
   bool _sendingMessage = false;
+  bool _appResumed = true;
+  bool _hasOlderMessages = false;
+  int _oldestLoadedPage = 1;
+  bool _historyWindowInitialized = false;
+  bool _programmaticScroll = false;
+  bool _initialLatestPositioned = false;
+  final Set<String> _voiceInFlightPaths = <String>{};
+  AppStore? _chatStore;
   String? _messageError;
+  bool _offlineMessages = false;
   String? _liveThreadId;
 
   @override
   void initState() {
     super.initState();
-    _ctrl.text = _drafts[widget.threadIdx] ?? '';
+    WidgetsBinding.instance.addObserver(this);
+    _scroll.addListener(_onChatScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) => _beginServerSync());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (_appResumed) unawaited(_refreshServerMessages());
+  }
+
+  @override
   void dispose() {
-    _drafts[widget.threadIdx] = _ctrl.text;
+    _chatStore?.saveThreadDraft(widget.threadIdx, _ctrl.text);
+    WidgetsBinding.instance.removeObserver(this);
+    _scroll.removeListener(_onChatScroll);
     _recordTicker?.cancel();
     _messagePoller?.cancel();
+    _pushSubscription?.cancel();
     for (final timer in _uploadTimers.values) {
       timer.cancel();
     }
@@ -22542,20 +24136,107 @@ class _ChatScreenState extends State<ChatScreen> {
   void _beginServerSync() {
     if (!mounted) return;
     final store = AppScope.of(context);
+    _chatStore = store;
     if (widget.threadIdx < 0 || widget.threadIdx >= store.threads.length) {
       return;
     }
+    _ctrl.text = store.draftForThread(widget.threadIdx);
     final session = ApiScope.maybeOf(context)?.notifier;
     final id = store.threads[widget.threadIdx].meta.serverId?.trim() ?? '';
     if (session == null || !session.authenticated || id.isEmpty) return;
     _liveThreadId = id;
-    _refreshServerMessages(showLoading: true, showErrors: true);
+    final savedSync = store.syncStateForThread(widget.threadIdx);
+    _oldestLoadedPage =
+        int.tryParse('${savedSync['oldest_page'] ?? 1}')?.clamp(1, 100000) ?? 1;
+    _hasOlderMessages = savedSync['has_older'] == true;
+    _historyWindowInitialized =
+        savedSync['pagination_direction'] == 'oldest_first';
+    final hasCache = store.threads[widget.threadIdx].messages.isNotEmpty;
+    if (hasCache) _scrollToEnd();
+    _refreshServerMessages(showLoading: !hasCache, showErrors: !hasCache);
+    _pushSubscription?.cancel();
+    _pushSubscription = PushNotificationService.instance.messages.listen((
+      payload,
+    ) {
+      final pushedThread = apiText(
+        apiValue(payload, const ['thread_id', 'thread', 'conversation_id']),
+      );
+      if (pushedThread == id && mounted) {
+        unawaited(_refreshServerMessages(markRead: false));
+      }
+    });
     _messagePoller?.cancel();
     _messagePoller = Timer.periodic(const Duration(seconds: 20), (_) {
-      if (mounted && !_sendingMessage) {
+      if (mounted &&
+          _appResumed &&
+          !_sendingMessage &&
+          !_recording &&
+          _pendingUploads.isEmpty &&
+          _voiceInFlightPaths.isEmpty) {
         _refreshServerMessages();
       }
     });
+  }
+
+  void _onChatScroll() {
+    if (!_scroll.hasClients ||
+        !_initialLatestPositioned ||
+        _programmaticScroll ||
+        _scroll.position.pixels > 90) {
+      return;
+    }
+    if (_hasOlderMessages && !_loadingOlderMessages) {
+      unawaited(_loadOlderMessages());
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    final id = _liveThreadId;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    if (id == null || session == null || !session.authenticated) return;
+    _loadingOlderMessages = true;
+    final previousExtent = _scroll.hasClients
+        ? _scroll.position.maxScrollExtent
+        : 0.0;
+    try {
+      final pageNumber = _oldestLoadedPage - 1;
+      if (pageNumber < 1) {
+        _hasOlderMessages = false;
+        return;
+      }
+      final page = await session.threadMessages(id, page: pageNumber);
+      if (!mounted) return;
+      final older = page.items
+          .map((row) => apiChatMessage(session, row))
+          .toList(growable: false);
+      final store = AppScope.of(context);
+      store.mergeThreadMessages(widget.threadIdx, older);
+      _oldestLoadedPage = pageNumber;
+      _hasOlderMessages = pageNumber > 1;
+      store.saveThreadSyncState(widget.threadIdx, {
+        'oldest_page': _oldestLoadedPage,
+        'has_older': _hasOlderMessages,
+        'pagination_direction': 'oldest_first',
+        if (page.pagination?['previous'] != null)
+          'previous': page.pagination!['previous']!,
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scroll.hasClients) return;
+        final addedExtent = _scroll.position.maxScrollExtent - previousExtent;
+        _programmaticScroll = true;
+        _scroll.jumpTo(
+          (_scroll.position.pixels + addedExtent).clamp(
+            0,
+            _scroll.position.maxScrollExtent,
+          ),
+        );
+        _programmaticScroll = false;
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _messageError = error.message);
+    } finally {
+      _loadingOlderMessages = false;
+    }
   }
 
   Future<void> _refreshServerMessages({
@@ -22579,7 +24260,7 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     }
     try {
-      final page = await session.threadMessages(id);
+      final page = await session.latestThreadMessages(id);
       if (!mounted) return;
       final messages =
           page.items
@@ -22595,10 +24276,57 @@ class _ChatScreenState extends State<ChatScreen> {
             });
       final store = AppScope.of(context);
       if (widget.threadIdx < store.threads.length) {
-        store.replaceThreadMessages(widget.threadIdx, messages);
+        final currentMessages = store.threads[widget.threadIdx].messages;
+        for (final incoming in messages) {
+          if (incoming.kind != ChatMessageKind.voice ||
+              incoming.attachmentKeys.isEmpty ||
+              incoming.serverId?.isNotEmpty != true) {
+            continue;
+          }
+          final localIndex = currentMessages.indexWhere(
+            (current) =>
+                current.serverId == incoming.serverId &&
+                current.path?.isNotEmpty == true,
+          );
+          if (localIndex < 0) continue;
+          final local = currentMessages[localIndex];
+          final recordingPath = local.path;
+          store.updateChatMessage(
+            widget.threadIdx,
+            local.localId,
+            (current) => current.copyWith(clearPath: true),
+          );
+          if (!kIsWeb && recordingPath != null) {
+            unawaited(_deleteLocalChatFile(recordingPath));
+          }
+        }
+        store.mergeThreadMessages(widget.threadIdx, messages);
+        if (!_historyWindowInitialized) {
+          // Older builds treated backend page one as the newest page. Keep
+          // their cached rows visible, but replace the stale paging cursor
+          // with the real last page returned by the oldest-first backend.
+          _oldestLoadedPage = page.page;
+          _historyWindowInitialized = true;
+        }
+        _hasOlderMessages = _oldestLoadedPage > 1;
+        store.saveThreadSyncState(widget.threadIdx, {
+          'oldest_page': _oldestLoadedPage,
+          'has_older': _hasOlderMessages,
+          'pagination_direction': 'oldest_first',
+          'latest_page': page.page,
+          'last_synced_at': DateTime.now().toUtc().toIso8601String(),
+        });
       }
-      setState(() => _messageError = null);
-      _scrollToEnd();
+      setState(() {
+        _messageError = null;
+        _offlineMessages = false;
+      });
+      if (showLoading ||
+          messages.isNotEmpty &&
+              _scroll.hasClients &&
+              _scroll.position.extentAfter < 140) {
+        _scrollToEnd();
+      }
       if (markRead) {
         try {
           await session.markThreadRead(id);
@@ -22609,7 +24337,10 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } on ApiException catch (error) {
       if (!mounted) return;
-      setState(() => _messageError = error.message);
+      setState(() {
+        _messageError = error.message;
+        _offlineMessages = error.status == 0;
+      });
       if (showErrors) _snack(context, error.message);
     } finally {
       _refreshingMessages = false;
@@ -22621,26 +24352,119 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send(AppStore store) async {
     if (_ctrl.text.trim().isEmpty) return;
+    if (_sendingMessage) return;
     final text = _ctrl.text.trim();
     final messages = store.threads[widget.threadIdx].messages;
     final editingIndex = _editingIndex;
-    final liveThreadId = _liveThreadId;
     final session = ApiScope.maybeOf(context)?.notifier;
+    var liveThreadId = _liveThreadId;
+    if ((liveThreadId == null || liveThreadId.isEmpty) &&
+        widget.threadIdx >= 0 &&
+        widget.threadIdx < store.threads.length) {
+      liveThreadId = store.threads[widget.threadIdx].meta.serverId?.trim();
+      if (liveThreadId?.isNotEmpty == true) _liveThreadId = liveThreadId;
+    }
+    // An authenticated chat must never silently fall back to a device-only
+    // message just because the first post-frame sync has not populated the
+    // state field yet. Refresh once and either obtain the real thread id or
+    // show an actionable error while preserving the draft.
+    if (session?.authenticated == true &&
+        (liveThreadId == null || liveThreadId.isEmpty)) {
+      setState(() {
+        _sendingMessage = true;
+        _messageError = null;
+      });
+      try {
+        await session!.refresh('threads', force: true);
+        if (!mounted) return;
+        syncProductStoreFromApi(session, store);
+        if (widget.threadIdx >= 0 && widget.threadIdx < store.threads.length) {
+          liveThreadId = store.threads[widget.threadIdx].meta.serverId?.trim();
+          if (liveThreadId?.isNotEmpty == true) _liveThreadId = liveThreadId;
+        }
+      } on ApiException catch (error) {
+        if (mounted) {
+          setState(() => _messageError = error.message);
+          _snack(context, error.message);
+        }
+        return;
+      } finally {
+        if (mounted) setState(() => _sendingMessage = false);
+      }
+      if (liveThreadId == null || liveThreadId.isEmpty) {
+        if (mounted) {
+          const message =
+              'Не удалось определить серверный диалог. Обновите список чатов.';
+          setState(() => _messageError = message);
+          _snack(context, message);
+        }
+        return;
+      }
+    }
     if (liveThreadId != null && editingIndex != null) {
-      _snack(context, 'Сервер пока не поддерживает изменение сообщений');
+      if (session == null || !session.authenticated) return;
+      if (editingIndex < 0 || editingIndex >= messages.length) return;
+      final previous = messages[editingIndex];
+      if (!previous.mine || previous.kind != ChatMessageKind.text) return;
+      final messageId = previous.serverId?.trim() ?? '';
+      if (messageId.isEmpty) {
+        _snack(context, 'Сервер не вернул ID сообщения');
+        return;
+      }
+      setState(() {
+        _sendingMessage = true;
+        _messageError = null;
+      });
+      store.updateChatMessage(
+        widget.threadIdx,
+        previous.localId,
+        (current) => current.copyWith(text: text, edited: true),
+      );
+      try {
+        final response = await session.editMessage(messageId, text);
+        final accepted = response == null
+            ? previous.copyWith(text: text, edited: true)
+            : apiChatMessage(
+                session,
+                response,
+              ).copyWith(localId: previous.localId, edited: true);
+        store.acceptServerMessage(widget.threadIdx, previous.localId, accepted);
+        store.clearThreadDraft(widget.threadIdx);
+        if (mounted) {
+          _ctrl.clear();
+          setState(() {
+            _editingIndex = null;
+            _replyingTo = null;
+            _emojiOpen = false;
+          });
+          unawaited(_refreshServerMessages(markRead: false));
+        }
+      } on ApiException catch (error) {
+        store.updateChatMessage(
+          widget.threadIdx,
+          previous.localId,
+          (_) => previous,
+        );
+        if (mounted) {
+          setState(() => _messageError = error.message);
+          _snack(context, error.message);
+        }
+      } finally {
+        if (mounted) setState(() => _sendingMessage = false);
+      }
       return;
     }
     if (liveThreadId != null && session != null && session.authenticated) {
-      if (_sendingMessage) return;
       final pending = ChatMsg(
         text,
         mine: true,
         createdAt: DateTime.now(),
         delivery: ChatDeliveryState.sending,
+        transferState: ChatTransferState.sending,
       );
-      store.replaceThreadMessages(widget.threadIdx, [...messages, pending]);
+      store.appendChatMessage(widget.threadIdx, pending);
       _ctrl.clear();
-      _drafts.remove(widget.threadIdx);
+      store.saveThreadDraft(widget.threadIdx, text);
       setState(() {
         _editingIndex = null;
         _replyingTo = null;
@@ -22650,19 +24474,46 @@ class _ChatScreenState extends State<ChatScreen> {
       });
       _scrollToEnd();
       try {
-        await session.sendThreadMessage(liveThreadId, text);
-        await _refreshServerMessages(markRead: false);
-      } on ApiException catch (error) {
-        if (!mounted) return;
-        final current = AppScope.of(context).threads[widget.threadIdx].messages;
-        final index = current.indexOf(pending);
-        if (index >= 0) {
-          final failed = [...current];
-          failed[index] = pending.copyWith(delivery: ChatDeliveryState.failed);
-          store.replaceThreadMessages(widget.threadIdx, failed);
+        final response = await session.sendThreadMessage(liveThreadId, text);
+        if (response != null && apiRecordId(response).isNotEmpty) {
+          store.acceptServerMessage(
+            widget.threadIdx,
+            pending.localId,
+            apiChatMessage(session, response),
+          );
+        } else {
+          // POST completed successfully. Never expose retry merely because a
+          // legacy serializer omitted the created DTO or a follow-up GET fails.
+          store.updateChatMessage(
+            widget.threadIdx,
+            pending.localId,
+            (current) => current.copyWith(
+              delivery: ChatDeliveryState.sent,
+              transferState: ChatTransferState.sent,
+            ),
+          );
         }
-        setState(() => _messageError = error.message);
-        _snack(context, error.message);
+        store.clearThreadDraft(widget.threadIdx);
+        if (mounted) {
+          unawaited(_refreshServerMessages(markRead: false));
+        }
+      } on ApiException catch (error) {
+        store.updateChatMessage(
+          widget.threadIdx,
+          pending.localId,
+          (current) => current.copyWith(
+            delivery: ChatDeliveryState.failed,
+            transferState: ChatTransferState.failed,
+          ),
+        );
+        store.saveThreadDraft(widget.threadIdx, text);
+        if (mounted) {
+          _ctrl
+            ..text = text
+            ..selection = TextSelection.collapsed(offset: text.length);
+          setState(() => _messageError = error.message);
+          _snack(context, error.message);
+        }
       } finally {
         if (mounted) setState(() => _sendingMessage = false);
       }
@@ -22672,7 +24523,7 @@ class _ChatScreenState extends State<ChatScreen> {
         editingIndex >= 0 &&
         editingIndex < messages.length) {
       final previous = messages[editingIndex];
-      final edited = ChatMsg(text, mine: true);
+      final edited = previous.copyWith(text: text, edited: true);
       messages[editingIndex] = edited;
       final reaction = store.messageReactions.remove(previous);
       if (reaction != null) store.messageReactions[edited] = reaction;
@@ -22688,13 +24539,81 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     _ctrl.clear();
-    _drafts.remove(widget.threadIdx);
+    store.clearThreadDraft(widget.threadIdx);
     setState(() {
       _editingIndex = null;
       _replyingTo = null;
       _emojiOpen = false;
     });
     _scrollToEnd();
+  }
+
+  Future<void> _retryChatMessage(ChatMsg message) async {
+    if (_sendingMessage || message.delivery != ChatDeliveryState.failed) return;
+    final store = AppScope.of(context);
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final threadId = _liveThreadId;
+    if (session == null || !session.authenticated || threadId == null) return;
+    if (message.kind != ChatMessageKind.text) {
+      final path = message.path;
+      if (path == null || path.isEmpty) return;
+      await _uploadServerAttachment(
+        _PreparedChatAttachment(
+          path: path,
+          name: _portableFileName(path),
+          choice: _AttachmentChoice.file,
+          messageKind: message.kind,
+          duration: message.duration,
+          caption: message.text,
+        ),
+        retryLocalId: message.localId,
+      );
+      return;
+    }
+    setState(() => _sendingMessage = true);
+    store.updateChatMessage(
+      widget.threadIdx,
+      message.localId,
+      (current) => current.copyWith(
+        delivery: ChatDeliveryState.sending,
+        transferState: ChatTransferState.sending,
+      ),
+    );
+    try {
+      final response = await session.sendThreadMessage(threadId, message.text);
+      if (response != null && apiRecordId(response).isNotEmpty) {
+        store.acceptServerMessage(
+          widget.threadIdx,
+          message.localId,
+          apiChatMessage(session, response),
+        );
+      } else {
+        store.updateChatMessage(
+          widget.threadIdx,
+          message.localId,
+          (current) => current.copyWith(
+            delivery: ChatDeliveryState.sent,
+            transferState: ChatTransferState.sent,
+          ),
+        );
+      }
+      store.clearThreadDraft(widget.threadIdx);
+      if (mounted) {
+        unawaited(_refreshServerMessages(markRead: false));
+      }
+    } on ApiException catch (error) {
+      store.updateChatMessage(
+        widget.threadIdx,
+        message.localId,
+        (current) => current.copyWith(
+          delivery: ChatDeliveryState.failed,
+          transferState: ChatTransferState.failed,
+        ),
+      );
+      if (mounted) _snack(context, error.message);
+    } finally {
+      if (mounted) setState(() => _sendingMessage = false);
+    }
   }
 
   void _insertEmoji(String emoji) {
@@ -22710,7 +24629,7 @@ class _ChatScreenState extends State<ChatScreen> {
       selection: TextSelection.collapsed(offset: start + emoji.length),
       composing: TextRange.empty,
     );
-    _drafts[widget.threadIdx] = _ctrl.text;
+    AppScope.of(context).saveThreadDraft(widget.threadIdx, _ctrl.text);
     setState(() {});
     _composerFocus.requestFocus();
   }
@@ -22732,7 +24651,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _ctrl
         ..text = message.text
         ..selection = TextSelection.collapsed(offset: message.text.length);
-      _drafts[widget.threadIdx] = message.text;
+      AppScope.of(context).saveThreadDraft(widget.threadIdx, message.text);
     });
     _composerFocus.requestFocus();
   }
@@ -22742,7 +24661,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _editingIndex = null;
       _replyingTo = null;
       _ctrl.clear();
-      _drafts.remove(widget.threadIdx);
+      AppScope.of(context).clearThreadDraft(widget.threadIdx);
     });
     _composerFocus.requestFocus();
   }
@@ -22773,13 +24692,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOut,
-        );
+      if (!_scroll.hasClients) {
+        _initialLatestPositioned = true;
+        return;
       }
+      _programmaticScroll = true;
+      _scroll
+          .animateTo(
+            _scroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          )
+          .whenComplete(() {
+            _programmaticScroll = false;
+            _initialLatestPositioned = true;
+          });
     });
   }
 
@@ -22833,43 +24760,198 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _uploadServerAttachment(
-    _PreparedChatAttachment attachment,
-  ) async {
+    _PreparedChatAttachment attachment, {
+    String? retryLocalId,
+  }) async {
     final session = ApiScope.maybeOf(context)?.notifier;
-    final threadId = _liveThreadId;
-    if (session == null || threadId == null || !session.authenticated) return;
+    final chatStore = AppScope.of(context);
+    var threadId = _liveThreadId;
+    if (session == null || !session.authenticated) {
+      if (mounted) _snack(context, 'Сессия завершена. Войдите снова.');
+      return;
+    }
+    if (threadId == null || threadId.isEmpty) {
+      if (widget.threadIdx >= 0 &&
+          widget.threadIdx < chatStore.threads.length) {
+        threadId = chatStore.threads[widget.threadIdx].meta.serverId?.trim();
+        if (threadId != null && threadId.isNotEmpty) {
+          _liveThreadId = threadId;
+        }
+      }
+    }
+    if (threadId == null || threadId.isEmpty) {
+      if (mounted) {
+        _snack(
+          context,
+          'Сервер не вернул ID этого чата. Обновите список сообщений.',
+        );
+      }
+      return;
+    }
+    final isVoice = attachment.messageKind == ChatMessageKind.voice;
+    if (isVoice && !_voiceInFlightPaths.add(attachment.path)) return;
     final upload = _PendingChatUpload(attachment);
-    setState(() => _pendingUploads.add(upload));
+    ChatMsg? optimisticVoice;
+    if (isVoice) {
+      final retryIndex = retryLocalId == null
+          ? -1
+          : chatStore.indexOfLocalMessage(widget.threadIdx, retryLocalId);
+      if (retryIndex >= 0) {
+        optimisticVoice =
+            chatStore.threads[widget.threadIdx].messages[retryIndex];
+        chatStore.updateChatMessage(
+          widget.threadIdx,
+          optimisticVoice.localId,
+          (current) => current.copyWith(
+            delivery: ChatDeliveryState.sending,
+            transferState: ChatTransferState.preparing,
+          ),
+        );
+      } else {
+        optimisticVoice = ChatMsg(
+          '',
+          mine: true,
+          kind: ChatMessageKind.voice,
+          path: attachment.path,
+          duration: attachment.duration,
+          createdAt: DateTime.now(),
+          delivery: ChatDeliveryState.sending,
+          transferState: ChatTransferState.preparing,
+          mimeType: 'audio/mp4',
+        );
+        chatStore.appendChatMessage(widget.threadIdx, optimisticVoice);
+      }
+      _scrollToEnd();
+    } else {
+      setState(() => _pendingUploads.add(upload));
+    }
+
+    void updateOptimisticVoice(
+      ChatDeliveryState delivery,
+      ChatTransferState transfer,
+    ) {
+      final pending = optimisticVoice;
+      if (pending == null) return;
+      chatStore.updateChatMessage(
+        widget.threadIdx,
+        pending.localId,
+        (current) =>
+            current.copyWith(delivery: delivery, transferState: transfer),
+      );
+    }
+
+    var messageCreated = false;
     try {
       final bytes = await XFile(attachment.path).readAsBytes();
       if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = .18);
+      if (isVoice) {
+        updateOptimisticVoice(
+          ChatDeliveryState.sending,
+          ChatTransferState.uploading,
+        );
+      }
+      if (!isVoice) setState(() => upload.progress = .18);
+      final filename = isVoice
+          ? _voiceUploadFilename(attachment.name)
+          : attachment.name;
+      final contentType = isVoice
+          ? 'audio/mp4'
+          : chatContentTypeForBytes(filename, bytes);
       final key = await session.uploadMessageAttachment(
-        filename: attachment.name,
-        contentType: _chatContentType(attachment.name),
+        filename: filename,
+        contentType: contentType,
         bytes: bytes,
       );
       if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = .88);
-      await session.sendThreadMessage(
+      if (isVoice) {
+        updateOptimisticVoice(
+          ChatDeliveryState.sending,
+          ChatTransferState.sending,
+        );
+      }
+      if (!isVoice) setState(() => upload.progress = .88);
+      final response = await session.sendThreadMessage(
         threadId,
         attachment.caption,
         attachments: [key],
       );
-      if (!mounted || upload.cancelled) return;
-      setState(() => upload.progress = 1);
-      await _refreshServerMessages(markRead: false);
-    } on ApiException catch (error) {
+      messageCreated = true;
+      if (isVoice) {
+        final localId = optimisticVoice!.localId;
+        Map<String, dynamic>? permanent;
+        final createdId = response == null ? '' : apiRecordId(response);
+        if (createdId.isNotEmpty) {
+          try {
+            permanent = await session.rereadThreadMessage(threadId, createdId);
+          } on ApiException {
+            // Message POST already succeeded. Background polling will obtain
+            // the permanent key; this must never turn into a duplicate retry.
+          }
+        }
+        final acceptedRow = permanent ?? response;
+        if (acceptedRow != null && apiRecordId(acceptedRow).isNotEmpty) {
+          var accepted = apiChatMessage(session, acceptedRow).copyWith(
+            localId: localId,
+            duration: attachment.duration,
+            mimeType: 'audio/mp4',
+            sizeBytes: bytes.length,
+            delivery: ChatDeliveryState.sent,
+            transferState: ChatTransferState.sent,
+          );
+          final hasPermanentKey =
+              permanent != null && accepted.attachmentKeys.isNotEmpty;
+          if (hasPermanentKey) accepted = accepted.copyWith(clearPath: true);
+          chatStore.acceptServerMessage(
+            widget.threadIdx,
+            localId,
+            accepted,
+            preserveLocalPath: !hasPermanentKey,
+          );
+          if (hasPermanentKey && !kIsWeb) {
+            try {
+              final file = File(attachment.path);
+              if (await file.exists()) await file.delete();
+            } on FileSystemException {
+              // Cache cleanup can retry later; the server message is durable.
+            }
+          }
+        } else {
+          updateOptimisticVoice(ChatDeliveryState.sent, ChatTransferState.sent);
+        }
+      } else if (mounted && !upload.cancelled) {
+        setState(() => upload.progress = 1);
+      }
       if (mounted && !upload.cancelled) {
-        setState(() => _messageError = error.message);
-        _snack(context, error.message);
+        unawaited(_refreshServerMessages(markRead: false));
+      }
+    } on ApiException catch (error) {
+      if (!upload.cancelled) {
+        if (!messageCreated) {
+          updateOptimisticVoice(
+            ChatDeliveryState.failed,
+            ChatTransferState.failed,
+          );
+        }
+        if (mounted) {
+          setState(() => _messageError = error.message);
+          _snack(context, error.message);
+        }
       }
     } catch (_) {
-      if (mounted && !upload.cancelled) {
-        _snack(context, 'Faylni biriktirib bo‘lmadi');
+      if (!upload.cancelled) {
+        if (!messageCreated) {
+          updateOptimisticVoice(
+            ChatDeliveryState.failed,
+            ChatTransferState.failed,
+          );
+        }
+        if (mounted) _snack(context, 'Faylni biriktirib bo‘lmadi');
       }
     } finally {
-      if (mounted) setState(() => _pendingUploads.remove(upload));
+      if (isVoice) _voiceInFlightPaths.remove(attachment.path);
+      if (mounted && !isVoice) {
+        setState(() => _pendingUploads.remove(upload));
+      }
     }
   }
 
@@ -22908,7 +24990,20 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _toggleVoice(AppStore store) async {
     if (_recording) {
-      final path = await _recorder.stop();
+      String? path;
+      try {
+        path = await _recorder.stop();
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _recording = false;
+          _voiceLocked = false;
+          _recordStartedAt = null;
+          _finishRecordTicker();
+        });
+        _snack(context, 'Не удалось завершить запись голосового сообщения');
+        return;
+      }
       final duration = DateTime.now().difference(
         _recordStartedAt ?? DateTime.now(),
       );
@@ -22919,27 +25014,56 @@ class _ChatScreenState extends State<ChatScreen> {
         _recordStartedAt = null;
         _finishRecordTicker();
       });
-      if (path != null) {
-        if (_liveThreadId != null) {
+      final recordedPath = path;
+      if (duration >= const Duration(milliseconds: 350) &&
+          recordedPath != null &&
+          await normalizeRecordedM4aBrand(recordedPath) &&
+          await _recordedVoiceHasPayload(recordedPath)) {
+        if (!mounted) return;
+        final session = ApiScope.maybeOf(context)?.notifier;
+        final liveId =
+            _liveThreadId ??
+            (widget.threadIdx >= 0 && widget.threadIdx < store.threads.length
+                ? store.threads[widget.threadIdx].meta.serverId?.trim()
+                : null);
+        if (session != null &&
+            session.authenticated &&
+            liveId != null &&
+            liveId.isNotEmpty) {
+          _liveThreadId = liveId;
           await _uploadServerAttachment(
             _PreparedChatAttachment(
-              path: path,
-              name: _portableFileName(path),
+              path: recordedPath,
+              name: _portableFileName(recordedPath),
               choice: _AttachmentChoice.file,
               messageKind: ChatMessageKind.voice,
-              caption: 'Voice message',
+              duration: duration,
+              caption: '',
             ),
+          );
+        } else if (session != null && session.authenticated) {
+          _snack(
+            context,
+            'Сервер не вернул ID этого чата. Откройте диалог заново.',
           );
         } else {
           store.sendAttachment(
             widget.threadIdx,
             kind: ChatMessageKind.voice,
-            path: path,
+            path: recordedPath,
             label: 'Voice message',
             duration: duration,
           );
         }
         _scrollToEnd();
+      } else {
+        if (recordedPath != null) await _deleteLocalChatFile(recordedPath);
+        if (mounted) {
+          _snack(
+            context,
+            'Запись получилась пустой. Удерживайте кнопку немного дольше.',
+          );
+        }
       }
       return;
     }
@@ -22954,7 +25078,15 @@ class _ChatScreenState extends State<ChatScreen> {
           ? 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a'
           : '${(await _mediaDirectory()).path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _recorder.start(
-        const RecordConfig(encoder: AudioEncoder.aacLc),
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 48000,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
         path: path,
       );
       if (!mounted) return;
@@ -23039,6 +25171,102 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _applyMessageReaction(ChatMsg message, String emoji) async {
+    final store = AppScope.of(context);
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final messageId = message.serverId?.trim() ?? '';
+    final selected = store.reactionFor(message);
+    if (_liveThreadId == null ||
+        session == null ||
+        !session.authenticated ||
+        messageId.isEmpty) {
+      store.setMessageReaction(message, emoji);
+      return;
+    }
+    final previous = message;
+    final counts = Map<String, int>.from(message.reactions);
+    if (selected != null && selected.isNotEmpty) {
+      final remaining = (counts[selected] ?? 1) - 1;
+      if (remaining <= 0) {
+        counts.remove(selected);
+      } else {
+        counts[selected] = remaining;
+      }
+    }
+    final removing = selected == emoji;
+    if (!removing) counts[emoji] = (counts[emoji] ?? 0) + 1;
+    store.messageReactions.remove(message);
+    store.updateChatMessage(
+      widget.threadIdx,
+      message.localId,
+      (current) => current.copyWith(
+        reaction: removing ? null : emoji,
+        clearReaction: removing,
+        reactions: counts,
+      ),
+    );
+    try {
+      if (removing) {
+        await session.removeMessageReaction(messageId, emoji);
+      } else {
+        await session.addMessageReaction(messageId, emoji);
+      }
+      unawaited(_refreshServerMessages(markRead: false));
+    } on ApiException catch (error) {
+      store.updateChatMessage(
+        widget.threadIdx,
+        message.localId,
+        (_) => previous,
+      );
+      if (mounted) _snack(context, error.message);
+    }
+  }
+
+  Future<void> _deleteChatMessage(ChatMsg message, int index) async {
+    final store = AppScope.of(context);
+    if (!message.mine) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Удалить сообщение?'),
+        content: const Text('Сообщение будет удалено у всех участников.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    final session = ApiScope.maybeOf(context)?.notifier;
+    final messageId = message.serverId?.trim() ?? '';
+    if (_liveThreadId != null &&
+        session != null &&
+        session.authenticated &&
+        messageId.isNotEmpty) {
+      store.removeChatMessage(
+        widget.threadIdx,
+        message.localId,
+        tombstone: true,
+      );
+      try {
+        await session.deleteServerMessage(messageId);
+        unawaited(_refreshServerMessages(markRead: false));
+        return;
+      } on ApiException catch (error) {
+        store.restoreChatMessage(widget.threadIdx, message);
+        if (mounted) _snack(context, error.message);
+        return;
+      }
+    }
+    store.removeChatMessage(widget.threadIdx, message.localId, tombstone: true);
+  }
+
   void _messageActions(ChatMsg message, int index) {
     final c = widget.colors;
     final visual = _chatVisualStyle(SettingsScope.of(context).chatDesign, c);
@@ -23118,8 +25346,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _TelegramReactionPicker(
                   selected: store.reactionFor(message),
                   onSelected: (reaction) {
-                    store.setMessageReaction(message, reaction);
                     Navigator.of(sheet).pop();
+                    unawaited(_applyMessageReaction(message, reaction));
                   },
                 ),
                 const SizedBox(height: 7),
@@ -23149,18 +25377,19 @@ class _ChatScreenState extends State<ChatScreen> {
                     Navigator.of(sheet).pop();
                   },
                 ),
-                action(Icons.delete_outline_rounded, 'Delete', () {
-                  _editedMessages.remove(message);
-                  _replyTargets.remove(message);
-                  if (_editingIndex == index) {
-                    _editingIndex = null;
-                    _replyingTo = null;
-                    _ctrl.clear();
-                    _drafts.remove(widget.threadIdx);
-                  }
-                  store.deleteMessage(widget.threadIdx, index);
-                  Navigator.of(sheet).pop();
-                }, danger: true),
+                if (message.mine)
+                  action(Icons.delete_outline_rounded, 'Удалить', () {
+                    _editedMessages.remove(message);
+                    _replyTargets.remove(message);
+                    if (_editingIndex == index) {
+                      _editingIndex = null;
+                      _replyingTo = null;
+                      _ctrl.clear();
+                      store.clearThreadDraft(widget.threadIdx);
+                    }
+                    Navigator.of(sheet).pop();
+                    unawaited(_deleteChatMessage(message, index));
+                  }, danger: true),
               ],
             ),
           ),
@@ -23328,7 +25557,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       )
                     else
-                      SfAvatar(name: th.name, size: 38),
+                      SfAvatar(name: th.name, size: 38, imageUrl: th.avatarUrl),
                     const SizedBox(width: 11),
                     Expanded(
                       child: Column(
@@ -23347,7 +25576,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ),
                           Text(
-                            th.online ? tr(context, 'online') : th.group,
+                            th.isGroup
+                                ? th.group
+                                : _chatPresenceLabel(
+                                    context,
+                                    online: th.online,
+                                    lastSeenAt: th.lastSeenAt,
+                                  ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -23580,7 +25815,14 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             _ChatConversationBar(
               name: meta.name,
-              subtitle: meta.online ? tr(context, 'online') : meta.group,
+              avatarUrl: meta.avatarUrl,
+              subtitle: meta.isGroup
+                  ? meta.group
+                  : _chatPresenceLabel(
+                      context,
+                      online: meta.online,
+                      lastSeenAt: meta.lastSeenAt,
+                    ),
               group: meta.isGroup,
               onBack: () => Navigator.of(context).maybePop(),
               onOpenProfile: () => _openCabinet(meta, c),
@@ -23607,10 +25849,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             if (_loadingMessages)
-              LinearProgressIndicator(
-                minHeight: 2,
-                color: c.primary,
-                backgroundColor: c.surface2,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 7, 12, 2),
+                child: RefRefreshStatus(
+                  label: tx(
+                    context,
+                    uz: 'Xabarlar yangilanmoqda',
+                    ru: 'Обновляем сообщения',
+                    en: 'Refreshing messages',
+                  ),
+                ),
               ),
             if (_messageError != null && !_loadingMessages)
               InkWell(
@@ -23627,7 +25875,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(width: 7),
                       Expanded(
                         child: Text(
-                          'Не удалось обновить чат · нажмите, чтобы повторить',
+                          _offlineMessages
+                              ? 'Нет соединения. Показаны сохранённые сообщения'
+                              : 'Не удалось обновить чат · нажмите, чтобы повторить',
                           style: RefType.ui(size: 10.5, color: c.muted),
                         ),
                       ),
@@ -23639,11 +25889,14 @@ class _ChatScreenState extends State<ChatScreen> {
               child: DecoratedBox(
                 decoration: BoxDecoration(color: c.bg),
                 child: ListView.separated(
+                  key: const ValueKey('chat-message-list'),
                   controller: _scroll,
                   padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                   itemCount: thread.messages.length,
                   separatorBuilder: (_, index) => SizedBox(
-                    height: store.reactionFor(thread.messages[index]) == null
+                    height:
+                        store.reactionFor(thread.messages[index]) == null &&
+                            thread.messages[index].reactions.isEmpty
                         ? 8
                         : 18,
                   ),
@@ -23652,10 +25905,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     time: _messageTime(index),
                     threadId: meta.serverId,
                     reaction: store.reactionFor(thread.messages[index]),
-                    edited: _editedMessages.contains(thread.messages[index]),
+                    reactions: thread.messages[index].reactions,
+                    edited:
+                        thread.messages[index].edited ||
+                        _editedMessages.contains(thread.messages[index]),
                     replyText: _replyTargets[thread.messages[index]]?.text,
                     onLongPress: () =>
                         _messageActions(thread.messages[index], index),
+                    onRetry:
+                        thread.messages[index].delivery ==
+                            ChatDeliveryState.failed
+                        ? () => _retryChatMessage(thread.messages[index])
+                        : null,
                   ),
                 ),
               ),
@@ -23735,66 +25996,78 @@ class _ChatScreenState extends State<ChatScreen> {
                       onCancelRecording: _cancelVoice,
                       onSubmitted: (_) => _send(store),
                       onChanged: (value) {
-                        _drafts[widget.threadIdx] = value;
+                        store.saveThreadDraft(widget.threadIdx, value);
                         setState(() {});
                       },
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Semantics(
-                    button: true,
-                    label: hasText
-                        ? 'Отправить сообщение'
-                        : _recording
-                        ? 'Остановить и отправить голосовое сообщение'
-                        : 'Записать голосовое сообщение',
-                    onTap: hasText
-                        ? () => _send(store)
-                        : () => _activateVoiceButton(store),
-                    child: Tooltip(
-                      message: hasText
-                          ? 'Отправить'
-                          : _recording
-                          ? 'Отправить голосовое'
-                          : 'Удерживайте для записи',
-                      child: GestureDetector(
-                        onTap: hasText
-                            ? () => _send(store)
-                            : () => _activateVoiceButton(store),
-                        onLongPressStart: hasText
-                            ? null
-                            : (_) {
-                                _recordGestureActive = true;
-                                if (!_recording) _toggleVoice(store);
-                              },
-                        onLongPressMoveUpdate: hasText
-                            ? null
-                            : (details) {
-                                if (!_recording) return;
-                                if (details.offsetFromOrigin.dx < -64) {
-                                  _recordGestureActive = false;
-                                  _cancelVoice();
-                                } else if (details.offsetFromOrigin.dy < -48 &&
-                                    !_voiceLocked) {
-                                  setState(() => _voiceLocked = true);
-                                }
-                              },
-                        onLongPressEnd: hasText
-                            ? null
-                            : (_) {
-                                _recordGestureActive = false;
-                                if (_recording && !_voiceLocked) {
-                                  _toggleVoice(store);
-                                }
-                              },
-                        child: _TelegramVoiceAction(
-                          hasText: hasText,
-                          recording: _recording,
-                          colors: c,
+                  if (hasText)
+                    Semantics(
+                      button: true,
+                      label: 'Отправить сообщение',
+                      child: Tooltip(
+                        message: 'Отправить',
+                        child: IconButton(
+                          key: const ValueKey('chat-send-action'),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 44,
+                            height: 44,
+                          ),
+                          onPressed: _sendingMessage
+                              ? null
+                              : () => _send(store),
+                          icon: _TelegramVoiceAction(
+                            hasText: true,
+                            recording: false,
+                            colors: c,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Semantics(
+                      button: true,
+                      label: _recording
+                          ? 'Остановить и отправить голосовое сообщение'
+                          : 'Записать голосовое сообщение',
+                      child: Tooltip(
+                        message: _recording
+                            ? 'Отправить голосовое'
+                            : 'Удерживайте для записи',
+                        child: GestureDetector(
+                          key: const ValueKey('chat-voice-action'),
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _activateVoiceButton(store),
+                          onLongPressStart: (_) {
+                            _recordGestureActive = true;
+                            if (!_recording) _toggleVoice(store);
+                          },
+                          onLongPressMoveUpdate: (details) {
+                            if (!_recording) return;
+                            if (details.offsetFromOrigin.dx < -64) {
+                              _recordGestureActive = false;
+                              _cancelVoice();
+                            } else if (details.offsetFromOrigin.dy < -48 &&
+                                !_voiceLocked) {
+                              setState(() => _voiceLocked = true);
+                            }
+                          },
+                          onLongPressEnd: (_) {
+                            _recordGestureActive = false;
+                            if (_recording && !_voiceLocked) {
+                              _toggleVoice(store);
+                            }
+                          },
+                          child: _TelegramVoiceAction(
+                            hasText: false,
+                            recording: _recording,
+                            colors: c,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ],
@@ -23923,6 +26196,7 @@ String _chatPhone(String name) {
 class _ChatConversationBar extends StatelessWidget {
   const _ChatConversationBar({
     required this.name,
+    this.avatarUrl,
     required this.subtitle,
     required this.group,
     required this.onBack,
@@ -23934,6 +26208,7 @@ class _ChatConversationBar extends StatelessWidget {
   });
 
   final String name;
+  final String? avatarUrl;
   final String subtitle;
   final bool group;
   final VoidCallback onBack;
@@ -23989,7 +26264,12 @@ class _ChatConversationBar extends StatelessWidget {
                                     size: 20,
                                   ),
                                 )
-                              : SfAvatar(name: name, size: 38, color: c.accent),
+                              : SfAvatar(
+                                  name: name,
+                                  size: 38,
+                                  color: c.accent,
+                                  imageUrl: avatarUrl,
+                                ),
                           const SizedBox(width: 9),
                           Expanded(
                             child: Column(
@@ -24498,7 +26778,7 @@ class _TelegramReactionPicker extends StatelessWidget {
 
   final ValueChanged<String> onSelected;
   final String? selected;
-  static const reactions = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+  static const reactions = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥'];
 
   @override
   Widget build(BuildContext context) {
@@ -24554,8 +26834,14 @@ class _TelegramReactionPicker extends StatelessWidget {
 }
 
 class _MessageReactionBadge extends StatelessWidget {
-  const _MessageReactionBadge({required this.reaction});
+  const _MessageReactionBadge({
+    required this.reaction,
+    required this.count,
+    required this.selected,
+  });
   final String reaction;
+  final int count;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -24566,12 +26852,12 @@ class _MessageReactionBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 7),
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: c.surface,
+        color: selected ? c.primarySoft : c.surface,
         borderRadius: RefRadius.pill,
-        border: Border.all(color: c.border),
+        border: Border.all(color: selected ? c.primary : c.border),
         boxShadow: RefShadows.soft,
       ),
-      child: Text('$reaction 1', style: const TextStyle(fontSize: 13)),
+      child: Text('$reaction $count', style: const TextStyle(fontSize: 13)),
     );
   }
 }
@@ -24866,8 +27152,10 @@ class _ReferenceConversationBubble extends StatelessWidget {
     required this.onLongPress,
     this.threadId,
     this.reaction,
+    this.reactions = const <String, int>{},
     this.edited = false,
     this.replyText,
+    this.onRetry,
   });
 
   final ChatMsg message;
@@ -24875,15 +27163,25 @@ class _ReferenceConversationBubble extends StatelessWidget {
   final String? threadId;
   final VoidCallback onLongPress;
   final String? reaction;
+  final Map<String, int> reactions;
   final bool edited;
   final String? replyText;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final mine = message.mine;
+    final transferLabel = switch (message.transferState) {
+      ChatTransferState.preparing => 'подготовка',
+      ChatTransferState.recording => 'запись',
+      ChatTransferState.uploading => 'загрузка',
+      ChatTransferState.sending => 'отправка',
+      ChatTransferState.sent => '',
+      ChatTransferState.failed => 'ошибка',
+    };
     final displayTime = message.delivery == ChatDeliveryState.sending
-        ? '$time · отправка'
+        ? '$time · $transferLabel'
         : message.delivery == ChatDeliveryState.failed
         ? '$time · ошибка'
         : edited
@@ -24959,18 +27257,63 @@ class _ReferenceConversationBubble extends StatelessWidget {
         curve: Curves.easeOutCubic,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * .76,
+            maxWidth:
+                MediaQuery.of(context).size.width *
+                (message.delivery == ChatDeliveryState.failed && onRetry != null
+                    ? .88
+                    : .76),
           ),
-          child: Stack(
-            clipBehavior: Clip.none,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              body,
-              if (reaction != null)
-                Positioned(
-                  right: mine ? 8 : null,
-                  left: mine ? null : 8,
-                  bottom: -13,
-                  child: _MessageReactionBadge(reaction: reaction!),
+              if (message.delivery == ChatDeliveryState.failed &&
+                  onRetry != null &&
+                  mine)
+                IconButton(
+                  tooltip: 'Повторить отправку',
+                  onPressed: onRetry,
+                  icon: Icon(Icons.refresh_rounded, color: c.danger),
+                ),
+              Flexible(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    body,
+                    if (reaction != null || reactions.isNotEmpty)
+                      Positioned(
+                        right: mine ? 8 : null,
+                        left: mine ? null : 8,
+                        bottom: -13,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (final entry
+                                in (reactions.isEmpty
+                                        ? <String, int>{reaction!: 1}
+                                        : reactions)
+                                    .entries)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 3),
+                                child: _MessageReactionBadge(
+                                  reaction: entry.key,
+                                  count: entry.value,
+                                  selected: reaction == entry.key,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (message.delivery == ChatDeliveryState.failed &&
+                  onRetry != null &&
+                  !mine)
+                IconButton(
+                  tooltip: 'Повторить отправку',
+                  onPressed: onRetry,
+                  icon: Icon(Icons.refresh_rounded, color: c.danger),
                 ),
             ],
           ),
@@ -25006,27 +27349,81 @@ class _RemoteChatMessageBody extends StatefulWidget {
 }
 
 class _RemoteChatMessageBodyState extends State<_RemoteChatMessageBody> {
-  String? _url;
+  String? _path;
   String? _error;
+  bool _loading = false;
+  Future<String>? _pending;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _resolve());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreOrLoad());
   }
 
-  Future<void> _resolve() async {
+  String get _mimeType =>
+      widget.message.mimeType ??
+      switch (widget.message.kind) {
+        ChatMessageKind.voice => 'audio/mp4',
+        ChatMessageKind.image => 'image/jpeg',
+        ChatMessageKind.video => 'video/mp4',
+        ChatMessageKind.text => 'application/octet-stream',
+      };
+
+  Future<void> _restoreOrLoad() async {
+    final key = widget.message.attachmentKeys.first;
+    final store = AppScope.of(context);
+    final cached = await store.mediaCache.localPath(key);
+    if (!mounted) return;
+    if (cached != null) {
+      setState(() => _path = cached);
+      return;
+    }
+    // Images are lazy-loaded when their list row becomes visible. Voice and
+    // video wait for an explicit play action.
+    if (widget.message.kind == ChatMessageKind.image) {
+      try {
+        await _obtain();
+      } catch (_) {
+        // The inline retry control exposes the failure.
+      }
+    }
+  }
+
+  Future<String> _obtain() {
+    final current = _pending;
+    if (current != null) return current;
+    final future = _downloadAndCache();
+    _pending = future;
+    unawaited(future.whenComplete(() => _pending = null));
+    return future;
+  }
+
+  Future<String> _downloadAndCache() async {
     final session = ApiScope.maybeOf(context)?.notifier;
-    if (session == null || widget.message.attachmentKeys.isEmpty) return;
-    setState(() => _error = null);
+    if (session == null || widget.message.attachmentKeys.isEmpty) {
+      throw StateError('Messaging session is unavailable');
+    }
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
-      final value = await session.messageAttachmentDownloadUrl(
-        widget.threadId,
-        widget.message.attachmentKeys.first,
+      final key = widget.message.attachmentKeys.first;
+      final value = await AppScope.of(context).mediaCache.obtain(
+        key: key,
+        mimeType: _mimeType,
+        resolveDownloadUrl: () =>
+            session.messageAttachmentDownloadUrl(widget.threadId, key),
       );
-      if (mounted) setState(() => _url = value);
-    } on ApiException catch (error) {
-      if (mounted) setState(() => _error = error.message);
+      if (mounted) setState(() => _path = value);
+      return value;
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+      rethrow;
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -25034,17 +27431,70 @@ class _RemoteChatMessageBodyState extends State<_RemoteChatMessageBody> {
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
     final mine = widget.message.mine;
-    final url = _url;
-    if (url == null) {
+    final path = _path;
+    if (path != null) {
+      if (widget.message.kind != ChatMessageKind.text) {
+        return _ChatMessageBody(
+          message: widget.message.copyWith(path: path),
+          mine: mine,
+          textColor: mine ? c.surface : c.ink,
+        );
+      }
+    }
+    if (widget.message.kind == ChatMessageKind.voice) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(8, 7, 11, 7),
+        child: _VoiceMessage(
+          path: path,
+          resolvePath: _obtain,
+          duration: widget.message.duration,
+          mine: mine,
+        ),
+      );
+    }
+    if (widget.message.kind == ChatMessageKind.video && path == null) {
       return InkWell(
-        onTap: _error == null ? null : _resolve,
+        onTap: _loading ? null : () => _obtain().catchError((_) => ''),
         child: SizedBox(
           width: 218,
-          height: 74,
+          height: 112,
+          child: Center(
+            child: _loading
+                ? const CircularProgressIndicator(strokeWidth: 2)
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _error == null
+                            ? Icons.play_circle_outline_rounded
+                            : Icons.refresh_rounded,
+                        color: mine ? c.surface : c.primary,
+                        size: 34,
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        _error == null ? 'Воспроизвести видео' : 'Повторить',
+                        style: RefType.ui(
+                          size: 10.5,
+                          color: mine ? c.surface : c.muted,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      );
+    }
+    if (widget.message.kind == ChatMessageKind.image && path == null) {
+      return InkWell(
+        onTap: _loading ? null : () => _obtain().catchError((_) => ''),
+        child: SizedBox(
+          width: 218,
+          height: 140,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              if (_error == null)
+              if (_loading)
                 const SizedBox(
                   width: 18,
                   height: 18,
@@ -25055,7 +27505,7 @@ class _RemoteChatMessageBodyState extends State<_RemoteChatMessageBody> {
               const SizedBox(width: 9),
               Flexible(
                 child: Text(
-                  _error == null ? 'Загрузка вложения…' : 'Повторить загрузку',
+                  _loading ? 'Загрузка изображения…' : 'Повторить загрузку',
                   style: RefType.ui(
                     size: 10.5,
                     color: mine ? c.surface : c.muted,
@@ -25067,17 +27517,17 @@ class _RemoteChatMessageBodyState extends State<_RemoteChatMessageBody> {
         ),
       );
     }
-    if (widget.message.kind != ChatMessageKind.text) {
-      return _ChatMessageBody(
-        message: widget.message.copyWith(path: url),
-        mine: mine,
-        textColor: mine ? c.surface : c.ink,
-      );
-    }
     final label = _portableFileName(widget.message.attachmentKeys.first);
     return InkWell(
-      onTap: () =>
-          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      onTap: () async {
+        final session = ApiScope.maybeOf(context)?.notifier;
+        if (session == null) return;
+        final url = await session.messageAttachmentDownloadUrl(
+          widget.threadId,
+          widget.message.attachmentKeys.first,
+        );
+        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      },
       child: _ChatFileMessageBody(
         label: label.isEmpty ? 'Вложение' : label,
         mine: mine,
@@ -25750,6 +28200,7 @@ class _PreparedChatAttachment {
     required this.choice,
     this.messageKind,
     this.caption = '',
+    this.duration,
   });
 
   final String path;
@@ -25757,6 +28208,7 @@ class _PreparedChatAttachment {
   final _AttachmentChoice choice;
   final ChatMessageKind? messageKind;
   final String caption;
+  final Duration? duration;
 
   _PreparedChatAttachment copyWith({String? path, String? caption}) =>
       _PreparedChatAttachment(
@@ -25765,6 +28217,7 @@ class _PreparedChatAttachment {
         choice: choice,
         messageKind: messageKind,
         caption: caption ?? this.caption,
+        duration: duration,
       );
 }
 
@@ -25792,6 +28245,76 @@ String _chatContentType(String filename) {
   if (value.endsWith('.pdf')) return 'application/pdf';
   if (value.endsWith('.txt')) return 'text/plain';
   return 'application/octet-stream';
+}
+
+/// Android's MediaMuxer commonly writes an audio-only MP4 with the `mp42` or
+/// `isom` major brand even when the requested filename ends in `.m4a`. File
+/// signature detectors classify that container as `video/mp4`. The storage
+/// service validates the declared MIME against that signature, so declaring
+/// every `.m4a` as `audio/mp4` makes genuine recordings fail after capture.
+/// Apple/FFmpeg-style `M4A ` brands remain correctly declared as audio/mp4.
+@visibleForTesting
+String chatContentTypeForBytes(String filename, Uint8List bytes) {
+  final declared = _chatContentType(filename);
+  if (!filename.toLowerCase().split('?').first.endsWith('.m4a') ||
+      bytes.length < 12) {
+    return declared;
+  }
+  final box = String.fromCharCodes(bytes.sublist(4, 8));
+  if (box != 'ftyp') return declared;
+  final brand = String.fromCharCodes(bytes.sublist(8, 12)).toUpperCase();
+  return brand.startsWith('M4A') ||
+          brand.startsWith('M4B') ||
+          brand.startsWith('M4P')
+      ? 'audio/mp4'
+      : 'video/mp4';
+}
+
+Future<bool> _recordedVoiceHasPayload(String? path) async {
+  if (path == null || path.trim().isEmpty) return false;
+  if (kIsWeb) return true;
+  try {
+    final file = File(path);
+    return await file.exists() && await file.length() > 128;
+  } on FileSystemException {
+    return false;
+  }
+}
+
+Future<void> _deleteLocalChatFile(String path) async {
+  if (kIsWeb || path.trim().isEmpty) return;
+  try {
+    final file = File(path);
+    if (await file.exists()) await file.delete();
+  } on FileSystemException {
+    // Local media cleanup is best effort; the server message remains valid.
+  }
+}
+
+/// Android MediaMuxer writes audio-only MPEG-4 recordings with the generic
+/// `mp42`/`isom` major brand. The backend deliberately validates uploaded
+/// bytes and classifies those brands as video, while `.m4a` grants require
+/// `audio/mp4`. Marking the same, already-valid container as `M4A ` makes the
+/// declared extension, MIME and signature agree without transcoding audio.
+@visibleForTesting
+Future<bool> normalizeRecordedM4aBrand(String path) async {
+  if (kIsWeb || !path.toLowerCase().endsWith('.m4a')) return true;
+  try {
+    final file = File(path);
+    if (!await file.exists() || await file.length() < 12) return false;
+    final bytes = await file.readAsBytes();
+    if (String.fromCharCodes(bytes.sublist(4, 8)) != 'ftyp') {
+      return false;
+    }
+    final brand = String.fromCharCodes(bytes.sublist(8, 12));
+    if (brand == 'M4A ') return true;
+    if (brand != 'mp42' && brand != 'isom') return false;
+    bytes.setRange(8, 12, const [0x4D, 0x34, 0x41, 0x20]);
+    await file.writeAsBytes(bytes, flush: true);
+    return true;
+  } on FileSystemException {
+    return false;
+  }
 }
 
 Future<_PreparedChatAttachment?> _pickChatAttachment({
@@ -25948,6 +28471,14 @@ String _portableFileName(String path) {
   final normalized = path.replaceAll('\\', '/');
   final slash = normalized.lastIndexOf('/');
   return slash == -1 ? normalized : normalized.substring(slash + 1);
+}
+
+String _voiceUploadFilename(String original) {
+  final base = _portableFileName(
+    original,
+  ).replaceAll(RegExp(r'[^a-zA-Z0-9_.-]+'), '_');
+  if (base.toLowerCase().endsWith('.m4a')) return base;
+  return 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
 }
 
 Future<_PreparedChatAttachment?> _previewChatAttachment({
@@ -26534,12 +29065,39 @@ class _VideoMessageState extends State<_VideoMessage> {
   }
 }
 
+class _VoicePlaybackCoordinator {
+  static AudioPlayer? _active;
+  static VoidCallback? _onInterrupted;
+
+  static Future<void> activate(
+    AudioPlayer player, {
+    required VoidCallback onInterrupted,
+  }) async {
+    final previous = _active;
+    if (previous != null && !identical(previous, player)) {
+      await previous.stop();
+      _onInterrupted?.call();
+    }
+    _active = player;
+    _onInterrupted = onInterrupted;
+  }
+
+  static void release(AudioPlayer player) {
+    if (identical(_active, player)) {
+      _active = null;
+      _onInterrupted = null;
+    }
+  }
+}
+
 class _VoiceMessage extends StatefulWidget {
-  final String path;
+  final String? path;
+  final Future<String> Function()? resolvePath;
   final Duration? duration;
   final bool mine;
   const _VoiceMessage({
     required this.path,
+    this.resolvePath,
     required this.duration,
     required this.mine,
   });
@@ -26551,6 +29109,11 @@ class _VoiceMessageState extends State<_VoiceMessage> {
   late final AudioPlayer _player;
   bool _ready = false;
   bool _playing = false;
+  bool _loading = false;
+  bool _failed = false;
+  double _speed = 1;
+  String? _resolvedPath;
+  AppStore? _store;
   Duration _position = Duration.zero;
 
   @override
@@ -26565,32 +29128,70 @@ class _VoiceMessageState extends State<_VoiceMessage> {
               state.processingState != ProcessingState.completed,
         );
       }
+      if (state.processingState == ProcessingState.completed) {
+        final path = _resolvedPath;
+        if (path != null) _store?.mediaCache.unprotect(path);
+      }
     });
     _player.positionStream.listen((position) {
       if (mounted) setState(() => _position = position);
     });
-    _player
-        .setAudioSource(
-          _isRemoteChatPath(widget.path)
-              ? AudioSource.uri(Uri.parse(widget.path))
-              : AudioSource.file(widget.path),
-        )
-        .then((_) {
-          if (mounted) setState(() => _ready = true);
-        })
-        .catchError((_) {});
+    final path = widget.path;
+    if (path != null && path.isNotEmpty) unawaited(_setSource(path));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _store = AppScope.of(context);
+  }
+
+  Future<void> _setSource(String path) async {
+    await _player.setAudioSource(
+      _isRemoteChatPath(path)
+          ? AudioSource.uri(Uri.parse(path))
+          : AudioSource.file(path),
+    );
+    _resolvedPath = path;
+    await _player.setSpeed(_speed);
+    if (mounted) {
+      setState(() {
+        _ready = true;
+        _failed = false;
+      });
+    }
   }
 
   @override
   void dispose() {
+    final path = _resolvedPath;
+    if (path != null) _store?.mediaCache.unprotect(path);
+    _VoicePlaybackCoordinator.release(_player);
     _player.dispose();
     super.dispose();
   }
 
   Future<void> _toggle() async {
-    if (!_ready) return;
+    if (!_ready) {
+      final resolver = widget.resolvePath;
+      if (resolver == null || _loading) return;
+      setState(() {
+        _loading = true;
+        _failed = false;
+      });
+      try {
+        await _setSource(await resolver());
+      } catch (_) {
+        if (mounted) setState(() => _failed = true);
+        return;
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
+    }
     if (_playing) {
       await _player.pause();
+      final path = _resolvedPath;
+      if (path != null) _store?.mediaCache.unprotect(path);
     } else {
       final duration = _player.duration;
       final atEnd =
@@ -26599,8 +29200,44 @@ class _VoiceMessageState extends State<_VoiceMessage> {
               duration > Duration.zero &&
               _player.position >= duration - const Duration(milliseconds: 80));
       if (atEnd) await _player.seek(Duration.zero);
+      await _VoicePlaybackCoordinator.activate(
+        _player,
+        onInterrupted: () {
+          final interruptedPath = _resolvedPath;
+          if (interruptedPath != null) {
+            _store?.mediaCache.unprotect(interruptedPath);
+          }
+          if (mounted) setState(() => _playing = false);
+        },
+      );
+      final path = _resolvedPath;
+      if (path != null) _store?.mediaCache.protect(path);
       await _player.play();
     }
+  }
+
+  Future<void> _cycleSpeed() async {
+    _speed = switch (_speed) {
+      1 => 1.5,
+      1.5 => 2,
+      _ => 1,
+    };
+    if (_ready) await _player.setSpeed(_speed);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _seek(TapDownDetails details, double width) async {
+    final duration = widget.duration ?? _player.duration;
+    if (!_ready ||
+        duration == null ||
+        duration <= Duration.zero ||
+        width <= 0) {
+      return;
+    }
+    final ratio = (details.localPosition.dx / width).clamp(0.0, 1.0);
+    await _player.seek(
+      Duration(milliseconds: (duration.inMilliseconds * ratio).round()),
+    );
   }
 
   @override
@@ -26630,7 +29267,13 @@ class _VoiceMessageState extends State<_VoiceMessage> {
                 shape: BoxShape.circle,
               ),
               child: Icon(
-                _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                _loading
+                    ? Icons.hourglass_top_rounded
+                    : _failed
+                    ? Icons.refresh_rounded
+                    : _playing
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
                 color: iconColor,
                 size: 22,
               ),
@@ -26641,34 +29284,63 @@ class _VoiceMessageState extends State<_VoiceMessage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    for (int i = 0; i < 18; i++)
-                      Container(
-                        width: 3,
-                        height: 5.0 + (i * 7 % 15),
-                        margin: const EdgeInsets.only(right: 2),
-                        decoration: BoxDecoration(
-                          color: i / 18 <= progress
-                              ? iconColor
-                              : waveColor.withValues(alpha: .48),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) => GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapDown: (details) =>
+                        _seek(details, constraints.maxWidth),
+                    child: Row(
+                      children: [
+                        for (int i = 0; i < 18; i++)
+                          Expanded(
+                            child: Container(
+                              height: 5.0 + (i * 7 % 15),
+                              margin: const EdgeInsets.only(right: 2),
+                              decoration: BoxDecoration(
+                                color: i / 18 <= progress
+                                    ? iconColor
+                                    : waveColor.withValues(alpha: .48),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  _position > Duration.zero
-                      ? _durationLabel(_position)
-                      : _durationLabel(duration),
-                  style: TextStyle(
-                    fontFamily: SfType.mono,
-                    fontSize: 9.5,
-                    color: widget.mine
-                        ? Colors.white.withValues(alpha: 0.75)
-                        : c.muted,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _position > Duration.zero
+                            ? _durationLabel(_position)
+                            : _durationLabel(duration),
+                        style: TextStyle(
+                          fontFamily: SfType.mono,
+                          fontSize: 9.5,
+                          color: widget.mine
+                              ? Colors.white.withValues(alpha: 0.75)
+                              : c.muted,
+                        ),
+                      ),
+                    ),
+                    InkWell(
+                      onTap: _cycleSpeed,
+                      borderRadius: RefRadius.pill,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Text(
+                          '${_speed.toStringAsFixed(_speed == 1 ? 0 : 1)}x',
+                          style: RefType.mono(
+                            size: 9,
+                            weight: FontWeight.w800,
+                            color: iconColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -26974,38 +29646,37 @@ class _StudentSelfServiceScreenState extends State<StudentSelfServiceScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 28),
               child: _loading
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(32),
-                        child: CircularProgressIndicator(),
+                  ? RefLoadingState(
+                      title: tx(
+                        context,
+                        uz: 'Ma’lumotlar tayyorlanmoqda',
+                        ru: 'Данные загружаются',
+                        en: 'Preparing your information',
+                      ),
+                      message: tx(
+                        context,
+                        uz: 'Shaxsiy jadval, natijalar va to‘lovlar yangilanmoqda.',
+                        ru: 'Обновляем личное расписание, результаты и платежи.',
+                        en: 'Refreshing your schedule, results and payments.',
                       ),
                     )
                   : _error != null
-                  ? RefSurfaceCard(
-                      child: Column(
-                        children: [
-                          Icon(Icons.cloud_off_rounded, color: c.danger),
-                          const SizedBox(height: 8),
-                          Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: RefType.ui(size: 12, color: c.danger),
-                          ),
-                          const SizedBox(height: 10),
-                          TextButton.icon(
-                            onPressed: _load,
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: Text(
-                              tx(
-                                context,
-                                uz: 'Qayta urinish',
-                                ru: 'Повторить',
-                                en: 'Retry',
-                              ),
-                            ),
-                          ),
-                        ],
+                  ? RefEmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: tx(
+                        context,
+                        uz: 'Ma’lumotlarni yangilab bo‘lmadi',
+                        ru: 'Не удалось обновить данные',
+                        en: 'Could not refresh your information',
                       ),
+                      message: _error!,
+                      actionLabel: tx(
+                        context,
+                        uz: 'Qayta urinish',
+                        ru: 'Повторить',
+                        en: 'Retry',
+                      ),
+                      onAction: _load,
                     )
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -27258,6 +29929,23 @@ class ProfileScreen extends StatelessWidget {
             fallback: configLabel(context, cfg.scope),
           )
         : configLabel(context, cfg.scope);
+    // Every real viewport is finite. Keeping the former composition below as
+    // an emergency fallback for unconstrained test hosts lets this redesign
+    // remain low-risk while the product uses the lighter overview everywhere.
+    if (MediaQuery.sizeOf(context).width.isFinite) {
+      return _ProfileOverview(
+        cfg: cfg,
+        colors: c,
+        who: who,
+        title: title,
+        scope: scope,
+        live: live,
+        onEdit: openEdit,
+        onLogout: logout,
+        onSwitchRole: onSwitchRole,
+        onNavigate: onNavigate,
+      );
+    }
     // (label, value, onTap) — theme/lang/currency change inline, instantly.
     final rows = <(String, String, VoidCallback)>[
       (
@@ -27348,44 +30036,6 @@ class ProfileScreen extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   child: Row(
                     children: [
-                      // Tap avatar → avatar picker; tap the card → edit profile.
-                      GestureDetector(
-                        onTap: () => Navigator.of(
-                          context,
-                        ).push(sfPageRoute(AvatarPickerScreen(colors: c))),
-                        child: Stack(
-                          children: [
-                            SfAvatar(
-                              name: who,
-                              size: 56,
-                              color: cfg.accent(c),
-                              choice: store.avatarChoice,
-                            ),
-                            Positioned(
-                              right: 0,
-                              bottom: 0,
-                              child: Container(
-                                width: 20,
-                                height: 20,
-                                decoration: BoxDecoration(
-                                  color: c.primary,
-                                  borderRadius: BorderRadius.circular(7),
-                                  border: Border.all(
-                                    color: c.surface,
-                                    width: 2,
-                                  ),
-                                ),
-                                child: const Icon(
-                                  Icons.photo_camera_rounded,
-                                  size: 10,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 13),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -27576,6 +30226,965 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
+class _ProfileOverview extends StatelessWidget {
+  const _ProfileOverview({
+    required this.cfg,
+    required this.colors,
+    required this.who,
+    required this.title,
+    required this.scope,
+    required this.live,
+    required this.onEdit,
+    required this.onLogout,
+    required this.onSwitchRole,
+    required this.onNavigate,
+  });
+
+  final RoleConfig cfg;
+  final SfColors colors;
+  final String who;
+  final String title;
+  final String scope;
+  final bool live;
+  final VoidCallback onEdit;
+  final Future<void> Function() onLogout;
+  final VoidCallback onSwitchRole;
+  final ValueChanged<String>? onNavigate;
+
+  void _open(BuildContext context, String route, Widget fallback) {
+    if (onNavigate != null) {
+      onNavigate!(route);
+      return;
+    }
+    Navigator.of(
+      context,
+    ).push(sfPageRoute(SfTheme(colors: colors, child: fallback)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final api = ApiScope.maybeOf(context)?.notifier;
+    final notificationsPage = api?.authenticated == true
+        ? const LiveNotificationsPage()
+        : NotificationsScreen(colors: colors);
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        RefLargeHeader(
+          eyebrow: tx(
+            context,
+            uz: 'HISOB VA SOZLAMALAR',
+            ru: 'АККАУНТ И НАСТРОЙКИ',
+            en: 'ACCOUNT & SETTINGS',
+          ),
+          title: tr(context, 'profile_title'),
+          subtitle: tx(
+            context,
+            uz: 'Shaxsiy ma’lumotlar, xavfsizlik va ilova sozlamalari',
+            ru: 'Личные данные, безопасность и настройки приложения',
+            en: 'Personal information, security and app preferences',
+          ),
+          actions: [
+            RefIconAction(
+              key: const ValueKey('profile-edit-action'),
+              icon: Icons.edit_rounded,
+              tooltip: tr(context, 'edit_profile'),
+              onPressed: onEdit,
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 15, 18, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      colors.ink,
+                      Color.alphaBlend(
+                        colors.primary.withValues(alpha: .62),
+                        colors.ink,
+                      ),
+                    ],
+                  ),
+                  borderRadius: RefRadius.xl,
+                  boxShadow: [
+                    BoxShadow(
+                      color: colors.primary.withValues(alpha: .22),
+                      blurRadius: 28,
+                      offset: const Offset(0, 14),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(17),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              who,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: RefType.ui(
+                                size: 17,
+                                weight: FontWeight.w800,
+                                color: colors.surface,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: RefType.ui(
+                                size: 11.5,
+                                color: colors.surface.withValues(alpha: .76),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                _ProfileBadge(
+                                  icon: Icons.lock_outline_rounded,
+                                  label: configLabel(context, cfg.label),
+                                  colors: colors,
+                                ),
+                                if (scope.isNotEmpty)
+                                  _ProfileBadge(
+                                    icon: Icons.location_on_outlined,
+                                    label: scope,
+                                    colors: colors,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              RefSectionHeader(
+                title: tx(
+                  context,
+                  uz: 'Hisob',
+                  ru: 'Учётная запись',
+                  en: 'Account',
+                ),
+                subtitle: tx(
+                  context,
+                  uz: 'Ma’lumot va faoliyatni boshqarish',
+                  ru: 'Управление данными и активностью',
+                  en: 'Manage your information and activity',
+                ),
+              ),
+              const SizedBox(height: 8),
+              RefSurfaceCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    _ProfileMenuRow(
+                      icon: Icons.person_outline_rounded,
+                      title: tr(context, 'edit_profile'),
+                      subtitle: tx(
+                        context,
+                        uz: 'Ism, telefon va email',
+                        ru: 'Имя, телефон и email',
+                        en: 'Name, phone and email',
+                      ),
+                      onTap: onEdit,
+                    ),
+                    _ProfileMenuRow(
+                      icon: Icons.history_rounded,
+                      title: tx(
+                        context,
+                        uz: 'Faoliyat tarixi',
+                        ru: 'История активности',
+                        en: 'Activity history',
+                      ),
+                      subtitle: tx(
+                        context,
+                        uz: 'Muhim o‘zgarishlar va amallar',
+                        ru: 'Важные изменения и действия',
+                        en: 'Important changes and actions',
+                      ),
+                      onTap: () => _open(
+                        context,
+                        'account_activity',
+                        AccountActivityScreen(colors: colors),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              RefSectionHeader(
+                title: tx(context, uz: 'Ilova', ru: 'Приложение', en: 'App'),
+                subtitle: tx(
+                  context,
+                  uz: 'Qulaylik va xabarlar',
+                  ru: 'Комфорт и уведомления',
+                  en: 'Comfort and notifications',
+                ),
+              ),
+              const SizedBox(height: 8),
+              RefSurfaceCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    _ProfileMenuRow(
+                      icon: Icons.tune_rounded,
+                      title: tx(
+                        context,
+                        uz: 'Ilova sozlamalari',
+                        ru: 'Настройки приложения',
+                        en: 'App preferences',
+                      ),
+                      subtitle: tx(
+                        context,
+                        uz: 'Til, mavzu, ranglar va valyuta',
+                        ru: 'Язык, тема, цвета и валюта',
+                        en: 'Language, theme, colours and currency',
+                      ),
+                      onTap: () => _open(
+                        context,
+                        'account_preferences',
+                        AccountPreferencesScreen(cfg: cfg, colors: colors),
+                      ),
+                    ),
+                    _ProfileMenuRow(
+                      icon: Icons.notifications_none_rounded,
+                      title: tx(
+                        context,
+                        uz: 'Bildirishnomalar',
+                        ru: 'Уведомления',
+                        en: 'Notifications',
+                      ),
+                      subtitle: tx(
+                        context,
+                        uz: 'Yangi va o‘qilgan xabarlar',
+                        ru: 'Новые и прочитанные события',
+                        en: 'New and read updates',
+                      ),
+                      onTap: () =>
+                          _open(context, 'notifications', notificationsPage),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              RefSectionHeader(
+                title: tx(
+                  context,
+                  uz: 'Xavfsizlik',
+                  ru: 'Безопасность',
+                  en: 'Security',
+                ),
+              ),
+              const SizedBox(height: 8),
+              RefSurfaceCard(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    _ProfileMenuRow(
+                      icon: Icons.password_rounded,
+                      title: tx(
+                        context,
+                        uz: 'Parolni o‘zgartirish',
+                        ru: 'Изменить пароль',
+                        en: 'Change password',
+                      ),
+                      subtitle: tx(
+                        context,
+                        uz: 'Hisobga kirishni himoyalash',
+                        ru: 'Защита доступа к учётной записи',
+                        en: 'Protect access to your account',
+                      ),
+                      onTap: () => _open(
+                        context,
+                        'security',
+                        AccountSecurityScreen(colors: colors),
+                      ),
+                    ),
+                    _ProfileMenuRow(
+                      icon: Icons.privacy_tip_outlined,
+                      title: tx(
+                        context,
+                        uz: 'Maxfiylik siyosati',
+                        ru: 'Политика конфиденциальности',
+                        en: 'Privacy policy',
+                      ),
+                      subtitle: tx(
+                        context,
+                        uz: 'Ma’lumotlarni saqlash va ishlatish',
+                        ru: 'Хранение и использование данных',
+                        en: 'How data is stored and used',
+                      ),
+                      onTap: () => _open(
+                        context,
+                        'privacy',
+                        PrivacyPolicyScreen(colors: colors),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (!live) ...[
+                RefButton(
+                  label: tr(context, 'btn_switch_role'),
+                  onPressed: onSwitchRole,
+                  kind: RefButtonKind.ghost,
+                  leading: Icons.switch_account_rounded,
+                  block: true,
+                ),
+                const SizedBox(height: 10),
+              ],
+              RefButton(
+                label: tr(context, 'btn_logout'),
+                onPressed: onLogout,
+                kind: RefButtonKind.danger,
+                leading: Icons.logout_rounded,
+                block: true,
+              ),
+              const SizedBox(height: 15),
+              Center(
+                child: Text(
+                  'StarForge EDU · v$kAppDisplayVersion',
+                  style: RefType.mono(size: 10, color: colors.muted2),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ProfileBadge extends StatelessWidget {
+  const _ProfileBadge({
+    required this.icon,
+    required this.label,
+    required this.colors,
+  });
+
+  final IconData icon;
+  final String label;
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(maxWidth: 190),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: colors.surface.withValues(alpha: .11),
+      borderRadius: RefRadius.pill,
+      border: Border.all(color: colors.surface.withValues(alpha: .15)),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: colors.surface.withValues(alpha: .8)),
+        const SizedBox(width: 5),
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: RefType.ui(
+              size: 9.5,
+              weight: FontWeight.w700,
+              color: colors.surface.withValues(alpha: .85),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ProfileMenuRow extends StatelessWidget {
+  const _ProfileMenuRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(13, 11, 10, 11),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: c.primarySoft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, size: 19, color: c.primary),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: RefType.ui(
+                      size: 12.5,
+                      weight: FontWeight.w800,
+                      color: c.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: RefType.ui(size: 10.5, color: c.muted),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right_rounded, size: 20, color: c.muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AccountPageFrame extends StatelessWidget {
+  const _AccountPageFrame({
+    required this.colors,
+    required this.title,
+    required this.subtitle,
+    required this.children,
+  });
+
+  final SfColors colors;
+  final String title;
+  final String subtitle;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => SfTheme(
+    colors: colors,
+    child: ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        RefLargeHeader(
+          eyebrow: tx(
+            context,
+            uz: 'HISOB',
+            ru: 'УЧЁТНАЯ ЗАПИСЬ',
+            en: 'ACCOUNT',
+          ),
+          title: title,
+          subtitle: subtitle,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 15, 18, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class AccountPreferencesScreen extends StatelessWidget {
+  const AccountPreferencesScreen({
+    super.key,
+    required this.cfg,
+    required this.colors,
+  });
+
+  final RoleConfig cfg;
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = SettingsScope.of(context);
+    return _AccountPageFrame(
+      colors: colors,
+      title: tx(
+        context,
+        uz: 'Ilova sozlamalari',
+        ru: 'Настройки приложения',
+        en: 'App preferences',
+      ),
+      subtitle: tx(
+        context,
+        uz: 'Ko‘rinish, til va hisob-kitob formati',
+        ru: 'Внешний вид, язык и формат расчётов',
+        en: 'Appearance, language and financial format',
+      ),
+      children: [
+        RefSurfaceCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              _ProfileMenuRow(
+                icon: Icons.language_rounded,
+                title: tr(context, 'set_lang'),
+                subtitle: langName(context, settings.lang),
+                onTap: () => _showLanguagePicker(context, settings),
+              ),
+              _ProfileMenuRow(
+                icon: Icons.currency_exchange_rounded,
+                title: tr(context, 'set_currency'),
+                subtitle:
+                    '${kCurrencyCode[settings.currency]} · ${kCurrencySym[settings.currency]}',
+                onTap: () => _showCurrencyPicker(context, settings),
+              ),
+              _ProfileMenuRow(
+                icon: Icons.palette_outlined,
+                title: tr(context, 'tweaks_title'),
+                subtitle: tr(context, 'tweaks_sub'),
+                onTap: () => showDesignPanel(context, cfg.role),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        RefSurfaceCard(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+          child: SwitchListTile(
+            value: settings.dark,
+            onChanged: settings.setDark,
+            secondary: Icon(
+              settings.dark
+                  ? Icons.dark_mode_rounded
+                  : Icons.light_mode_rounded,
+              color: colors.primary,
+            ),
+            title: Text(
+              tr(context, 'set_theme'),
+              style: RefType.ui(
+                size: 12.5,
+                weight: FontWeight.w800,
+                color: colors.ink,
+              ),
+            ),
+            subtitle: Text(
+              tr(context, settings.dark ? 'theme_dark' : 'theme_light'),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class AccountActivityScreen extends StatelessWidget {
+  const AccountActivityScreen({super.key, required this.colors});
+
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = AppScope.of(context).activities;
+    return _AccountPageFrame(
+      colors: colors,
+      title: tx(
+        context,
+        uz: 'Faoliyat tarixi',
+        ru: 'История активности',
+        en: 'Activity history',
+      ),
+      subtitle: tx(
+        context,
+        uz: 'Hisobdagi muhim o‘zgarishlar va amallar',
+        ru: 'Важные изменения и действия в аккаунте',
+        en: 'Important account changes and actions',
+      ),
+      children: [
+        if (items.isEmpty)
+          RefEmptyState(
+            icon: Icons.history_rounded,
+            title: tx(
+              context,
+              uz: 'Faoliyat hali yo‘q',
+              ru: 'История пока пуста',
+              en: 'No activity yet',
+            ),
+            message: tx(
+              context,
+              uz: 'Muhim amallar bajarilganda ular shu yerda ko‘rinadi.',
+              ru: 'Важные действия будут показаны здесь.',
+              en: 'Important actions will appear here.',
+            ),
+          )
+        else
+          RefSurfaceCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                for (var index = 0; index < items.length; index++)
+                  _ActivityRow(
+                    event: items[index],
+                    last: index == items.length - 1,
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class PrivacyPolicyScreen extends StatelessWidget {
+  const PrivacyPolicyScreen({super.key, required this.colors});
+
+  final SfColors colors;
+
+  @override
+  Widget build(BuildContext context) => _AccountPageFrame(
+    colors: colors,
+    title: tx(
+      context,
+      uz: 'Maxfiylik siyosati',
+      ru: 'Политика конфиденциальности',
+      en: 'Privacy policy',
+    ),
+    subtitle: tx(
+      context,
+      uz: 'Ma’lumotlar qanday saqlanadi va ishlatiladi',
+      ru: 'Как хранятся и используются данные',
+      en: 'How information is stored and used',
+    ),
+    children: [
+      _PrivacyInfoCard(
+        icon: Icons.lock_person_rounded,
+        title: tx(
+          context,
+          uz: 'Shaxsiy ma’lumotlar',
+          ru: 'Личные данные',
+          en: 'Personal information',
+        ),
+        body: tx(
+          context,
+          uz: 'Ilova faqat rolingiz va ruxsatlaringiz doirasidagi ma’lumotlarni ko‘rsatadi.',
+          ru: 'Приложение показывает только данные, разрешённые вашей ролью и правами.',
+          en: 'The app only displays data permitted by your role and permissions.',
+        ),
+      ),
+      const SizedBox(height: 10),
+      _PrivacyInfoCard(
+        icon: Icons.verified_user_rounded,
+        title: tx(
+          context,
+          uz: 'Xavfsiz sessiya',
+          ru: 'Безопасная сессия',
+          en: 'Secure session',
+        ),
+        body: tx(
+          context,
+          uz: 'Kirish tokeni qurilmaning himoyalangan xotirasida saqlanadi. Parol ilovada saqlanmaydi.',
+          ru: 'Токен входа хранится в защищённом хранилище устройства. Пароль в приложении не сохраняется.',
+          en: 'The sign-in token is kept in protected device storage. The app never stores your password.',
+        ),
+      ),
+      const SizedBox(height: 10),
+      _PrivacyInfoCard(
+        icon: Icons.notifications_active_outlined,
+        title: tx(
+          context,
+          uz: 'Bildirishnomalar',
+          ru: 'Уведомления',
+          en: 'Notifications',
+        ),
+        body: tx(
+          context,
+          uz: 'Qurilma tokeni faqat hisobingizga tegishli muhim xabarlarni yetkazish uchun ishlatiladi.',
+          ru: 'Токен устройства используется только для доставки важных сообщений вашего аккаунта.',
+          en: 'The device token is used only to deliver important messages for your account.',
+        ),
+      ),
+    ],
+  );
+}
+
+class _PrivacyInfoCard extends StatelessWidget {
+  const _PrivacyInfoCard({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return RefSurfaceCard(
+      padding: const EdgeInsets.all(15),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: c.primarySoft,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(icon, size: 20, color: c.primary),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: RefType.ui(
+                    size: 13,
+                    weight: FontWeight.w800,
+                    color: c.ink,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  body,
+                  style: RefType.ui(size: 11.5, color: c.muted, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AccountSecurityScreen extends StatefulWidget {
+  const AccountSecurityScreen({super.key, required this.colors});
+
+  final SfColors colors;
+
+  @override
+  State<AccountSecurityScreen> createState() => _AccountSecurityScreenState();
+}
+
+class _AccountSecurityScreenState extends State<AccountSecurityScreen> {
+  final _current = TextEditingController();
+  final _next = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _saving = false;
+  bool _obscure = true;
+  String? _error;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _next.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (_current.text.isEmpty || _next.text.length < 8) {
+      setState(
+        () => _error = tx(
+          context,
+          uz: 'Barcha maydonlarni to‘ldiring. Yangi parol kamida 8 belgidan iborat bo‘lsin.',
+          ru: 'Заполните все поля. Новый пароль должен содержать не менее 8 символов.',
+          en: 'Complete every field. The new password must contain at least 8 characters.',
+        ),
+      );
+      return;
+    }
+    if (_next.text != _confirm.text) {
+      setState(
+        () => _error = tx(
+          context,
+          uz: 'Yangi parollar mos emas.',
+          ru: 'Новые пароли не совпадают.',
+          en: 'The new passwords do not match.',
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ApiScope.of(
+        context,
+      ).changePassword(currentPassword: _current.text, newPassword: _next.text);
+      if (!mounted) return;
+      _current.clear();
+      _next.clear();
+      _confirm.clear();
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              tx(
+                context,
+                uz: 'Parol muvaffaqiyatli yangilandi.',
+                ru: 'Пароль успешно обновлён.',
+                en: 'Password updated successfully.',
+              ),
+            ),
+          ),
+        );
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.colors;
+    return _AccountPageFrame(
+      colors: c,
+      title: tx(context, uz: 'Xavfsizlik', ru: 'Безопасность', en: 'Security'),
+      subtitle: tx(
+        context,
+        uz: 'Parolni o‘zgartirish va hisobni himoyalash',
+        ru: 'Изменение пароля и защита аккаунта',
+        en: 'Change your password and protect your account',
+      ),
+      children: [
+        RefSurfaceCard(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const ValueKey('account-current-password'),
+                controller: _current,
+                obscureText: _obscure,
+                decoration: InputDecoration(
+                  labelText: tx(
+                    context,
+                    uz: 'Joriy parol',
+                    ru: 'Текущий пароль',
+                    en: 'Current password',
+                  ),
+                  prefixIcon: const Icon(Icons.lock_outline_rounded),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('account-new-password'),
+                controller: _next,
+                obscureText: _obscure,
+                decoration: InputDecoration(
+                  labelText: tx(
+                    context,
+                    uz: 'Yangi parol',
+                    ru: 'Новый пароль',
+                    en: 'New password',
+                  ),
+                  prefixIcon: const Icon(Icons.password_rounded),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('account-confirm-password'),
+                controller: _confirm,
+                obscureText: _obscure,
+                onSubmitted: (_) => _save(),
+                decoration: InputDecoration(
+                  labelText: tx(
+                    context,
+                    uz: 'Yangi parolni takrorlang',
+                    ru: 'Повторите новый пароль',
+                    en: 'Confirm new password',
+                  ),
+                  prefixIcon: const Icon(Icons.verified_user_outlined),
+                  suffixIcon: IconButton(
+                    tooltip: _obscure
+                        ? tx(
+                            context,
+                            uz: 'Ko‘rsatish',
+                            ru: 'Показать',
+                            en: 'Show',
+                          )
+                        : tx(
+                            context,
+                            uz: 'Yashirish',
+                            ru: 'Скрыть',
+                            en: 'Hide',
+                          ),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                    icon: Icon(
+                      _obscure
+                          ? Icons.visibility_rounded
+                          : Icons.visibility_off_rounded,
+                    ),
+                  ),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 11),
+                Text(
+                  _error!,
+                  style: RefType.ui(size: 11.5, color: c.danger, height: 1.4),
+                ),
+              ],
+              const SizedBox(height: 16),
+              RefButton(
+                label: _saving
+                    ? tx(
+                        context,
+                        uz: 'Saqlanmoqda…',
+                        ru: 'Сохранение…',
+                        en: 'Saving…',
+                      )
+                    : tx(
+                        context,
+                        uz: 'Parolni yangilash',
+                        ru: 'Обновить пароль',
+                        en: 'Update password',
+                      ),
+                onPressed: _saving ? null : _save,
+                leading: Icons.lock_reset_rounded,
+                block: true,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// Edit-profile page — change avatar, display name and job title (saved to the
 /// in-memory store, applied live across the app).
 class EditProfileScreen extends StatefulWidget {
@@ -27600,6 +31209,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _saving = false;
   bool _seeded = false;
 
+  String _genderCode(Object? value) {
+    final raw = apiText(value).trim().toLowerCase();
+    if (const {'m', 'male', 'man', 'erkak', 'мужской'}.contains(raw)) {
+      return 'm';
+    }
+    if (const {'f', 'female', 'woman', 'ayol', 'женский'}.contains(raw)) {
+      return 'f';
+    }
+    return '';
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -27615,7 +31235,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _phone.text = apiText(profile['phone']);
       _email.text = apiText(profile['email']);
       _birthdate.text = apiText(profile['birthdate']);
-      _gender = apiText(profile['gender']);
+      _gender = _genderCode(profile['gender']);
     } else {
       _name.text = store.nameOverride ?? widget.cfg.who;
       _title.text = store.titleOverride ?? widget.cfg.roleTitle;
@@ -27695,12 +31315,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     );
   }
 
-  String _fullName() => [
-    _firstName.text.trim(),
-    _middleName.text.trim(),
-    _lastName.text.trim(),
-  ].where((part) => part.isNotEmpty).join(' ');
-
   Widget _genderPicker(SfColors c) {
     final choices = <(String, String)>[
       ('', tx(context, uz: 'Ko‘rsatilmagan', ru: 'Не указан', en: 'Not set')),
@@ -27754,10 +31368,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           'last_name': _lastName.text.trim(),
           'phone': _phone.text.trim().isEmpty ? null : _phone.text.trim(),
           'email': _email.text.trim().isEmpty ? null : _email.text.trim(),
-          'birthdate': _birthdate.text.trim().isEmpty
-              ? null
-              : _birthdate.text.trim(),
-          'gender': _gender,
+          if (api.supportsProfileField('birthdate'))
+            'birthdate': _birthdate.text.trim().isEmpty
+                ? null
+                : _birthdate.text.trim(),
+          if (api.supportsProfileField('gender')) 'gender': _gender,
         });
       } else {
         AppScope.of(context).setProfile(name: _name.text, title: _title.text);
@@ -27796,12 +31411,25 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    final store = AppScope.of(context);
     final api = ApiScope.maybeOf(context)?.notifier;
     final live = api?.authenticated == true;
-    final previewName = live
-        ? (_fullName().isEmpty ? widget.cfg.who : _fullName())
-        : (_name.text.trim().isEmpty ? widget.cfg.who : _name.text.trim());
+    final memberships = apiValue(api?.me ?? const {}, const [
+      'role_memberships',
+    ]);
+    final membership = memberships is Iterable
+        ? memberships.whereType<Map>().firstOrNull
+        : null;
+    final liveRole = membership == null
+        ? apiText(
+            apiValue(api?.me ?? const {}, const ['role', 'principal_kind']),
+          )
+        : apiText(
+            apiValue(Map<String, dynamic>.from(membership), const [
+              'account_type_name',
+              'role_name',
+              'account_kind',
+            ]),
+          );
     return SfTheme(
       colors: c,
       child: Scaffold(
@@ -27826,54 +31454,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
           children: [
-            Center(
-              child: GestureDetector(
-                onTap: () => Navigator.of(
-                  context,
-                ).push(sfPageRoute(AvatarPickerScreen(colors: c))),
-                child: Stack(
-                  children: [
-                    SfAvatar(
-                      name: previewName,
-                      size: 88,
-                      color: widget.cfg.accent(c),
-                      choice: store.avatarChoice,
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 30,
-                        height: 30,
-                        decoration: BoxDecoration(
-                          color: c.primary,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: c.bg, width: 2),
-                        ),
-                        child: const Icon(
-                          Icons.photo_camera_rounded,
-                          size: 15,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                tr(context, 'change_photo'),
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: c.primary,
-                ),
-              ),
-            ),
-            const SizedBox(height: 22),
             if (live) ...[
               _field(
                 c,
@@ -27912,19 +31492,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 Icons.alternate_email_rounded,
                 keyboardType: TextInputType.emailAddress,
               ),
-              _field(
-                c,
-                tx(
-                  context,
-                  uz: 'Tug‘ilgan sana · YYYY-MM-DD',
-                  ru: 'Дата рождения · ГГГГ-ММ-ДД',
-                  en: 'Birth date · YYYY-MM-DD',
+              if (api?.supportsProfileField('birthdate') == true)
+                _field(
+                  c,
+                  tx(
+                    context,
+                    uz: 'Tug‘ilgan sana · YYYY-MM-DD',
+                    ru: 'Дата рождения · ГГГГ-ММ-ДД',
+                    en: 'Birth date · YYYY-MM-DD',
+                  ),
+                  _birthdate,
+                  Icons.cake_outlined,
+                  keyboardType: TextInputType.datetime,
                 ),
-                _birthdate,
-                Icons.cake_outlined,
-                keyboardType: TextInputType.datetime,
-              ),
-              _genderPicker(c),
+              if (api?.supportsProfileField('gender') == true) _genderPicker(c),
             ] else ...[
               _field(c, tr(context, 'stu_fname'), _name, Icons.person_rounded),
               _field(
@@ -27957,8 +31538,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             Text(
               key: const ValueKey('profile-role-readonly'),
               '${tx(context, uz: 'Rol', ru: 'Роль', en: 'Role')}: '
-              '${configLabel(context, widget.cfg.label)} · '
-              '${configLabel(context, widget.cfg.scope)}',
+              '${live && liveRole.isNotEmpty ? liveRole : configLabel(context, widget.cfg.label)} · '
+              '${live ? apiText(apiValue(api?.me ?? const {}, const ['tenant_slug', 'branch_name']), fallback: configLabel(context, widget.cfg.scope)) : configLabel(context, widget.cfg.scope)}',
               style: TextStyle(
                 fontFamily: SfType.ui,
                 fontSize: 11,
@@ -29032,203 +32613,6 @@ class _CreateSheetState extends State<_CreateSheet> {
           ),
         ),
       ),
-    );
-  }
-}
-
-// ── Avatar picker (pushed route) ────────────────────────────────────────
-/// Lets the logged-in user pick a real-photo or emoji-badge avatar. The choice
-/// is stored on the [AppStore] so it updates everywhere the user appears.
-class AvatarPickerScreen extends StatefulWidget {
-  final SfColors colors;
-  const AvatarPickerScreen({super.key, required this.colors});
-
-  @override
-  State<AvatarPickerScreen> createState() => _AvatarPickerScreenState();
-}
-
-class _AvatarPickerScreenState extends State<AvatarPickerScreen> {
-  bool _picking = false;
-
-  bool _isSel(AvatarChoice? cur, AvatarChoice opt) =>
-      cur?.photo == opt.photo && cur?.emoji == opt.emoji;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.colors;
-    final store = AppScope.of(context);
-    final cur = store.avatarChoice;
-    return SfTheme(
-      colors: c,
-      child: Scaffold(
-        backgroundColor: c.bg,
-        appBar: AppBar(
-          backgroundColor: c.surface,
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          iconTheme: IconThemeData(color: c.ink),
-          shape: Border(bottom: BorderSide(color: c.border)),
-          title: Text(
-            tr(context, 'avatar_title'),
-            style: TextStyle(
-              fontFamily: SfType.ui,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: c.ink,
-            ),
-          ),
-        ),
-        body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: [
-            Center(
-              child: SfAvatar(name: 'Sardor Rashidov', size: 96, choice: cur),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                tr(context, 'avatar_eyebrow'),
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: 12.5,
-                  color: c.muted,
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            SfButton(
-              icon: Icons.photo_library_rounded,
-              label: _picking
-                  ? tx(
-                      context,
-                      uz: 'Galereya ochilmoqda…',
-                      ru: 'Открываем галерею…',
-                      en: 'Opening gallery…',
-                    )
-                  : tx(
-                      context,
-                      uz: 'Galereyadan tanlash',
-                      ru: 'Выбрать из галереи',
-                      en: 'Choose from gallery',
-                    ),
-              primary: true,
-              onTap: _picking ? () {} : () => _pickGallery(context, store),
-            ),
-            const SizedBox(height: 20),
-            _AvatarSection(
-              title: tr(context, 'avatar_photos'),
-              options: kAvatarPhotos,
-              selected: cur,
-              isSel: _isSel,
-              onPick: (ch) => _pick(context, store, ch),
-            ),
-            const SizedBox(height: 18),
-            _AvatarSection(
-              title: tr(context, 'avatar_colors'),
-              options: kAvatarBadges,
-              selected: cur,
-              isSel: _isSel,
-              onPick: (ch) => _pick(context, store, ch),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _pick(BuildContext context, AppStore store, AvatarChoice ch) {
-    store.setAvatar(ch);
-    _snack(context, tr(context, 'avatar_saved'), bg: const Color(0xFF4F7B3B));
-  }
-
-  Future<void> _pickGallery(BuildContext context, AppStore store) async {
-    setState(() => _picking = true);
-    try {
-      final image = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 82,
-        maxWidth: 1024,
-        maxHeight: 1024,
-      );
-      if (image == null || !context.mounted) return;
-      final bytes = await image.readAsBytes();
-      if (bytes.isEmpty || !context.mounted) return;
-      store.setAvatarBytes(bytes);
-      _snack(context, tr(context, 'avatar_saved'), bg: const Color(0xFF4F7B3B));
-    } catch (_) {
-      if (!context.mounted) return;
-      _snack(
-        context,
-        tx(
-          context,
-          uz: 'Rasmni ochib bo‘lmadi',
-          ru: 'Не удалось открыть фотографию',
-          en: 'Could not open the photo',
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _picking = false);
-    }
-  }
-}
-
-class _AvatarSection extends StatelessWidget {
-  final String title;
-  final List<AvatarChoice> options;
-  final AvatarChoice? selected;
-  final bool Function(AvatarChoice?, AvatarChoice) isSel;
-  final ValueChanged<AvatarChoice> onPick;
-  const _AvatarSection({
-    required this.title,
-    required this.options,
-    required this.selected,
-    required this.isSel,
-    required this.onPick,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title.toUpperCase(),
-          style: TextStyle(
-            fontFamily: SfType.ui,
-            fontSize: 10.5,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-            color: c.muted,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 14,
-          runSpacing: 14,
-          children: [
-            for (final opt in options)
-              GestureDetector(
-                onTap: () => onPick(opt),
-                child: SfTap(
-                  child: Container(
-                    padding: const EdgeInsets.all(3),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: isSel(selected, opt)
-                            ? c.primary
-                            : Colors.transparent,
-                        width: 2.5,
-                      ),
-                    ),
-                    child: SfAvatar(name: 'StarForge', size: 60, choice: opt),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ],
     );
   }
 }
@@ -31563,7 +34947,7 @@ class _ReferenceRosterCard extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            SfAvatar(name: student.name, size: 42),
+            SfAvatar(name: student.name, size: 42, imageUrl: student.avatarUrl),
             const SizedBox(width: 11),
             Expanded(
               child: Column(
@@ -31718,7 +35102,7 @@ class _RosterRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              SfAvatar(name: s.name, size: 38),
+              SfAvatar(name: s.name, size: 38, imageUrl: s.avatarUrl),
               const SizedBox(width: 11),
               Expanded(
                 child: Column(

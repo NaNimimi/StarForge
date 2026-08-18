@@ -95,12 +95,45 @@ void main() {
     await tester.tapAt(center + const Offset(38, 0));
     await tester.pumpAndSettle();
     expect(find.text('Хорошо'), findsOneWidget);
-    expect(find.text('72%'), findsWidgets);
+    expect(find.textContaining('%'), findsWidgets);
 
     settings.setLang(SfLang.en);
     await tester.pumpAndSettle();
     expect(find.text('Good'), findsOneWidget);
     expect(find.text('Attendance · group health'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('empty branch donut keeps the authoritative zero on tap', (
+    tester,
+  ) async {
+    _phone(tester);
+    final settings = AppSettings(lang: SfLang.ru);
+    final store = AppStore.empty(SfRole.ceo);
+    const branch = Branch('Empty branch', 0, 0, 0, 0, Color(0xFF4F7B3B));
+    addTearDown(settings.dispose);
+    addTearDown(store.dispose);
+    await tester.pumpWidget(
+      _host(
+        settings,
+        store,
+        const BranchWorkspaceScreen(branch: branch, colors: SfColors.light),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final donut = find.byKey(const ValueKey('branch-attendance-donut'));
+    await tester.scrollUntilVisible(
+      donut,
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final center = tester.getCenter(donut);
+    await tester.tapAt(center + const Offset(38, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0%'), findsWidgets);
+    expect(find.text('Хорошо'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

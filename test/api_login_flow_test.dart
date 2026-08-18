@@ -35,7 +35,7 @@ class _LoginClient extends StarforgeApiClient {
   }) async {
     requestedPaths.add(path);
     requestedBodies[path] = body;
-    if (path == '/api/v1/auth/login/') {
+    if (path == '/api/v1/auth/role-login/' || path == '/api/v1/auth/login/') {
       if (loginError case final error?) throw error;
       return const {'access': 'secure-test-session'};
     }
@@ -161,8 +161,8 @@ void main() {
     expect(session.authenticated, isTrue);
     expect(session.me?['role'], 'ceo');
     expect(session.me?['full_name'], 'API Director');
-    expect(client.requestedPaths.first, '/api/v1/auth/login/');
-    expect(client.requestedBodies['/api/v1/auth/login/'], {
+    expect(client.requestedPaths.first, '/api/v1/auth/role-login/');
+    expect(client.requestedBodies['/api/v1/auth/role-login/'], {
       'username': 'director',
       'password': 'secret',
     });
@@ -315,7 +315,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(session.authenticated, isFalse);
-    expect(client.requestedPaths, ['/api/v1/auth/login/']);
+    expect(client.requestedPaths, ['/api/v1/auth/role-login/']);
     expect(find.textContaining('Неверный логин или пароль'), findsOneWidget);
     expect(find.textContaining('login-invalid-401'), findsOneWidget);
     expect(find.text('Validation failed'), findsNothing);

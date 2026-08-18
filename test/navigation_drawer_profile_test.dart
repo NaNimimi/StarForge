@@ -103,11 +103,11 @@ void main() {
 
         final openerRect = tester.getRect(opener);
         final bottomRect = tester.getRect(bottomNavigation);
-        expect(openerRect.left, 0);
-        expect(openerRect.width, 46);
-        expect(openerRect.height, 58);
-        expect(openerRect.top, greaterThan(40));
-        expect(openerRect.top, lessThan(size.height * .25));
+        expect(openerRect.left, 6);
+        expect(openerRect.width, 32);
+        expect(openerRect.height, 34);
+        expect(openerRect.top, greaterThan(0));
+        expect(openerRect.top, lessThan(size.height * .15));
         expect(openerRect.bottom, lessThan(bottomRect.top));
         expect(tester.takeException(), isNull);
       },
@@ -131,6 +131,31 @@ void main() {
     expect(
       find.byKey(const ValueKey('console-bottom-navigation')),
       findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI history and global navigation buttons do not overlap', (
+    tester,
+  ) async {
+    _phone(tester);
+    final session = ApiSession();
+    addTearDown(session.dispose);
+    await tester.pumpWidget(_host(role: SfRole.ceo, session: session));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.auto_awesome_rounded).last);
+    await tester.pumpAndSettle();
+
+    final navigation = find
+        .byKey(const ValueKey('console-open-navigation'))
+        .hitTestable();
+    final history = find.byTooltip('Suhbatlar tarixi').hitTestable();
+    expect(navigation, findsOneWidget);
+    expect(history, findsOneWidget);
+    expect(
+      tester.getRect(navigation).overlaps(tester.getRect(history)),
+      isFalse,
     );
     expect(tester.takeException(), isNull);
   });
@@ -261,10 +286,34 @@ void main() {
 
     expect(find.text('Все разделы'), findsNothing);
     expect(find.text('Все модули'), findsNothing);
-    expect(find.text('Настройка вида'), findsOneWidget);
+    expect(find.text('Настройки приложения'), findsOneWidget);
+    expect(find.text('История активности'), findsOneWidget);
+    expect(find.text('Политика конфиденциальности'), findsOneWidget);
+    expect(find.textContaining('фото', findRichText: true), findsNothing);
+    expect(find.byIcon(Icons.photo_camera_rounded), findsNothing);
     expect(find.text('Сменить роль'), findsOneWidget);
     expect(find.text('Выйти'), findsOneWidget);
     expect(find.text('StarForge EDU · v$kAppDisplayVersion'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('profile account destinations open inside the role shell', (
+    tester,
+  ) async {
+    _phone(tester);
+    final session = ApiSession();
+    addTearDown(session.dispose);
+    await tester.pumpWidget(_host(role: SfRole.manager, session: session));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.person_rounded).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Настройки приложения'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Настройка вида'), findsOneWidget);
+    expect(find.text('Язык'), findsOneWidget);
+    expect(find.textContaining('роли для менеджера'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -305,6 +354,8 @@ void main() {
     expect(find.text('Сменить роль'), findsNothing);
     expect(find.text('Выйти'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('Выйти'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Выйти'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));

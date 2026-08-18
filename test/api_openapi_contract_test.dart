@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:ceo_manager/api_catalog.dart';
 import 'package:ceo_manager/api_client.dart';
@@ -37,6 +38,75 @@ class _RecordingClient extends StarforgeApiClient {
       );
     }
     return const ApiPage(items: []);
+  }
+}
+
+class _UploadRecordingClient extends _RecordingClient {
+  String? uploadedFilename;
+  String? uploadedContentType;
+  Uint8List? uploadedBytes;
+  Map<String, String>? uploadedFields;
+
+  @override
+  Future<dynamic> request(
+    String method,
+    String path, {
+    Map<String, Object?>? query,
+    Object? body,
+    bool authenticate = true,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    calls.add((method: method, path: path, body: body));
+    if (path == '/api/v1/messaging/attachments/upload-url/') {
+      return <String, dynamic>{
+        'url': 'https://objects.test/upload',
+        'key': 'temporary-upload-key',
+        'method': 'POST',
+        'fields': <String, String>{
+          'policy': 'signed-policy',
+          'x-amz-signature': 'signature',
+        },
+      };
+    }
+    return <String, dynamic>{'id': 1};
+  }
+
+  @override
+  Future<void> uploadMultipartBytes(
+    String url,
+    Uint8List bytes, {
+    required String filename,
+    required String contentType,
+    required Map<String, String> fields,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    uploadedFilename = filename;
+    uploadedContentType = contentType;
+    uploadedBytes = bytes;
+    uploadedFields = fields;
+  }
+}
+
+class _PageRecordingClient extends _RecordingClient {
+  final pageCalls =
+      <({String path, int page, int pageSize, Map<String, Object?> query})>[];
+  ApiPage nextPage = const ApiPage(items: []);
+  final Map<int, ApiPage> pages = <int, ApiPage>{};
+
+  @override
+  Future<ApiPage> listPage(
+    String path, {
+    int page = 1,
+    int pageSize = 100,
+    Map<String, Object?>? query,
+  }) async {
+    pageCalls.add((
+      path: path,
+      page: page,
+      pageSize: pageSize,
+      query: Map<String, Object?>.from(query ?? const {}),
+    ));
+    return pages[page] ?? nextPage;
   }
 }
 
@@ -221,6 +291,127 @@ void main() {
       });
     });
 
+    test('voice attachment can be sent without synthetic text', () async {
+      final client = _RecordingClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+
+      await session.sendThreadMessage(
+        9,
+        '',
+        attachments: const ['starforge/messaging/uploads/10/voice.m4a'],
+      );
+
+      expect(client.calls.single.path, '/api/v1/messaging/threads/9/messages/');
+      expect(client.calls.single.body, {
+        'body': '',
+        'attachments': ['starforge/messaging/uploads/10/voice.m4a'],
+      });
+    });
+
+    test('voice upload grant receives real byte size and audio/mp4', () async {
+      final client = _UploadRecordingClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+      final bytes = Uint8List.fromList(List<int>.generate(417, (i) => i % 255));
+
+      final key = await session.uploadMessageAttachment(
+        filename: 'voice_123.m4a',
+        contentType: 'audio/mp4',
+        bytes: bytes,
+      );
+
+      expect(key, 'temporary-upload-key');
+      expect(client.calls.single.body, {
+        'filename': 'voice_123.m4a',
+        'content_type': 'audio/mp4',
+        'size_bytes': 417,
+      });
+      expect(client.uploadedFilename, endsWith('.m4a'));
+      expect(client.uploadedContentType, 'audio/mp4');
+      expect(client.uploadedBytes, bytes);
+      expect(client.uploadedFields, {
+        'policy': 'signed-policy',
+        'x-amz-signature': 'signature',
+      });
+    });
+
+    test(
+      'chat sync rereads a permanent message from the latest page',
+      () async {
+        final client = _PageRecordingClient()
+          ..nextPage = const ApiPage(
+            items: [
+              {
+                'id': 91,
+                'body': '',
+                'attachments': ['permanent/messages/91/voice.m4a'],
+              },
+            ],
+          );
+        final session = ApiSession(client: client);
+        addTearDown(session.dispose);
+
+        final latest = await session.latestThreadMessages(9);
+        final permanent = await session.rereadThreadMessage(9, 91);
+
+        expect(latest.items, hasLength(1));
+        expect(permanent?['attachments'], ['permanent/messages/91/voice.m4a']);
+        expect(client.pageCalls, hasLength(2));
+        expect(
+          client.pageCalls.first.path,
+          '/api/v1/messaging/threads/9/messages/',
+        );
+        expect(client.pageCalls.first.page, 1);
+        expect(client.pageCalls.first.pageSize, 50);
+        expect(client.pageCalls.first.query, isEmpty);
+      },
+    );
+
+    test('latest chat page follows oldest-first backend pagination', () async {
+      final client = _PageRecordingClient()
+        ..pages[1] = const ApiPage(
+          items: [
+            {'id': 1, 'body': 'oldest'},
+          ],
+          pagination: {'page': 1, 'page_size': 1, 'pages': 3, 'total': 3},
+        )
+        ..pages[3] = const ApiPage(
+          items: [
+            {'id': 3, 'body': 'newest'},
+          ],
+          pagination: {'page': 3, 'page_size': 1, 'pages': 3, 'total': 3},
+        );
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+
+      final latest = await session.latestThreadMessages(9, pageSize: 1);
+
+      expect(latest.items.single['id'], 3);
+      expect(client.pageCalls.map((call) => call.page), [1, 3]);
+      expect(client.pageCalls.every((call) => call.query.isEmpty), isTrue);
+    });
+
+    test('message edit delete and reactions use backend contract', () async {
+      final client = _RecordingClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
+
+      await session.editMessage(17, 'Updated');
+      await session.addMessageReaction(17, '🔥');
+      await session.removeMessageReaction(17, '🔥');
+      await session.deleteServerMessage(17);
+
+      expect(client.calls.map((call) => '${call.method} ${call.path}'), [
+        'PATCH /api/v1/messaging/messages/17/',
+        'POST /api/v1/messaging/messages/17/reactions/',
+        'DELETE /api/v1/messaging/messages/17/reactions/%F0%9F%94%A5/',
+        'DELETE /api/v1/messaging/messages/17/',
+      ]);
+      expect(client.calls[0].body, {'body': 'Updated'});
+      expect(client.calls[1].body, {'emoji': '🔥'});
+    });
+
     test('thread read marker uses the published nested endpoint', () async {
       final client = _RecordingClient();
       final session = ApiSession(client: client);
@@ -233,55 +424,42 @@ void main() {
       expect(client.calls.single.body, <String, Object?>{});
     });
 
-    test(
-      'new direct thread sends its first message through messages API',
-      () async {
-        final client = _RecordingClient();
-        final session = ApiSession(client: client);
-        addTearDown(session.dispose);
+    test('new direct thread creates its first message atomically', () async {
+      final client = _RecordingClient();
+      final session = ApiSession(client: client);
+      addTearDown(session.dispose);
 
-        await session.createMessageThread(
-          participantIds: const [42],
-          subject: 'Student account',
-          firstBody: 'Hello from the real chat',
-        );
+      await session.createMessageThread(
+        participantIds: const [42],
+        subject: 'Student account',
+        firstBody: 'Hello from the real chat',
+      );
 
-        expect(client.calls, hasLength(2));
-        expect(client.calls.first.method, 'POST');
-        expect(client.calls.first.path, '/api/v1/messaging/threads/');
-        expect(client.calls.first.body, {
-          'participant_ids': [42],
-          'subject': 'Student account',
-        });
-        expect(client.calls.last.path, '/api/v1/messaging/threads/1/messages/');
-        expect(client.calls.last.body, {
-          'body': 'Hello from the real chat',
-          'attachments': <String>[],
-        });
-      },
-    );
+      expect(client.calls, hasLength(1));
+      expect(client.calls.first.method, 'POST');
+      expect(client.calls.first.path, '/api/v1/messaging/threads/');
+      expect(client.calls.first.body, {
+        'participant_ids': [42],
+        'subject': 'Student account',
+        'first_body': 'Hello from the real chat',
+      });
+    });
 
-    test(
-      'messaging bootstrap never probes unpublished contacts route',
-      () async {
-        final client = _RecordingClient();
-        final session = ApiSession(client: client)
-          ..me = {
-            'id': 17,
-            'permissions': ['messaging:read'],
-          };
-        addTearDown(session.dispose);
+    test('messaging bootstrap loads the deployed contact directory', () async {
+      final client = _RecordingClient();
+      final session = ApiSession(client: client)
+        ..me = {
+          'id': 17,
+          'permissions': ['messaging:read'],
+        };
+      addTearDown(session.dispose);
 
-        await session.reloadAll();
+      await session.reloadAll();
 
-        expect(client.listCalls, contains('/api/v1/messaging/threads/'));
-        expect(
-          client.listCalls,
-          isNot(contains('/api/v1/messaging/contacts/')),
-        );
-        expect(session.messagingSelfUserId, 17);
-      },
-    );
+      expect(client.listCalls, contains('/api/v1/messaging/threads/'));
+      expect(client.listCalls, contains('/api/v1/messaging/contacts/'));
+      expect(session.messagingSelfUserId, 17);
+    });
 
     test(
       'absolute attachment URLs need no unpublished download endpoint',

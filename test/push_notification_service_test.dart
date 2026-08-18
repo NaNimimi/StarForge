@@ -83,4 +83,49 @@ void main() {
       expect(decodeNotificationPayload('messages'), {'route': 'messages'});
     });
   });
+
+  group('immediate notification delivery', () {
+    test('FCM and API records share the backend message dedupe key', () {
+      expect(
+        notificationDedupeKey({
+          'fcm_message_id': 'firebase-transport-id',
+          'message_id': 19269,
+          'thread_id': 1209,
+        }),
+        'message:19269',
+      );
+      expect(
+        notificationDedupeKey({
+          'id': 2574,
+          'event_type': 'message.received',
+          'data': {'thread_id': 1209, 'message_id': 19269},
+        }),
+        'message:19269',
+      );
+    });
+
+    test('API polling only makes sound when push is not registered', () {
+      expect(
+        shouldPresentNotificationPollingFallback(
+          pushAvailable: true,
+          pushRegistered: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldPresentNotificationPollingFallback(
+          pushAvailable: true,
+          pushRegistered: false,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldPresentNotificationPollingFallback(
+          pushAvailable: false,
+          pushRegistered: false,
+        ),
+        isTrue,
+      );
+    });
+  });
 }

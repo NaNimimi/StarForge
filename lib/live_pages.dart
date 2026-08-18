@@ -4772,9 +4772,16 @@ class _LiveShell extends StatelessWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             children: [
               if (loading)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: LinearProgressIndicator(minHeight: 2),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: RefRefreshStatus(
+                    label: tx(
+                      context,
+                      uz: 'Ma’lumotlar yangilanmoqda',
+                      ru: 'Данные обновляются',
+                      en: 'Refreshing data',
+                    ),
+                  ),
                 ),
               ...body,
             ],
@@ -4900,20 +4907,15 @@ class _LiveEmpty extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) {
-    final c = SfTheme.of(context);
-    return RefSurfaceCard(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          Icon(icon, color: c.muted, size: 30),
-          const SizedBox(height: 9),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: RefType.ui(size: 12.5, color: c.muted, height: 1.4),
-          ),
-        ],
+    return RefEmptyState(
+      icon: icon,
+      title: tx(
+        context,
+        uz: 'Hozircha ma’lumot yo‘q',
+        ru: 'Пока нет данных',
+        en: 'Nothing here yet',
       ),
+      message: message,
     );
   }
 }
@@ -5788,7 +5790,6 @@ class LiveNotificationsPage extends StatefulWidget {
 }
 
 class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
-  int _page = 1;
   bool _refreshing = false;
   bool _markingAll = false;
   bool _unreadOnly = true;
@@ -5811,7 +5812,6 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
         ApiScope.of(context).refresh('notifications', force: true),
         ApiScope.of(context).refresh('unreadNotifications', force: true),
       ]);
-      if (mounted) setState(() => _page = 1);
     } on ApiException catch (error) {
       _error = _liveApiError(error);
     } finally {
@@ -5966,7 +5966,6 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
         '/api/v1/notifications/read-all/',
         refreshResources: const ['notifications', 'unreadNotifications'],
       );
-      if (mounted) setState(() => _page = 1);
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = _liveApiError(error));
     } finally {
@@ -5982,26 +5981,54 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
     final filtered = _unreadOnly
         ? all.where((record) => !_isRead(record)).toList(growable: false)
         : all;
-    final page = _pageWindow(filtered, _page);
-    final unread = page.items
+    final unread = filtered
         .where((record) => !_isRead(record))
         .toList(growable: false);
-    final read = page.items.where(_isRead).toList(growable: false);
+    final read = filtered.where(_isRead).toList(growable: false);
     return _LiveShell(
-      title: 'Bildirishnomalar',
+      title: tx(
+        context,
+        uz: 'Bildirishnomalar',
+        ru: 'Уведомления',
+        en: 'Notifications',
+      ),
       eyebrow: tx(
         context,
         uz: 'BILDIRISHNOMALAR · ${session.totalFor('notifications')}',
         ru: 'УВЕДОМЛЕНИЯ · ${session.totalFor('notifications')}',
         en: 'NOTIFICATIONS · ${session.totalFor('notifications')}',
       ),
-      subtitle: '$unreadTotal ta yangi · tegib kerakli bo‘limga o‘ting',
+      subtitle: unreadTotal == 0
+          ? tx(
+              context,
+              uz: 'Yangi bildirishnomalar yo‘q',
+              ru: 'Новых уведомлений нет',
+              en: 'No new notifications',
+            )
+          : tx(
+              context,
+              uz: '$unreadTotal ta yangi bildirishnoma',
+              ru: 'Новых уведомлений: $unreadTotal',
+              en: '$unreadTotal new notifications',
+            ),
       loading: _refreshing,
       onRefresh: _refresh,
       body: [
         if (unreadTotal > 0) ...[
           RefButton(
-            label: _markingAll ? 'Обновление…' : 'Прочитать все',
+            label: _markingAll
+                ? tx(
+                    context,
+                    uz: 'Yangilanmoqda…',
+                    ru: 'Обновление…',
+                    en: 'Updating…',
+                  )
+                : tx(
+                    context,
+                    uz: 'Barchasini o‘qish',
+                    ru: 'Прочитать все',
+                    en: 'Mark all as read',
+                  ),
             kind: RefButtonKind.soft,
             leading: Icons.done_all_rounded,
             block: true,
@@ -6009,27 +6036,30 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
           ),
           const SizedBox(height: 10),
         ],
-        SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment<bool>(
-              value: true,
-              label: Text('Новые'),
-              icon: Icon(Icons.mark_email_unread_outlined),
-            ),
-            ButtonSegment<bool>(
-              value: false,
-              label: Text('История'),
-              icon: Icon(Icons.history_rounded),
-            ),
-          ],
-          selected: {_unreadOnly},
-          showSelectedIcon: false,
-          onSelectionChanged: (selection) => setState(() {
-            _unreadOnly = selection.first;
-            _page = 1;
-          }),
-        ),
-        const SizedBox(height: 12),
+        if (all.isNotEmpty) ...[
+          SegmentedButton<bool>(
+            segments: [
+              ButtonSegment<bool>(
+                value: true,
+                label: Text(tx(context, uz: 'Yangi', ru: 'Новые', en: 'New')),
+                icon: const Icon(Icons.mark_email_unread_outlined),
+              ),
+              ButtonSegment<bool>(
+                value: false,
+                label: Text(
+                  tx(context, uz: 'Tarix', ru: 'История', en: 'History'),
+                ),
+                icon: const Icon(Icons.history_rounded),
+              ),
+            ],
+            selected: {_unreadOnly},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) => setState(() {
+              _unreadOnly = selection.first;
+            }),
+          ),
+          const SizedBox(height: 12),
+        ],
         if (_error != null) _LiveError(message: _error!, onRetry: _refresh),
         if (all.isEmpty && !_refreshing && _error == null)
           _LiveEmpty(
@@ -6042,15 +6072,29 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
             ),
           ),
         if (all.isNotEmpty && filtered.isEmpty && !_refreshing)
-          const _LiveEmpty(
+          _LiveEmpty(
             icon: Icons.done_all_rounded,
-            message:
-                'Yangi bildirishnoma yo‘q. O‘qilganlari tarixda saqlanadi.',
+            message: tx(
+              context,
+              uz: 'Yangi bildirishnoma yo‘q. O‘qilganlari tarixda saqlanadi.',
+              ru: 'Новых уведомлений нет. Прочитанные сохранены в истории.',
+              en: 'No new notifications. Read items are saved in history.',
+            ),
           ),
         if (unread.isNotEmpty) ...[
           RefSectionHeader(
-            title: 'O‘qilmagan',
-            subtitle: '${unread.length} ta yangi',
+            title: tx(
+              context,
+              uz: 'O‘qilmagan',
+              ru: 'Непрочитанные',
+              en: 'Unread',
+            ),
+            subtitle: tx(
+              context,
+              uz: '${unread.length} ta yangi',
+              ru: 'Новых: ${unread.length}',
+              en: '${unread.length} new',
+            ),
           ),
           const SizedBox(height: 8),
           for (final record in unread) ...[
@@ -6065,8 +6109,13 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
         ],
         if (!_unreadOnly && read.isNotEmpty) ...[
           RefSectionHeader(
-            title: 'O‘qilgan',
-            subtitle: '${read.length} ta bildirishnoma',
+            title: tx(context, uz: 'O‘qilgan', ru: 'Прочитанные', en: 'Read'),
+            subtitle: tx(
+              context,
+              uz: '${read.length} ta bildirishnoma',
+              ru: 'Уведомлений: ${read.length}',
+              en: '${read.length} notifications',
+            ),
           ),
           const SizedBox(height: 8),
           for (final record in read) ...[
@@ -6078,14 +6127,253 @@ class _LiveNotificationsPageState extends State<LiveNotificationsPage> {
             const SizedBox(height: 8),
           ],
         ],
-        _PaginationControls(
-          id: 'notifications',
-          window: _paginationWindow(page),
-          onPageChanged: (value) => setState(() => _page = value),
-        ),
       ],
     );
   }
+}
+
+Map<String, dynamic> _notificationEffectiveRecord(Map<String, dynamic> record) {
+  final presented = apiPresentationValue(record['data']);
+  final nested = presented is Map
+      ? Map<String, dynamic>.from(presented)
+      : const <String, dynamic>{};
+  return <String, dynamic>{...nested, ...record};
+}
+
+String _notificationKind(Map<String, dynamic> record) => _text(
+  _value(_notificationEffectiveRecord(record), const [
+    'type',
+    'category',
+    'event_type',
+    'kind',
+  ]),
+  empty: 'general',
+).toLowerCase();
+
+bool _notificationKindContains(String kind, Iterable<String> words) =>
+    words.any(kind.contains);
+
+String _notificationKindLabel(BuildContext context, String kind) {
+  if (_notificationKindContains(kind, const [
+    'payment',
+    'finance',
+    'invoice',
+  ])) {
+    return tx(context, uz: 'To‘lov', ru: 'Платёж', en: 'Payment');
+  }
+  if (_notificationKindContains(kind, const ['attendance', 'davomat'])) {
+    return tx(context, uz: 'Davomat', ru: 'Посещаемость', en: 'Attendance');
+  }
+  if (_notificationKindContains(kind, const ['message', 'thread', 'chat'])) {
+    return tx(context, uz: 'Xabar', ru: 'Сообщение', en: 'Message');
+  }
+  if (_notificationKindContains(kind, const ['risk', 'anomal', 'signal'])) {
+    return tx(context, uz: 'Xavf', ru: 'Риск', en: 'Risk');
+  }
+  if (_notificationKindContains(kind, const ['approval', 'approve'])) {
+    return tx(context, uz: 'Tasdiqlash', ru: 'Согласование', en: 'Approval');
+  }
+  if (_notificationKindContains(kind, const ['student'])) {
+    return tx(context, uz: 'O‘quvchi', ru: 'Ученик', en: 'Student');
+  }
+  if (_notificationKindContains(kind, const ['teacher'])) {
+    return tx(context, uz: 'O‘qituvchi', ru: 'Преподаватель', en: 'Teacher');
+  }
+  return tx(context, uz: 'Tizim', ru: 'Система', en: 'System');
+}
+
+IconData _notificationKindIcon(String kind) {
+  if (_notificationKindContains(kind, const [
+    'payment',
+    'finance',
+    'invoice',
+  ])) {
+    return Icons.payments_rounded;
+  }
+  if (_notificationKindContains(kind, const ['attendance', 'davomat'])) {
+    return Icons.how_to_reg_rounded;
+  }
+  if (_notificationKindContains(kind, const ['teacher'])) {
+    return Icons.workspace_premium_rounded;
+  }
+  if (_notificationKindContains(kind, const ['student'])) {
+    return Icons.groups_rounded;
+  }
+  if (_notificationKindContains(kind, const ['approval', 'approve'])) {
+    return Icons.task_alt_rounded;
+  }
+  if (_notificationKindContains(kind, const ['message', 'thread', 'chat'])) {
+    return Icons.chat_bubble_rounded;
+  }
+  if (_notificationKindContains(kind, const ['risk', 'anomal', 'signal'])) {
+    return Icons.warning_amber_rounded;
+  }
+  return Icons.notifications_rounded;
+}
+
+Color _notificationKindColor(SfColors colors, String kind) {
+  if (_notificationKindContains(kind, const [
+    'payment',
+    'finance',
+    'invoice',
+  ])) {
+    return colors.success;
+  }
+  if (_notificationKindContains(kind, const ['risk', 'anomal', 'signal'])) {
+    return colors.danger;
+  }
+  if (_notificationKindContains(kind, const ['approval', 'approve'])) {
+    return colors.warn;
+  }
+  if (_notificationKindContains(kind, const ['message', 'thread', 'chat'])) {
+    return colors.ai;
+  }
+  return colors.primary;
+}
+
+String _notificationTitle(
+  BuildContext context,
+  Map<String, dynamic> record,
+  String kind,
+) {
+  final effective = _notificationEffectiveRecord(record);
+  final explicit = _text(
+    _value(effective, const ['title', 'subject', 'heading', 'name']),
+    empty: '',
+  ).trim();
+  if (explicit.isNotEmpty && explicit != '—') return explicit;
+  if (_notificationKindContains(kind, const [
+    'payment',
+    'finance',
+    'invoice',
+  ])) {
+    return tx(
+      context,
+      uz: 'Yangi to‘lov',
+      ru: 'Новый платёж',
+      en: 'New payment',
+    );
+  }
+  if (_notificationKindContains(kind, const ['message', 'thread', 'chat'])) {
+    return tx(
+      context,
+      uz: 'Yangi xabar',
+      ru: 'Новое сообщение',
+      en: 'New message',
+    );
+  }
+  if (_notificationKindContains(kind, const ['attendance', 'davomat'])) {
+    return tx(
+      context,
+      uz: 'Davomat yangilandi',
+      ru: 'Посещаемость обновлена',
+      en: 'Attendance updated',
+    );
+  }
+  if (_notificationKindContains(kind, const ['risk', 'anomal', 'signal'])) {
+    return tx(
+      context,
+      uz: 'Yangi xavf signali',
+      ru: 'Новый сигнал риска',
+      en: 'New risk signal',
+    );
+  }
+  return tx(
+    context,
+    uz: 'Bildirishnoma',
+    ru: 'Уведомление',
+    en: 'Notification',
+  );
+}
+
+String _notificationBody(BuildContext context, Map<String, dynamic> record) {
+  final effective = _notificationEffectiveRecord(record);
+  final explicit = _text(
+    _value(effective, const ['message', 'body', 'description', 'content']),
+    empty: '',
+  ).trim();
+  if (explicit.isNotEmpty && explicit != '—') return explicit;
+  final facts = <String>[
+    for (final keys in const <List<String>>[
+      ['student_name', 'student'],
+      ['group_name', 'group'],
+      ['payer_name', 'payer'],
+      ['amount', 'amount_uzs'],
+    ])
+      if (_text(_value(effective, keys), empty: '').trim() case final value
+          when value.isNotEmpty && value != '—')
+        value,
+  ];
+  if (facts.isNotEmpty) return facts.join(' · ');
+  return tx(
+    context,
+    uz: 'Tafsilotlarni ko‘rish uchun bildirishnomani oching.',
+    ru: 'Откройте уведомление, чтобы посмотреть подробности.',
+    en: 'Open the notification to view details.',
+  );
+}
+
+String _notificationTime(BuildContext context, Map<String, dynamic> record) {
+  final effective = _notificationEffectiveRecord(record);
+  final raw = _text(
+    _value(effective, const ['created_at', 'sent_at', 'timestamp', 'date']),
+    empty: '',
+  ).trim();
+  if (raw.isEmpty || raw == '—') {
+    return tx(
+      context,
+      uz: 'Vaqt ko‘rsatilmagan',
+      ru: 'Время не указано',
+      en: 'Time not specified',
+    );
+  }
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null) return raw;
+  final local = parsed.toLocal();
+  final now = DateTime.now();
+  final difference = now.difference(local);
+  if (!difference.isNegative && difference < const Duration(minutes: 1)) {
+    return tx(context, uz: 'Hozir', ru: 'Сейчас', en: 'Now');
+  }
+  if (!difference.isNegative && difference < const Duration(hours: 1)) {
+    final minutes = difference.inMinutes;
+    return tx(
+      context,
+      uz: '$minutes daqiqa oldin',
+      ru: '$minutes мин назад',
+      en: '$minutes min ago',
+    );
+  }
+  if (!difference.isNegative && difference < const Duration(hours: 6)) {
+    final hours = difference.inHours;
+    return tx(
+      context,
+      uz: '$hours soat oldin',
+      ru: '$hours ч назад',
+      en: '$hours h ago',
+    );
+  }
+  String two(int value) => value.toString().padLeft(2, '0');
+  final clock = '${two(local.hour)}:${two(local.minute)}';
+  final today = DateTime(now.year, now.month, now.day);
+  final date = DateTime(local.year, local.month, local.day);
+  if (date == today) {
+    return tx(
+      context,
+      uz: 'Bugun $clock',
+      ru: 'Сегодня, $clock',
+      en: 'Today, $clock',
+    );
+  }
+  if (date == today.subtract(const Duration(days: 1))) {
+    return tx(
+      context,
+      uz: 'Kecha $clock',
+      ru: 'Вчера, $clock',
+      en: 'Yesterday, $clock',
+    );
+  }
+  return '${two(local.day)}.${two(local.month)}.${local.year} · $clock';
 }
 
 class _LiveNotificationCard extends StatelessWidget {
@@ -6098,39 +6386,13 @@ class _LiveNotificationCard extends StatelessWidget {
   final bool unread;
   final VoidCallback onTap;
 
-  IconData _icon(String type) {
-    if (type.contains('payment') || type.contains('finance')) {
-      return Icons.payments_rounded;
-    }
-    if (type.contains('attendance')) {
-      return Icons.how_to_reg_rounded;
-    }
-    if (type.contains('teacher')) {
-      return Icons.workspace_premium_rounded;
-    }
-    if (type.contains('student')) {
-      return Icons.groups_rounded;
-    }
-    if (type.contains('approval')) {
-      return Icons.task_alt_rounded;
-    }
-    if (type.contains('message')) {
-      return Icons.chat_bubble_rounded;
-    }
-    return Icons.notifications_rounded;
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    final type = _text(
-      _value(record, const ['type', 'category', 'event_type', 'kind']),
-      empty: 'Umumiy',
-    );
-    final time = _text(
-      _value(record, const ['created_at', 'sent_at', 'timestamp', 'date']),
-      empty: 'Vaqt ko‘rsatilmagan',
-    );
+    final kind = _notificationKind(record);
+    final type = _notificationKindLabel(context, kind);
+    final color = _notificationKindColor(c, kind);
+    final time = _notificationTime(context, record);
     return RefPressable(
       onPressed: onTap,
       borderRadius: RefRadius.lg,
@@ -6142,13 +6404,13 @@ class _LiveNotificationCard extends StatelessWidget {
           children: [
             DecoratedBox(
               decoration: BoxDecoration(
-                color: c.primary.withValues(alpha: .13),
+                color: color.withValues(alpha: .13),
                 borderRadius: RefRadius.md,
               ),
               child: SizedBox(
                 width: 42,
                 height: 42,
-                child: Icon(_icon(type.toLowerCase()), color: c.primary),
+                child: Icon(_notificationKindIcon(kind), color: color),
               ),
             ),
             const SizedBox(width: 11),
@@ -6161,14 +6423,15 @@ class _LiveNotificationCard extends StatelessWidget {
                       Expanded(
                         child: Text(
                           _text(
-                            record['title'] ??
-                                record['subject'] ??
-                                record['heading'] ??
-                                record['name'] ??
-                                record['id'],
-                            empty: 'Bildirishnoma',
+                            _notificationTitle(context, record, kind),
+                            empty: tx(
+                              context,
+                              uz: 'Bildirishnoma',
+                              ru: 'Уведомление',
+                              en: 'Notification',
+                            ),
                           ),
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: RefType.ui(
                             size: 13.5,
@@ -6190,22 +6453,31 @@ class _LiveNotificationCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    _text(
-                      _value(record, const [
-                        'message',
-                        'body',
-                        'description',
-                        'content',
-                      ]),
-                    ),
-                    maxLines: 2,
+                    _text(_notificationBody(context, record)),
+                    maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: RefType.ui(size: 11.5, color: c.muted, height: 1.35),
                   ),
                   const SizedBox(height: 7),
                   Row(
                     children: [
-                      RefPill(label: type, tone: RefPillTone.primary),
+                      RefPill(
+                        label: type,
+                        tone:
+                            _notificationKindContains(kind, const [
+                              'risk',
+                              'anomal',
+                              'signal',
+                            ])
+                            ? RefPillTone.danger
+                            : _notificationKindContains(kind, const [
+                                'payment',
+                                'finance',
+                                'invoice',
+                              ])
+                            ? RefPillTone.success
+                            : RefPillTone.primary,
+                      ),
                       const SizedBox(width: 7),
                       Expanded(
                         child: Text(

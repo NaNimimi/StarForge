@@ -69,7 +69,12 @@ void main() {
     addTearDown(store.dispose);
 
     await tester.pumpWidget(
-      _host(session, store, const Scaffold(body: StudentsScreen())),
+      _host(
+        session,
+        store,
+        const Scaffold(body: StudentsScreen()),
+        lang: SfLang.ru,
+      ),
     );
     await tester.pumpAndSettle();
     final student = find.text('API Product Student', skipOffstage: false).last;
@@ -82,7 +87,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(StudentDetailScreen), findsOneWidget);
-    expect(find.byType(InteractiveSparkline), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Истории посещаемости пока нет'),
+      360,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.byType(InteractiveSparkline), findsNothing);
+    expect(find.text('Истории посещаемости пока нет'), findsOneWidget);
     expect(find.byType(ApiDataCard), findsNothing);
     expect(find.text('Дополнительная информация'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -106,7 +117,12 @@ void main() {
       addTearDown(store.dispose);
 
       await tester.pumpWidget(
-        _host(session, store, BranchComparisonScreen(colors: SfColors.light)),
+        _host(
+          session,
+          store,
+          BranchComparisonScreen(colors: SfColors.light),
+          lang: SfLang.en,
+        ),
       );
       await tester.pumpAndSettle();
 
@@ -114,7 +130,13 @@ void main() {
       expect(find.text('Branch B'), findsOneWidget);
       expect(find.text('API Branch Alpha'), findsWidgets);
       expect(find.text('API Branch Beta'), findsWidgets);
-      expect(find.byType(AreaChart), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('No period data available'),
+        320,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.byType(AreaChart), findsNothing);
+      expect(find.text('No period data available'), findsOneWidget);
       expect(find.byType(ApiDataCard), findsNothing);
       expect(find.text('results'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -126,7 +148,8 @@ void main() {
   ) async {
     _surface(tester);
     final client = StarforgeApiClient()..configure(token: 'test-session');
-    final session = ApiSession(client: client);
+    final session = ApiSession(client: client)
+      ..collections['branches'] = <Map<String, dynamic>>[];
     final store = AppStore.empty(SfRole.ceo);
     addTearDown(session.dispose);
     addTearDown(store.dispose);
@@ -139,8 +162,8 @@ void main() {
         lang: SfLang.ru,
       ),
     );
-    await tester.pumpAndSettle();
-    expect(find.text('Пока ничего нет'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Пока нет данных'), findsOneWidget);
 
     await tester.pumpWidget(
       _host(
@@ -150,8 +173,8 @@ void main() {
         lang: SfLang.ru,
       ),
     );
-    await tester.pumpAndSettle();
-    expect(find.text('Пока ничего нет'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Записей пока нет'), findsOneWidget);
 
     await tester.pumpWidget(
       _host(
@@ -161,7 +184,7 @@ void main() {
         lang: SfLang.ru,
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('Пока ничего нет'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -226,7 +249,9 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.byIcon(Icons.edit_rounded).first);
+        await tester.tap(
+          find.byKey(const ValueKey('profile-edit-action')).hitTestable(),
+        );
         await tester.pumpAndSettle();
 
         expect(

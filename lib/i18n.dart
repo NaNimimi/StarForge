@@ -274,11 +274,6 @@ const Map<String, List<String>> _strings = {
   'language': ['Til', 'Язык', 'Language'],
 
   // ── Avatar picker ─────────────────────────────────────────────────────
-  'avatar_title': ['Avatar', 'Аватар', 'Avatar'],
-  'avatar_eyebrow': ['Rasmni tanlang', 'Выберите фото', 'Choose your photo'],
-  'avatar_photos': ['Suratlar', 'Фотографии', 'Photos'],
-  'avatar_colors': ['Belgilar', 'Значки', 'Badges'],
-  'avatar_saved': ['Avatar yangilandi', 'Аватар обновлён', 'Avatar updated'],
 
   // ── Chat page ─────────────────────────────────────────────────────────
   'online': ['onlayn', 'онлайн', 'online'],
@@ -497,7 +492,6 @@ const Map<String, List<String>> _strings = {
     'Edit profile',
   ],
   'edit_jobtitle': ['Lavozim', 'Должность', 'Job title'],
-  'change_photo': ["Rasmni o'zgartirish", 'Изменить фото', 'Change photo'],
   'save': ['Saqlash', 'Сохранить', 'Save'],
   'profile_saved': [
     '✓ Profil saqlandi',

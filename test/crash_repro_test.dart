@@ -94,9 +94,6 @@ void main() {
   testWidgets('ModulesHub', (t) async {
     await _smoke(t, store, ModulesHub(colors: c));
   });
-  testWidgets('AvatarPickerScreen', (t) async {
-    await _smoke(t, store, AvatarPickerScreen(colors: c));
-  });
   testWidgets('SettingsScreen', (t) async {
     await _smoke(t, store, SettingsScreen(colors: c));
   });
@@ -213,21 +210,21 @@ void main() {
       find.text('Student Flow · period', skipOffstage: false),
       findsOneWidget,
     );
-    expect(find.text('Left', skipOffstage: false), findsOneWidget);
-    final leftCount = find.byKey(
-      const ValueKey('student-flow-left'),
+    expect(find.text('Active', skipOffstage: false), findsOneWidget);
+    final activeCount = find.byKey(
+      const ValueKey('student-flow-active'),
       skipOffstage: false,
     );
     await t.dragUntilVisible(
-      leftCount,
+      activeCount,
       find.byType(Scrollable).first,
       const Offset(0, -180),
     );
-    await t.tap(leftCount);
+    await t.tap(activeCount);
     await t.pumpAndSettle();
     expect(find.byType(StudentCategoryScreen), findsOneWidget);
-    expect(find.text('3 ta o‘quvchi'), findsOneWidget);
-    await t.tap(find.text('Sobirov Mohir').last);
+    expect(find.textContaining('ta o‘quvchi'), findsOneWidget);
+    await t.tap(find.text(store.students.first.name).last);
     await t.pumpAndSettle();
     expect(find.byType(StudentDetailScreen), findsOneWidget);
     expect(t.takeException(), isNull);

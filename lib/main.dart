@@ -144,9 +144,11 @@ class CeoManagerApp extends StatefulWidget {
   State<CeoManagerApp> createState() => _CeoManagerAppState();
 }
 
-class _CeoManagerAppState extends State<CeoManagerApp> {
+class _CeoManagerAppState extends State<CeoManagerApp>
+    with WidgetsBindingObserver {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<Map<String, dynamic>>? _notificationTapSubscription;
+  StreamSubscription<Map<String, dynamic>>? _pushMessageSubscription;
   Map<String, dynamic>? _pendingNotificationPayload;
   SfRole? role;
   // Seeded again whenever the user opens a different workspace. The first
@@ -181,6 +183,7 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
       }
       if (_hadLiveSession) {
         _hadLiveSession = false;
+        unawaited(store.clearCurrentUserMediaCache());
         setState(() => role = null);
       }
       return;
@@ -208,7 +211,10 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
         apiValue(profile, const ['id', 'username']),
         fallback: principal,
       );
-      unawaited(store.bindProfileIdentity('$tenant.$principal.$principalId'));
+      final apiOrigin = normalizeStarforgeApiBaseUrl(apiSession.client.baseUrl);
+      unawaited(
+        store.bindProfileIdentity('$apiOrigin.$tenant.$principal.$principalId'),
+      );
       if (profile['must_change_password'] == true && !_passwordGateOpen) {
         _passwordGateOpen = true;
         WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -242,6 +248,32 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
       _onApiSession();
       _openPendingNotification();
     });
+  }
+
+  Future<void> _refreshAfterPush(Map<String, dynamic> payload) async {
+    if (!apiSession.authenticated) return;
+    final futures = <Future<void>>[
+      apiSession.refreshNotificationHead(),
+      apiSession.refresh('unreadNotifications', force: true),
+    ];
+    if (notificationRouteFromPayload(payload) == 'messages') {
+      futures.add(apiSession.refresh('threads', force: true));
+    }
+    for (final future in futures) {
+      try {
+        await future;
+      } on ApiException {
+        // Push delivery already succeeded. A temporary feed refresh failure
+        // must not delay or suppress its native notification.
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    unawaited(PushNotificationService.instance.retryRegistration());
+    unawaited(_refreshAfterPush(const {'route': 'messages'}));
   }
 
   void _openPendingNotification() {
@@ -282,12 +314,16 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     settings = widget.initialSettings ?? AppSettings();
     apiSession.client.configure(language: settings.lang.name);
     _notificationTapSubscription = DeviceNotificationService
         .instance
         .notificationTaps
         .listen(_onNotificationTap);
+    _pushMessageSubscription = PushNotificationService.instance.messages.listen(
+      (payload) => unawaited(_refreshAfterPush(payload)),
+    );
     _pendingNotificationPayload = DeviceNotificationService.instance
         .takePendingTapPayload();
     settings.addListener(_onSettings);
@@ -304,9 +340,11 @@ class _CeoManagerAppState extends State<CeoManagerApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     settings.removeListener(_onSettings);
     apiSession.removeListener(_onApiSession);
     _notificationTapSubscription?.cancel();
+    _pushMessageSubscription?.cancel();
     PushNotificationService.instance.unbindAuthenticatedSession();
     settings.dispose();
     apiSession.dispose();

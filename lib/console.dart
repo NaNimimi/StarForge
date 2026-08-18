@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'api_connection.dart';
 import 'api_client.dart';
 import 'api_data_view.dart';
+import 'api_store_adapter.dart';
 import 'data.dart';
 import 'i18n.dart';
 import 'live_pages.dart';
@@ -19,11 +20,22 @@ import 'theme.dart';
 import 'widgets.dart';
 import 'web_mobile_pages.dart';
 import 'notification_service.dart';
+import 'push_notification_service.dart';
 
 const Map<String, Set<String>> _routeApiPermissions = {
+  'branches': {'intelligence:read', 'users:read'},
+  'groups': {'students:read', 'schedule:read'},
+  'teachers': {'users:read'},
+  'departments': {'users:read'},
+  'hr': {'users:read'},
+  'meetings': {'meetings:read'},
+  'attendance': {'attendance:read', 'students:read'},
   'payments': {'payments:read'},
   'report': {'payments:read', 'finance:read'},
   'finance': {'payments:read'},
+  'payroll': {'finance:read'},
+  'leads': {'sales:read'},
+  'enroll': {'placement:read'},
   'approvals': {'approvals:read'},
   'schedule': {'schedule:read'},
   'anomalies': {'intelligence:read'},
@@ -35,13 +47,23 @@ const Map<String, Set<String>> _routeApiPermissions = {
   'ai': {'ai:read'},
   'surveys': {'forms:read'},
   'messages': {'messaging:read'},
+  'chats': {'messaging:read'},
+  'permissions': {'users:read'},
   'cases': {'tasks:read', 'compliance:read', 'penalty:read'},
   'students': {'students:read'},
   'parents': {'parents:read'},
 };
 
-bool _backendAllowsRoute(ApiSession? session, String route) {
+bool _backendAllowsRoute(ApiSession? session, SfRole role, String route) {
   if (session?.authenticated != true) return true;
+  // The deployed Audit profile does not advertise `messaging:read`, while
+  // its GET /messaging/threads endpoint is intentionally available for
+  // oversight. Role navigation and the page resolver already force Audit
+  // onto a read-only transcript, so do not redirect this legitimate route
+  // back to Dashboard because of the incomplete capability list.
+  if (role == SfRole.audit && (route == 'messages' || route == 'chats')) {
+    return true;
+  }
   final required = _routeApiPermissions[route];
   if (required == null || required.isEmpty) return true;
   return required.any(session!.hasPermission);
@@ -162,6 +184,12 @@ class _ConsoleState extends State<Console> {
       _knownNotificationIds
         ..clear()
         ..addAll(currentIds);
+      final push = PushNotificationService.instance;
+      final presentFallback = shouldPresentNotificationPollingFallback(
+        pushAvailable: push.available,
+        pushRegistered: push.registered,
+      );
+      if (!presentFallback) return;
       for (final record in newlyArrived.take(3)) {
         final key = _notificationId(record);
         await DeviceNotificationService.instance.show(
@@ -175,7 +203,7 @@ class _ConsoleState extends State<Console> {
             'body',
             'message',
             'description',
-          ], 'Yangi bildirishnoma bor'),
+          ], 'Откройте приложение, чтобы посмотреть подробности.'),
           payload: Map<String, dynamic>.from(record),
         );
       }
@@ -205,7 +233,7 @@ class _ConsoleState extends State<Console> {
   void _navigate(String route) {
     final api = ApiScope.maybeOf(context)?.notifier;
     if (!roleCanNavigate(widget.cfg.role, route) ||
-        !_backendAllowsRoute(api, route)) {
+        !_backendAllowsRoute(api, widget.cfg.role, route)) {
       setState(() {
         _route = 'dash';
         _drawerOpen = false;
@@ -244,6 +272,10 @@ class _ConsoleState extends State<Console> {
     final resources = switch (route) {
       'students' => const ['students', 'guardians', 'parents', 'groups'],
       'parents' => const ['parents', 'guardians', 'students', 'groups'],
+      // Both the writable Manager workspace and Audit oversight must refresh
+      // the same authoritative thread list when opened. Refreshing threads
+      // also reloads the published messaging contact directory.
+      'messages' || 'chats' => const ['threads'],
       _ => const <String>[],
     };
     for (final resource in resources) {
@@ -265,6 +297,9 @@ class _ConsoleState extends State<Console> {
         // Optional joins can legitimately be forbidden for scoped roles.
         // Other failures are kept in ApiSession and surfaced by live pages.
       }
+    }
+    if (mounted && resources.isNotEmpty) {
+      syncProductStoreFromApi(session!, AppScope.of(context));
     }
   }
 
@@ -330,7 +365,13 @@ class _ConsoleState extends State<Console> {
       case 'groups':
         return const WebGroupsPage();
       case 'messages':
-        return const WebMessagesPage();
+        // Audit can inspect transcripts but the backend explicitly rejects
+        // message creation (403). Keep its primary Messages tab on the same
+        // read-only oversight page as the audit navigation destination.
+        return widget.cfg.role == SfRole.audit
+            ? (buildAdminPage('messages', colors, widget.cfg.role) ??
+                  DashboardScreen(cfg: widget.cfg, go: _navigate))
+            : const WebMessagesPage();
       case 'chats':
         return buildAdminPage(_route, colors, widget.cfg.role) ??
             DashboardScreen(cfg: widget.cfg, go: _navigate);
@@ -400,6 +441,14 @@ class _ConsoleState extends State<Console> {
           onSwitchRole: widget.onSwitchRole,
           onNavigate: _navigate,
         );
+      case 'account_preferences':
+        return AccountPreferencesScreen(cfg: widget.cfg, colors: colors);
+      case 'account_activity':
+        return AccountActivityScreen(colors: colors);
+      case 'privacy':
+        return PrivacyPolicyScreen(colors: colors);
+      case 'security':
+        return AccountSecurityScreen(colors: colors);
       case 'settings':
         return const ApiConnectionScreen();
       default:
@@ -411,7 +460,7 @@ class _ConsoleState extends State<Console> {
   List<TabSpec> get _bottomTabs {
     final api = ApiScope.maybeOf(context)?.notifier;
     return widget.cfg.tabs
-        .where((tab) => _backendAllowsRoute(api, tab.id))
+        .where((tab) => _backendAllowsRoute(api, widget.cfg.role, tab.id))
         .toList(growable: false);
   }
 
@@ -448,12 +497,14 @@ class _ConsoleState extends State<Console> {
         children: [
           content,
           if (showNavigationOpener)
-            Positioned.fill(
-              child: Align(
-                alignment: const Alignment(-1, -.72),
-                child: _MobileNavigationOpener(
-                  onPressed: () => setState(() => _drawerOpen = true),
-                ),
+            Positioned(
+              left: 0,
+              // AI already has a chat-history button in its first header row.
+              // Keep the section drawer on the left but below that control so
+              // both remain visible and independently tappable.
+              top: _route == 'ai' ? 58 : 12,
+              child: _MobileNavigationOpener(
+                onPressed: () => setState(() => _drawerOpen = true),
               ),
             ),
           if (_drawerOpen)
@@ -576,42 +627,27 @@ class _MobileNavigationOpener extends StatelessWidget {
       label: title,
       child: Tooltip(
         message: title,
-        child: Material(
-          color: Color.alphaBlend(c.primary.withValues(alpha: .1), c.surface),
-          elevation: 4,
-          shadowColor: c.primary.withValues(alpha: .2),
-          shape: RoundedRectangleBorder(
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.only(left: 6),
+          child: Material(
+            color: Color.alphaBlend(
+              c.primary.withValues(alpha: .06),
+              c.surface,
             ),
-            side: BorderSide(color: c.border),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            key: const ValueKey('console-open-navigation'),
-            onTap: onPressed,
-            child: SizedBox(
-              width: 46,
-              height: 58,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: 3),
-                    child: Icon(Icons.menu_rounded, size: 24, color: c.primary),
-                  ),
-                  Positioned(
-                    right: 4,
-                    child: Container(
-                      width: 3,
-                      height: 18,
-                      decoration: BoxDecoration(
-                        color: c.primary.withValues(alpha: .7),
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                    ),
-                  ),
-                ],
+            elevation: 2,
+            shadowColor: c.ink.withValues(alpha: .12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(11),
+              side: BorderSide(color: c.border),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              key: const ValueKey('console-open-navigation'),
+              onTap: onPressed,
+              child: SizedBox(
+                width: 32,
+                height: 34,
+                child: Icon(Icons.menu_rounded, size: 18, color: c.primary),
               ),
             ),
           ),
@@ -994,7 +1030,7 @@ class _WebSidebar extends StatelessWidget {
         MenuGroup(
           group.title,
           group.items
-              .where((item) => _backendAllowsRoute(api, item.id))
+              .where((item) => _backendAllowsRoute(api, cfg.role, item.id))
               .toList(growable: false),
         ),
     ].where((group) => group.items.isNotEmpty).toList(growable: false);
@@ -1008,6 +1044,38 @@ class _WebSidebar extends StatelessWidget {
         : store.allBranchesSelected
         ? '${store.branches.length} · ${store.branches.fold<int>(0, (sum, b) => sum + b.students)} ${tr(context, 'unit_student')}'
         : '${store.selectedBranchData?.students ?? 0} ${tr(context, 'unit_student')}';
+    final profile = api?.me ?? const <String, dynamic>{};
+    final liveName = apiText(
+      apiValue(profile, const ['full_name', 'display_name', 'name']),
+    );
+    final composedName = [
+      apiText(profile['first_name']),
+      apiText(profile['middle_name']),
+      apiText(profile['last_name']),
+    ].where((part) => part.isNotEmpty).join(' ');
+    final displayName = live
+        ? (liveName.isNotEmpty
+              ? liveName
+              : composedName.isNotEmpty
+              ? composedName
+              : apiText(profile['username'], fallback: cfg.who))
+        : cfg.who;
+    final memberships = apiValue(profile, const ['role_memberships']);
+    final firstMembership = memberships is Iterable
+        ? memberships.whereType<Map>().firstOrNull
+        : null;
+    final displayRole = live
+        ? apiText(
+            firstMembership == null
+                ? apiValue(profile, const ['role', 'principal_kind'])
+                : apiValue(Map<String, dynamic>.from(firstMembership), const [
+                    'account_type_name',
+                    'role_name',
+                    'account_kind',
+                  ]),
+            fallback: configLabel(context, cfg.roleTitle),
+          )
+        : configLabel(context, cfg.roleTitle);
     final panel = Material(
       key: ValueKey(
         docked ? 'console-navigation-persistent' : 'console-navigation-drawer',
@@ -1199,18 +1267,12 @@ class _WebSidebar extends StatelessWidget {
                       ),
                       child: Row(
                         children: [
-                          SfAvatar(
-                            name: cfg.who,
-                            size: 36,
-                            color: cfg.accent(c),
-                          ),
-                          const SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  cfg.who,
+                                  displayName,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: RefType.ui(
@@ -1220,7 +1282,7 @@ class _WebSidebar extends StatelessWidget {
                                   ),
                                 ),
                                 Text(
-                                  configLabel(context, cfg.roleTitle),
+                                  displayRole,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: RefType.ui(size: 10, color: c.muted),

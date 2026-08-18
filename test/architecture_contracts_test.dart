@@ -253,7 +253,7 @@ void main() {
 
         store.threads.first.messages.insert(
           0,
-          const ChatMsg('Earlier message', mine: false),
+          ChatMsg('Earlier message', mine: false),
         );
         expect(store.reactionFor(message), '🔥');
 

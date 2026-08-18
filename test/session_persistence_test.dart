@@ -37,7 +37,8 @@ class _SessionClient extends StarforgeApiClient {
   }) async {
     paths.add(path);
     bodies[path] = body;
-    if (path.startsWith('/api/v1/auth/login')) {
+    if (path.startsWith('/api/v1/auth/role-login') ||
+        path.startsWith('/api/v1/auth/login')) {
       return const {'access': 'opaque-session-key'};
     }
     if (path == '/api/v1/auth/logout/') return const <String, dynamic>{};

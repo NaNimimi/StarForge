@@ -82,6 +82,51 @@ String _relation(
   return names[raw] ?? raw;
 }
 
+Map<String, dynamic>? _primaryRoleMembership(_Row row) {
+  final value = apiValue(row, const [
+    'role_memberships',
+    'memberships',
+    'account_type_assignments',
+  ]);
+  if (value is! Iterable || value is String) return null;
+  final memberships = value
+      .whereType<Map>()
+      .map((item) => Map<String, dynamic>.from(item))
+      .toList(growable: false);
+  if (memberships.isEmpty) return null;
+  bool marked(Map<String, dynamic> membership) => _truthy(
+    apiValue(membership, const ['is_primary', 'primary', 'is_current']),
+  );
+  for (final membership in memberships) {
+    if (marked(membership)) return membership;
+  }
+  for (final membership in memberships) {
+    final kind = _text(membership, const [
+      'account_kind',
+      'principal_kind',
+      'kind',
+    ], fallback: '').toLowerCase();
+    if (kind == 'staff') return membership;
+  }
+  return memberships.first;
+}
+
+String _staffMembershipRelation(
+  _Row row,
+  Iterable<String> directKeys,
+  Iterable<String> membershipKeys,
+  Map<String, String> names, {
+  String fallback = '—',
+}) {
+  final direct = apiValue(row, directKeys);
+  if (direct != null && apiText(direct).isNotEmpty) {
+    return _relation(row, directKeys, names, fallback: fallback);
+  }
+  final membership = _primaryRoleMembership(row);
+  if (membership == null) return fallback;
+  return _relation(membership, membershipKeys, names, fallback: fallback);
+}
+
 String _date(Object? value) {
   final parsed = apiDate(value);
   if (parsed == null) return apiText(value, fallback: '—');
@@ -92,8 +137,9 @@ String _date(Object? value) {
 String _time(Object? value) {
   final parsed = apiDate(value);
   if (parsed == null) return apiText(value, fallback: '—');
-  return '${parsed.hour.toString().padLeft(2, '0')}:'
-      '${parsed.minute.toString().padLeft(2, '0')}';
+  final local = parsed.toLocal();
+  return '${local.hour.toString().padLeft(2, '0')}:'
+      '${local.minute.toString().padLeft(2, '0')}';
 }
 
 List<String> _stringList(Object? value) {
@@ -148,6 +194,45 @@ List<String> _attachmentKeys(Object? value) {
       .toList(growable: false);
 }
 
+String? _avatarUrl(ApiSession session, Map<String, dynamic> row) {
+  Object? findAvatar(Object? value, [int depth = 0]) {
+    if (depth > 4 || value is! Map) return null;
+    final map = Map<String, dynamic>.from(value);
+    final direct = apiValue(map, const [
+      'avatar_url',
+      'profile_photo_url',
+      'photo_url',
+      'image_url',
+      'avatar',
+      'profile_photo',
+      'photo',
+      'image',
+    ]);
+    if (direct != null) return direct;
+    for (final key in const ['identity', 'profile', 'student', 'contact']) {
+      final nested = findAvatar(map[key], depth + 1);
+      if (nested != null) return nested;
+    }
+    return null;
+  }
+
+  Object? raw = findAvatar(row);
+  if (raw is Map) {
+    raw = apiValue(Map<String, dynamic>.from(raw), const [
+      'url',
+      'download_url',
+      'file_url',
+      'path',
+    ]);
+  }
+  final value = apiText(raw).trim();
+  if (value.isEmpty) return null;
+  final uri = Uri.tryParse(value);
+  if (uri != null && uri.hasScheme && uri.hasAuthority) return value;
+  if (!value.startsWith('/')) return null;
+  return '${session.client.baseUrl}$value';
+}
+
 ChatMessageKind _messageKind(List<String> attachments) {
   if (attachments.isEmpty) return ChatMessageKind.text;
   final value = attachments.first.toLowerCase().split('?').first;
@@ -161,6 +246,42 @@ ChatMessageKind _messageKind(List<String> attachments) {
     return ChatMessageKind.image;
   }
   return ChatMessageKind.text;
+}
+
+Map<String, int> _reactionCounts(Object? value) {
+  final result = <String, int>{};
+  if (value is Map) {
+    for (final entry in value.entries) {
+      final emoji = '${entry.key}'.trim();
+      final raw = entry.value is Map
+          ? apiValue(Map<String, dynamic>.from(entry.value as Map), const [
+              'count',
+              'total',
+            ])
+          : entry.value;
+      final count = int.tryParse('$raw') ?? 0;
+      if (emoji.isNotEmpty && count > 0) result[emoji] = count;
+    }
+  } else if (value is Iterable && value is! String) {
+    for (final item in value) {
+      if (item is Map) {
+        final row = Map<String, dynamic>.from(item);
+        final emoji = apiText(apiValue(row, const ['emoji', 'value']));
+        final count =
+            int.tryParse(
+              apiText(apiValue(row, const ['count', 'total']), fallback: '1'),
+            ) ??
+            1;
+        if (emoji.isNotEmpty && count > 0) {
+          result[emoji] = (result[emoji] ?? 0) + count;
+        }
+      } else {
+        final emoji = apiText(item);
+        if (emoji.isNotEmpty) result[emoji] = (result[emoji] ?? 0) + 1;
+      }
+    }
+  }
+  return result;
 }
 
 /// Converts the published message DTO into the established conversation
@@ -185,13 +306,121 @@ ChatMsg apiChatMessage(ApiSession session, Map<String, dynamic> row) {
   final attachments = _attachmentKeys(
     apiValue(row, const ['attachments', 'attachment_keys', 'files']),
   );
+  final rawReaction = apiValue(row, const [
+    'my_reaction',
+    'reaction',
+    'selected_reaction',
+  ]);
+  String? reaction;
+  if (rawReaction is Map) {
+    reaction = apiText(
+      apiValue(Map<String, dynamic>.from(rawReaction), const [
+        'emoji',
+        'value',
+      ]),
+    );
+  } else {
+    reaction = apiText(rawReaction);
+  }
+  final rawReactions = apiValue(row, const ['reactions', 'reaction_summary']);
+  if (reaction.isEmpty) {
+    if (rawReactions is Map) {
+      for (final entry in rawReactions.entries) {
+        if (entry.value is! Map) continue;
+        final candidate = Map<String, dynamic>.from(entry.value as Map);
+        if (apiValue(candidate, const ['reacted_by_me', 'is_mine', 'mine']) ==
+            true) {
+          reaction = apiText(
+            apiValue(candidate, const ['emoji', 'value']),
+            fallback: '${entry.key}',
+          );
+          break;
+        }
+      }
+    } else if (rawReactions is Iterable && rawReactions.isNotEmpty) {
+      for (final item in rawReactions) {
+        if (item is! Map) continue;
+        final candidate = Map<String, dynamic>.from(item);
+        if (apiValue(candidate, const ['reacted_by_me', 'is_mine', 'mine']) ==
+            true) {
+          reaction = apiText(apiValue(candidate, const ['emoji', 'value']));
+          break;
+        }
+      }
+    }
+  }
+  final reactionCounts = _reactionCounts(rawReactions);
+  final currentReaction = reaction ?? '';
+  if (currentReaction.isNotEmpty &&
+      !reactionCounts.containsKey(currentReaction)) {
+    reactionCounts[currentReaction] = 1;
+  }
+  final rawAttachment = apiValue(row, const [
+    'attachments',
+    'attachment_keys',
+    'files',
+  ]);
+  final firstAttachment = rawAttachment is Iterable && rawAttachment.isNotEmpty
+      ? rawAttachment.first
+      : null;
+  final attachmentMap = firstAttachment is Map
+      ? Map<String, dynamic>.from(firstAttachment)
+      : const <String, dynamic>{};
+  final durationMs = int.tryParse(
+    apiText(
+      apiValue(attachmentMap, const ['duration_ms', 'duration_milliseconds']),
+    ),
+  );
+  final durationSeconds = double.tryParse(
+    apiText(apiValue(attachmentMap, const ['duration_seconds', 'duration'])),
+  );
+  final createdAt = apiDate(
+    apiValue(row, const ['created_at', 'sent_at', 'date']),
+  );
+  final editedAt = apiDate(
+    apiValue(row, const ['edited_at', 'modified_at', 'updated_at']),
+  );
+  final explicitEdited = apiValue(row, const ['is_edited', 'edited']);
+  final edited = explicitEdited is bool
+      ? explicitEdited
+      : editedAt != null &&
+            (createdAt == null ||
+                editedAt.difference(createdAt).abs() >
+                    const Duration(seconds: 1));
+  final deleted =
+      apiValue(row, const ['is_deleted', 'deleted']) == true ||
+      apiValue(row, const ['deleted_at', 'removed_at']) != null;
   return ChatMsg(
     _text(row, const ['body', 'text', 'content', 'message'], fallback: ''),
     mine: mine,
     kind: _messageKind(attachments),
     serverId: _id(row),
-    createdAt: apiDate(apiValue(row, const ['created_at', 'sent_at', 'date'])),
+    createdAt: createdAt,
+    duration: durationMs != null
+        ? Duration(milliseconds: durationMs)
+        : durationSeconds != null
+        ? Duration(milliseconds: (durationSeconds * 1000).round())
+        : null,
     attachmentKeys: attachments,
+    reaction: currentReaction.isEmpty ? null : currentReaction,
+    reactions: reactionCounts,
+    mimeType:
+        apiText(
+          apiValue(attachmentMap, const ['content_type', 'mime_type', 'mime']),
+        ).trim().isEmpty
+        ? null
+        : apiText(
+            apiValue(attachmentMap, const [
+              'content_type',
+              'mime_type',
+              'mime',
+            ]),
+          ),
+    sizeBytes: int.tryParse(
+      apiText(apiValue(attachmentMap, const ['size_bytes', 'size'])),
+    ),
+    edited: edited,
+    deleted: deleted,
   );
 }
 
@@ -322,10 +551,6 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
   List<Student>? students;
   if (session.collections.containsKey('students')) {
     students = studentRows
-        .where((row) {
-          final active = apiValue(row, const ['is_active', 'active']);
-          return active == null || _truthy(active);
-        })
         .map((row) {
           final id = _id(row);
           final groupValue = apiText(
@@ -391,15 +616,14 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
             }).length;
             attendance = present * 100 / relatedAttendance.length;
           }
-          final debt =
-              apiNumber(row, const [
-                'debt_uzs',
-                'debt',
-                'debt_amount',
-                'outstanding_amount',
-                'balance_due',
-              ]) ??
-              0;
+          final debtValue = apiNumber(row, const [
+            'debt_uzs',
+            'debt',
+            'debt_amount',
+            'outstanding_amount',
+            'balance_due',
+          ]);
+          final debt = debtValue ?? 0;
           final active = apiValue(row, const ['is_active', 'active']);
           final rawStatus = _text(row, const [
             'payment_status',
@@ -416,20 +640,51 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
             'archived',
             'inactive',
           }.contains(lifecycle);
+          final lifecycleStatus =
+              hasExited || active != null && !_truthy(active)
+              ? (lifecycle.isEmpty ? 'inactive' : lifecycle)
+              : lifecycle.isEmpty
+              ? 'active'
+              : lifecycle;
           final paymentState = hasExited || active != null && !_truthy(active)
               ? 'left'
+              : rawStatus.contains('partial')
+              ? 'partial'
+              : rawStatus.contains('debt') || rawStatus.contains('overdue')
+              ? 'debt'
+              : rawStatus.contains('paid')
+              ? 'paid'
+              : debtValue == null
+              ? 'unknown'
               : debt > 0
-              ? (rawStatus.contains('partial') ? 'partial' : 'debt')
+              ? 'debt'
               : 'paid';
           final parent =
               parentByStudent[id] ??
               parentByStudent[_text(row, const ['name', 'full_name'])];
+          final account = apiValue(row, const ['user', 'account']);
+          final accountRow = account is Map
+              ? Map<String, dynamic>.from(account)
+              : const <String, dynamic>{};
           return Student(
             _text(row, const ['full_name', 'name', 'student_name']),
             groupName,
             _percentage(attendance ?? 0),
             paymentState,
             debt,
+            attendanceKnown: attendance != null,
+            debtKnown: debtValue != null || rawStatus.isNotEmpty,
+            lifecycleStatus: lifecycleStatus,
+            rating: apiNumber(row, const [
+              'rating',
+              'student_rating',
+              'academic_rating',
+            ])?.toDouble(),
+            averageScore: apiNumber(row, const [
+              'average_score',
+              'average_grade',
+              'score_average',
+            ])?.round(),
             studentNumber: _text(row, const [
               'student_id',
               'id',
@@ -451,11 +706,16 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
                 ? '—'
                 : _text(parent, const ['phone', 'phone_number', 'mobile']),
             branch: branchName,
-            username: _text(row, const [
-              'username',
-              'login',
-              'email',
-            ], fallback: '—'),
+            username: _text(
+              row,
+              const ['username', 'login', 'email'],
+              fallback: _text(accountRow, const [
+                'username',
+                'login',
+                'phone',
+                'email',
+              ], fallback: '—'),
+            ),
             gender: _text(row, const ['gender', 'sex'], fallback: '—'),
             level: _text(
               row,
@@ -483,6 +743,9 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
               ]),
             ),
             age: apiNumber(row, const ['age'])?.round(),
+            avatarUrl:
+                _avatarUrl(session, row) ??
+                (accountRow.isEmpty ? null : _avatarUrl(session, accountRow)),
             serverId: id,
             serverUserId: _userId(
               apiValue(row, const ['user_id', 'account_id', 'user', 'account']),
@@ -671,6 +934,7 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
             attendance,
             score.toDouble(),
             mark,
+            serverId: id,
           );
         })
         .toList(growable: false);
@@ -791,6 +1055,28 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
               break;
             }
           }
+          if (otherIds.isNotEmpty) {
+            Map<String, dynamic>? directoryContact;
+            for (final candidate in session.messagingContacts) {
+              final candidateId = apiText(
+                apiValue(candidate, const ['user_id', 'user', 'id', 'pk']),
+              );
+              if (otherIds.contains(candidateId)) {
+                directoryContact = candidate;
+                break;
+              }
+            }
+            if (directoryContact != null) {
+              participant = <String, dynamic>{
+                ...?participant,
+                // The directory is the identity authority. Thread
+                // participants intentionally contain only bridge ids and a
+                // principal kind on the live API; older deployments could
+                // also repeat a technical subject as a display label.
+                ...directoryContact,
+              };
+            }
+          }
           final directName = participant == null
               ? ''
               : _text(participant, const [
@@ -807,20 +1093,48 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
           final isGroup =
               _truthy(apiValue(row, const ['is_group', 'group_chat'])) ||
               otherIds.length > 1;
-          final title = !isGroup && directName.isNotEmpty
-              ? directName
-              : subject.isNotEmpty
-              ? subject
-              : directName.isNotEmpty
-              ? directName
-              : 'Диалог';
-          final contactRole = participant == null
+          final principalKind = participant == null
               ? ''
               : _text(participant, const [
-                  'role_label',
-                  'role',
                   'principal_kind',
-                ], fallback: '');
+                  'category',
+                  'role_slug',
+                ], fallback: '').toLowerCase();
+          final publishedRole = participant == null
+              ? ''
+              : _text(participant, const ['role_label', 'role'], fallback: '');
+          final contactRole = switch (principalKind) {
+            'student' => 'Student',
+            'parent' || 'guardian' => 'Parent',
+            'teacher' => 'Teacher',
+            _ => publishedRole.isNotEmpty ? publishedRole : principalKind,
+          };
+          final directFallback = switch (principalKind) {
+            'student' => 'Ученик',
+            'parent' || 'guardian' => 'Родитель',
+            'teacher' => 'Преподаватель',
+            _ => 'Диалог',
+          };
+          // A direct-thread subject is descriptive metadata, not a person's
+          // identity (the live thread 1209, for example, is called
+          // "Chat verification"). Use it only for real group conversations.
+          final title = isGroup
+              ? (subject.isNotEmpty ? subject : 'Групповой чат')
+              : directName.isNotEmpty
+              ? directName
+              : directFallback;
+          final lastSeenAt = apiDate(
+            apiValue(participant ?? row, const [
+              'last_seen_at',
+              'last_seen',
+              'last_active_at',
+              'last_login_at',
+            ]),
+          );
+          final explicitOnline = apiValue(participant ?? row, const [
+            'online',
+            'is_online',
+          ]);
           final meta = Thread(
             title,
             isGroup
@@ -837,12 +1151,16 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
               ]),
             ),
             unread: _integer(row, const ['unread_count', 'unread']),
-            online: _truthy(
-              apiValue(participant ?? row, const ['online', 'is_online']),
-            ),
+            online: explicitOnline == null
+                ? chatPresenceIsOnline(lastSeenAt)
+                : _truthy(explicitOnline),
+            lastSeenAt: lastSeenAt,
             isGroup: isGroup,
             serverId: _id(row),
             participantIds: participantIds,
+            avatarUrl: participant == null
+                ? null
+                : _avatarUrl(session, participant),
           );
           return ChatThread(meta, [
             if (lastRow != null) apiChatMessage(session, lastRow),
@@ -890,30 +1208,97 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
   List<StaffMember>? staff;
   if (session.collections.containsKey('staff') ||
       session.collections.containsKey('teachers')) {
-    final source = staffRows.isNotEmpty ? staffRows : teacherRows;
+    // Staff and teachers are separate profile namespaces on the live API.
+    // Keeping only the non-empty staff collection made real teachers vanish
+    // from Manager screens even though they remained present in messaging
+    // contacts. Merge both directories and deduplicate the same account by
+    // username (profile ids can legitimately overlap across namespaces).
+    final source = <_Row>[];
+    final seenAccounts = <String>{};
+    for (final row in [...teacherRows, ...staffRows]) {
+      final account = apiValue(row, const ['user', 'account']);
+      final accountRow = account is Map
+          ? Map<String, dynamic>.from(account)
+          : const <String, dynamic>{};
+      final username = _text(
+        row,
+        const ['username', 'login', 'email'],
+        fallback: _text(accountRow, const [
+          'username',
+          'login',
+          'phone',
+          'email',
+        ], fallback: ''),
+      ).trim().toLowerCase();
+      final fullName = _text(
+        row,
+        const ['full_name', 'name', 'display_name'],
+        fallback: _text(accountRow, const [
+          'full_name',
+          'name',
+          'display_name',
+        ], fallback: ''),
+      ).trim().toLowerCase();
+      final identity = username.isNotEmpty
+          ? 'username:$username'
+          : fullName.isNotEmpty
+          ? 'name:$fullName'
+          : 'record:${jsonEncode(row)}';
+      if (seenAccounts.add(identity)) source.add(row);
+    }
     staff = source
         .map((row) {
-          final fullName = _text(row, const [
-            'full_name',
-            'name',
-            'display_name',
-          ]);
+          final account = apiValue(row, const ['user', 'account']);
+          final accountRow = account is Map
+              ? Map<String, dynamic>.from(account)
+              : const <String, dynamic>{};
+          final fullName = _text(
+            row,
+            const ['full_name', 'name', 'display_name'],
+            fallback: _text(accountRow, const [
+              'full_name',
+              'name',
+              'display_name',
+            ]),
+          );
           final parts = fullName.split(RegExp(r'\s+'));
           return StaffMember(
             firstName: parts.isEmpty ? '—' : parts.first,
             lastName: parts.length < 2 ? '' : parts.sublist(1).join(' '),
-            username: _text(row, const ['username', 'login', 'email']),
-            phone: _text(row, const ['phone', 'phone_number', 'mobile']),
-            email: _text(row, const ['email'], fallback: '—'),
-            branch: _relation(row, const [
-              'branch_name',
-              'branch',
-              'branch_id',
-            ], branchNames),
-            department: _text(row, const [
-              'department_name',
-              'department',
-            ], fallback: '—'),
+            username: _text(
+              row,
+              const ['username', 'login', 'email'],
+              fallback: _text(accountRow, const [
+                'username',
+                'login',
+                'phone',
+                'email',
+              ]),
+            ),
+            phone: _text(
+              row,
+              const ['phone', 'phone_number', 'mobile'],
+              fallback: _text(accountRow, const [
+                'phone',
+                'phone_number',
+                'mobile',
+              ]),
+            ),
+            email: _text(row, const [
+              'email',
+            ], fallback: _text(accountRow, const ['email'], fallback: '—')),
+            branch: _staffMembershipRelation(
+              row,
+              const ['branch_name', 'branch', 'branch_id'],
+              const ['branch_name', 'branch', 'branch_id'],
+              branchNames,
+            ),
+            department: _staffMembershipRelation(
+              row,
+              const ['department_name', 'department', 'department_id'],
+              const ['department_name', 'department', 'department_id'],
+              const <String, String>{},
+            ),
             subject: _text(row, const [
               'subject',
               'specialization',
@@ -944,6 +1329,7 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
                 })
                 .map((group) => _text(group, const ['name', 'title']))
                 .toList(growable: false),
+            serverId: _id(row),
           );
         })
         .toList(growable: false);
@@ -951,28 +1337,64 @@ void syncProductStoreFromApi(ApiSession session, AppStore store) {
 
   List<ActivityEvent>? activities;
   if (session.collections.containsKey('audit')) {
-    activities = session
-        .records('audit')
+    final auditRows = [...session.records('audit')]
+      ..sort((left, right) {
+        final leftAt = apiRecordDate(left);
+        final rightAt = apiRecordDate(right);
+        if (leftAt == null && rightAt == null) return 0;
+        if (leftAt == null) return 1;
+        if (rightAt == null) return -1;
+        return rightAt.compareTo(leftAt);
+      });
+    activities = auditRows
         .map((row) {
           final kind = _text(row, const [
             'entity_type',
             'resource',
             'object_type',
+            'resource_type',
           ], fallback: 'audit');
+          final actor = _text(row, const [
+            'actor_username',
+            'actor_name',
+            'username',
+            'actor_repr',
+          ], fallback: '');
+          final resourceId = _text(row, const [
+            'resource_id',
+            'entity_id',
+            'object_id',
+          ], fallback: '');
+          final scope = apiValue(row, const ['scope']);
+          final scopeRow = scope is Map
+              ? Map<String, dynamic>.from(scope)
+              : const <String, dynamic>{};
+          final branch = apiText(
+            apiValue(scopeRow, const ['branch', 'branch_name']),
+          );
+          final publishedDetail = _text(row, const [
+            'description',
+            'object_repr',
+            'entity_name',
+          ], fallback: '');
+          final generatedDetail = [
+            if (actor.isNotEmpty) actor,
+            if (kind.isNotEmpty)
+              resourceId.isEmpty ? kind : '$kind #$resourceId',
+            if (branch.isNotEmpty) branch,
+          ].join(' · ');
           return ActivityEvent(
             icon: switch (kind.toLowerCase()) {
               'payment' || 'payments' => Icons.payments_rounded,
               'student' || 'students' => Icons.person_outline_rounded,
               'group' || 'groups' || 'cohort' => Icons.workspaces_rounded,
+              'users.user' || 'user' || 'users' => Icons.person_rounded,
               _ => Icons.policy_outlined,
             },
             title: _text(row, const ['action', 'event', 'title', 'operation']),
-            detail: _text(row, const [
-              'description',
-              'object_repr',
-              'entity_name',
-              'request_id',
-            ]),
+            detail: publishedDetail.isNotEmpty
+                ? publishedDetail
+                : generatedDetail,
             time: _time(
               apiValue(row, const ['created_at', 'timestamp', 'date']),
             ),

@@ -148,10 +148,36 @@ String notificationRouteFromPayload(Map<String, dynamic> payload) {
 Map<String, dynamic> _payloadForMessage(RemoteMessage message) {
   final payload = <String, dynamic>{...message.data};
   final notification = message.notification;
-  if (message.messageId case final id?) payload['message_id'] = id;
+  // Preserve the backend messaging id carried in `data.message_id`: the API
+  // notification feed contains the same value and uses it to suppress a
+  // delayed duplicate sound. The transport id is useful diagnostics only.
+  if (message.messageId case final id?) {
+    payload['fcm_message_id'] = id;
+    payload.putIfAbsent('message_id', () => id);
+  }
   if (notification?.title case final title?) payload['title'] = title;
   if (notification?.body case final body?) payload['body'] = body;
   payload.putIfAbsent('route', () => 'notifications');
+  final kind = '${payload['event_type'] ?? payload['type'] ?? payload['route']}'
+      .toLowerCase();
+  final title = payload['title']?.toString().trim() ?? '';
+  if (title.isEmpty) {
+    payload['title'] = kind.contains('message') || kind.contains('thread')
+        ? 'Новое сообщение'
+        : kind.contains('payment') || kind.contains('invoice')
+        ? 'Новый платёж'
+        : kind.contains('attendance')
+        ? 'Посещаемость обновлена'
+        : kind.contains('risk') || kind.contains('anomal')
+        ? 'Важный сигнал'
+        : 'StarForge EDU';
+  }
+  final body = payload['body']?.toString().trim() ?? '';
+  if (body.isEmpty) {
+    payload['body'] = payload['message']?.toString().trim().isNotEmpty == true
+        ? payload['message'].toString().trim()
+        : 'Откройте приложение, чтобы посмотреть подробности.';
+  }
   return payload;
 }
 
@@ -179,7 +205,7 @@ Future<void> starforgeFirebaseMessagingBackgroundHandler(
             : 'StarForge EDU',
         body: payload['body']?.toString().trim().isNotEmpty == true
             ? payload['body'].toString()
-            : 'Yangi bildirishnoma bor',
+            : 'Откройте приложение, чтобы посмотреть подробности.',
         payload: payload,
       );
     }
@@ -204,14 +230,23 @@ class PushNotificationService {
   StreamSubscription<RemoteMessage>? _foregroundSubscription;
   StreamSubscription<RemoteMessage>? _tapSubscription;
   StreamSubscription<String>? _tokenSubscription;
+  final StreamController<Map<String, dynamic>> _messageController =
+      StreamController<Map<String, dynamic>>.broadcast();
   PushDeviceRegistrar? _registrar;
   String? _lastRegisteredToken;
+  String? _currentToken;
+  Timer? _registrationRetry;
+  int _registrationAttempt = 0;
+  bool _registrationInFlight = false;
+  bool _registered = false;
   bool _initialized = false;
   bool _available = false;
   String? _initializationError;
   String? _registrationError;
 
   bool get available => _available;
+  bool get registered => _registered;
+  Stream<Map<String, dynamic>> get messages => _messageController.stream;
   String? get initializationError => _initializationError;
   String? get registrationError => _registrationError;
 
@@ -261,9 +296,12 @@ class PushNotificationService {
       _tapSubscription = FirebaseMessaging.onMessageOpenedApp.listen(
         _handleMessageTap,
       );
-      _tokenSubscription = messaging.onTokenRefresh.listen(
-        (token) => unawaited(_submitToken(token)),
-      );
+      _tokenSubscription = messaging.onTokenRefresh.listen((token) {
+        _currentToken = token.trim();
+        _lastRegisteredToken = null;
+        _registered = false;
+        unawaited(retryRegistration());
+      });
       final initialMessage = await messaging.getInitialMessage();
       if (initialMessage != null) _handleMessageTap(initialMessage);
       _available = true;
@@ -279,6 +317,10 @@ class PushNotificationService {
   Future<void> bindAuthenticatedSession(PushDeviceRegistrar registrar) async {
     _registrar = registrar;
     _lastRegisteredToken = null;
+    _currentToken = null;
+    _registered = false;
+    _registrationAttempt = 0;
+    _registrationRetry?.cancel();
     if (!await initialize()) return;
     try {
       await DeviceNotificationService.instance.requestPermission();
@@ -295,24 +337,92 @@ class PushNotificationService {
         }
       }
       final token = await FirebaseMessaging.instance.getToken();
-      if (token != null && token.trim().isNotEmpty) await _submitToken(token);
+      _currentToken = token?.trim();
+      await _registerCurrentToken();
     } catch (error) {
       _registrationError = error.runtimeType.toString();
+      _scheduleRegistrationRetry();
     }
   }
 
   void unbindAuthenticatedSession() {
+    _registrationRetry?.cancel();
+    _registrationRetry = null;
     _registrar = null;
     _lastRegisteredToken = null;
+    _currentToken = null;
+    _registered = false;
+    _registrationAttempt = 0;
   }
 
-  Future<void> _submitToken(String token) async {
+  /// Reconciles a temporarily failed/null token without requiring logout.
+  /// Called by the bounded retry timer and whenever the app resumes.
+  Future<void> retryRegistration() async {
+    if (_registrar == null || !_available || _registered) return;
+    _registrationRetry?.cancel();
+    _registrationRetry = null;
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null && token.trim().isNotEmpty) {
+        _currentToken = token.trim();
+      }
+      await _registerCurrentToken();
+    } catch (error) {
+      _registrationError = error.runtimeType.toString();
+      _scheduleRegistrationRetry();
+    }
+  }
+
+  Future<void> _registerCurrentToken() async {
+    if (_registrationInFlight || _registrar == null || _registered) return;
+    final token = _currentToken?.trim() ?? '';
+    if (token.isEmpty) {
+      _registrationError = 'fcm_token_unavailable';
+      _scheduleRegistrationRetry();
+      return;
+    }
+    _registrationInFlight = true;
+    try {
+      if (await _submitToken(token)) {
+        _registered = true;
+        _registrationAttempt = 0;
+        _registrationRetry?.cancel();
+        _registrationRetry = null;
+      } else {
+        _scheduleRegistrationRetry();
+      }
+    } finally {
+      _registrationInFlight = false;
+    }
+  }
+
+  void _scheduleRegistrationRetry() {
+    if (_registrar == null || _registered || _registrationRetry != null) {
+      return;
+    }
+    const delays = <Duration>[
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 15),
+      Duration(seconds: 30),
+      Duration(minutes: 2),
+    ];
+    final delay = delays[_registrationAttempt.clamp(0, delays.length - 1)];
+    _registrationAttempt++;
+    _registrationRetry = Timer(delay, () {
+      _registrationRetry = null;
+      unawaited(retryRegistration());
+    });
+  }
+
+  Future<bool> _submitToken(String token) async {
     final registrar = _registrar;
     final normalizedToken = token.trim();
-    if (registrar == null ||
-        normalizedToken.isEmpty ||
-        normalizedToken == _lastRegisteredToken) {
-      return;
+    if (registrar == null || normalizedToken.isEmpty) {
+      return false;
+    }
+    if (normalizedToken == _lastRegisteredToken) {
+      return true;
     }
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -333,11 +443,13 @@ class PushNotificationService {
       );
       _lastRegisteredToken = normalizedToken;
       _registrationError = null;
+      return true;
     } catch (error) {
       // Some published backend schemas expose the endpoint but not yet the
       // push_token field. Keep login and the workspace operational while
       // retaining a diagnostic that can be surfaced by support tooling.
       _registrationError = error.runtimeType.toString();
+      return false;
     }
   }
 
@@ -350,9 +462,10 @@ class PushNotificationService {
           : 'StarForge EDU',
       body: payload['body']?.toString().trim().isNotEmpty == true
           ? payload['body'].toString()
-          : 'Yangi bildirishnoma bor',
+          : 'Откройте приложение, чтобы посмотреть подробности.',
       payload: payload,
     );
+    _messageController.add(payload);
   }
 
   void _handleMessageTap(RemoteMessage message) {
@@ -362,8 +475,15 @@ class PushNotificationService {
   }
 
   Future<void> dispose() async {
+    _registrationRetry?.cancel();
     await _foregroundSubscription?.cancel();
     await _tapSubscription?.cancel();
     await _tokenSubscription?.cancel();
+    await _messageController.close();
   }
 }
+
+bool shouldPresentNotificationPollingFallback({
+  required bool pushAvailable,
+  required bool pushRegistered,
+}) => !pushAvailable || !pushRegistered;

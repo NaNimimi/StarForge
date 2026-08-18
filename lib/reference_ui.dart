@@ -232,6 +232,192 @@ class RefSurfaceCard extends StatelessWidget {
   }
 }
 
+/// A calm, reusable loading surface for first loads. Refreshes should use
+/// [RefRefreshStatus] so content never jumps behind a full-screen spinner.
+class RefLoadingState extends StatelessWidget {
+  const RefLoadingState({
+    super.key,
+    required this.title,
+    required this.message,
+  });
+
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Semantics(
+      liveRegion: true,
+      label: '$title. $message',
+      child: RefSurfaceCard(
+        padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 42,
+              height: 42,
+              child: CircularProgressIndicator(
+                strokeWidth: 3,
+                color: c.primary,
+                backgroundColor: c.primarySoft,
+                strokeCap: StrokeCap.round,
+              ),
+            ),
+            const SizedBox(height: 15),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: RefType.ui(
+                size: 14,
+                weight: FontWeight.w800,
+                color: c.ink,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: RefType.ui(size: 11.5, color: c.muted, height: 1.45),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Formal empty state with enough context to explain what will appear here.
+class RefEmptyState extends StatelessWidget {
+  const RefEmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+    this.compact = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return RefSurfaceCard(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        compact ? 18 : 26,
+        20,
+        compact ? 18 : 24,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: compact ? 42 : 52,
+            height: compact ? 42 : 52,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [c.primarySoft, c.accentSoft],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(compact ? 14 : 18),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, size: compact ? 21 : 25, color: c.primary),
+          ),
+          SizedBox(height: compact ? 10 : 14),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: RefType.ui(
+              size: 13.5,
+              weight: FontWeight.w800,
+              color: c.ink,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: RefType.ui(size: 11.5, color: c.muted, height: 1.45),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 14),
+            RefButton(
+              label: actionLabel!,
+              onPressed: onAction,
+              kind: RefButtonKind.soft,
+              leading: Icons.refresh_rounded,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Non-blocking refresh feedback. It replaces the thin progress strip that
+/// looked like an unexplained line at the top of every API page.
+class RefRefreshStatus extends StatelessWidget {
+  const RefRefreshStatus({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SfTheme.of(context);
+    return Semantics(
+      liveRegion: true,
+      label: label,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: RefRadius.pill,
+            border: Border.all(color: c.border),
+            boxShadow: Theme.of(context).brightness == Brightness.light
+                ? RefShadows.soft
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: c.primary,
+                  strokeCap: StrokeCap.round,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: RefType.ui(
+                  size: 10.5,
+                  weight: FontWeight.w700,
+                  color: c.ink2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 enum RefButtonKind { primary, ghost, soft, ink, danger }
 
 /// Reference `SfButton` with the original 44px touch target and pill shell.

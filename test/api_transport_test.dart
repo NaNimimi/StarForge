@@ -73,7 +73,7 @@ void main() {
 
       expect(session['access'], 'transport-test-session');
       expect(request.method, 'POST');
-      expect(request.path, '/api/v1/auth/login/');
+      expect(request.path, '/api/v1/auth/role-login/');
       expect(
         request.contentLength,
         utf8.encode(jsonEncode(expectedBody)).length,
@@ -114,13 +114,13 @@ void main() {
       expect(client.baseUrl, 'http://${server.address.host}:${server.port}');
       expect(
         await receivedPath.future.timeout(const Duration(seconds: 5)),
-        '/api/v1/auth/login/',
+        '/api/v1/auth/role-login/',
       );
     },
   );
 
   test(
-    'login falls back to role-login only after a missing public route',
+    'login falls back to generic login only after a missing role route',
     () async {
       final paths = <String>[];
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -129,7 +129,7 @@ void main() {
         paths.add(request.uri.path);
         await utf8.decoder.bind(request).join();
         request.response.headers.contentType = ContentType.json;
-        if (request.uri.path == '/api/v1/auth/login/') {
+        if (request.uri.path == '/api/v1/auth/role-login/') {
           request.response
             ..statusCode = HttpStatus.notFound
             ..write(
@@ -157,7 +157,7 @@ void main() {
       );
       await client.login(username: 'admin', password: 'root');
 
-      expect(paths, ['/api/v1/auth/login/', '/api/v1/auth/role-login/']);
+      expect(paths, ['/api/v1/auth/role-login/', '/api/v1/auth/login/']);
       expect(client.token, 'fallback-session');
     },
   );
@@ -194,7 +194,7 @@ void main() {
       ),
     );
 
-    expect(paths, ['/api/v1/auth/login/']);
+    expect(paths, ['/api/v1/auth/role-login/']);
   });
 
   test('cursor page does not send an unsupported numeric page', () async {
@@ -317,6 +317,46 @@ void main() {
   });
 
   test(
+    'ordinary collections follow a hidden two-row server page cap',
+    () async {
+      final receivedPages = <int>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        final page = int.parse(request.uri.queryParameters['page'] ?? '1');
+        receivedPages.add(page);
+        final start = (page - 1) * 2;
+        final end = (start + 2).clamp(0, 5);
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..headers.contentType = ContentType.json
+          ..write(
+            jsonEncode({
+              'success': true,
+              'data': [
+                for (var index = start; index < end; index++)
+                  {'id': index + 1, 'name': 'Student ${index + 1}'},
+              ],
+              // This intentionally reproduces the deployment that caps the
+              // response but omits page_size/pages/has_next.
+              'pagination': {'page': page, 'total': 5},
+            }),
+          );
+        await request.response.close();
+      });
+
+      final client = StarforgeApiClient(
+        baseUrl: 'http://${server.address.host}:${server.port}',
+      )..configure(token: 'session');
+      final result = await client.list('/api/v1/students/');
+
+      expect(receivedPages, [1, 2, 3]);
+      expect(result.items.map((row) => row['id']), [1, 2, 3, 4, 5]);
+      expect(result.total, 5);
+    },
+  );
+
+  test(
     'ordinary collections stop repeated pages and deduplicate records',
     () async {
       var requests = 0;
@@ -352,22 +392,28 @@ void main() {
       final client = StarforgeApiClient(
         baseUrl: 'http://${server.address.host}:${server.port}',
       )..configure(token: 'session');
-      final result = await client.list('/api/v1/students/');
+      await expectLater(
+        client.list('/api/v1/students/'),
+        throwsA(
+          isA<ApiException>().having(
+            (error) => error.code,
+            'code',
+            'invalid_pagination',
+          ),
+        ),
+      );
 
       expect(requests, 2);
-      expect(result.items, hasLength(1));
-      expect(result.items.single['name'], 'Actual student');
-      expect(result.total, 1);
-      expect(result.hasNext, isFalse);
     },
   );
 
-  test('self profile update strips role and preserves permissions', () async {
-    Object? receivedBody;
+  test('self profile update rejects unsupported gender explicitly', () async {
+    final receivedBodies = <Object?>[];
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     server.listen((request) async {
-      receivedBody = jsonDecode(await utf8.decoder.bind(request).join());
+      final rawBody = await utf8.decoder.bind(request).join();
+      if (rawBody.isNotEmpty) receivedBodies.add(jsonDecode(rawBody));
       request.response
         ..statusCode = HttpStatus.ok
         ..headers.contentType = ContentType.json
@@ -391,16 +437,89 @@ void main() {
       };
     addTearDown(session.dispose);
 
-    await session.updateMe({
-      'first_name': 'Aziza',
-      'role': 'ceo',
-      'username': 'changed',
-      'is_active': false,
-    });
+    await expectLater(
+      session.updateMe({
+        'first_name': 'Aziza',
+        'gender': 'f',
+        'role': 'ceo',
+        'username': 'changed',
+        'is_active': false,
+      }),
+      throwsA(
+        isA<ApiException>().having(
+          (error) => error.code,
+          'code',
+          'profile_field_not_supported',
+        ),
+      ),
+    );
 
-    expect(receivedBody, {'first_name': 'Aziza'});
+    expect(receivedBodies, isEmpty);
     expect(session.me?['role'], 'student');
     expect(session.me?['permission_codes'], ['students:self']);
     expect(session.me?['full_name'], 'Aziza Student');
+    expect(session.me?['gender'], isNull);
+  });
+
+  test('self profile update sends gender when server publishes it', () async {
+    final patchBodies = <Object?>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      final bodyText = await utf8.decoder.bind(request).join();
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/api/v1/auth/role-login/') {
+        request.response
+          ..statusCode = HttpStatus.created
+          ..write(
+            jsonEncode({
+              'success': true,
+              'data': {'access': 'profile-gender-session'},
+            }),
+          );
+      } else if (request.uri.path == '/api/v1/users/me/' &&
+          request.method == 'GET') {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write(
+            jsonEncode({
+              'success': true,
+              'data': {
+                'id': 5,
+                'username': 'director',
+                'first_name': 'Aziza',
+                'gender': '',
+                'birthdate': null,
+              },
+            }),
+          );
+      } else if (request.uri.path == '/api/v1/users/me/' &&
+          request.method == 'PATCH') {
+        final body = jsonDecode(bodyText);
+        patchBodies.add(body);
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write(jsonEncode({'success': true, 'data': body}));
+      } else {
+        request.response
+          ..statusCode = HttpStatus.ok
+          ..write(jsonEncode({'success': true, 'data': <Object?>[]}));
+      }
+      await request.response.close();
+    });
+
+    final session = ApiSession();
+    addTearDown(session.dispose);
+    await session.login(
+      endpoint: 'http://${server.address.host}:${server.port}',
+      username: 'director',
+      password: 'secret',
+    );
+    await session.updateMe({'gender': 'f'});
+
+    expect(patchBodies, [
+      {'gender': 'f'},
+    ]);
+    expect(session.me?['gender'], 'f');
   });
 }

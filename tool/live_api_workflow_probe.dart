@@ -348,10 +348,10 @@ Future<void> main() async {
   final checks = <String>[];
 
   const loginPaths = <String>[
-    '/api/v1/auth/login/',
     '/api/v1/auth/role-login/',
-    '/api/v1/auth/login',
+    '/api/v1/auth/login/',
     '/api/v1/auth/role-login',
+    '/api/v1/auth/login',
   ];
   late ProbeResponse login;
   for (var index = 0; index < loginPaths.length; index++) {

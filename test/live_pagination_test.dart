@@ -116,23 +116,27 @@ Widget _host(ApiSession session, Widget child) => SettingsScope(
   ),
 );
 
-Widget _notificationHost(ApiSession session, AppStore store, Widget child) =>
-    SettingsScope(
-      settings: AppSettings(),
-      child: AppScope(
-        store: store,
-        child: ApiScope(
-          session: session,
-          child: MaterialApp(
-            theme: sfMaterialTheme(SfColors.light, dark: false),
-            home: SfTheme(
-              colors: SfColors.light,
-              child: Scaffold(body: child),
-            ),
-          ),
+Widget _notificationHost(
+  ApiSession session,
+  AppStore store,
+  Widget child, {
+  AppSettings? settings,
+}) => SettingsScope(
+  settings: settings ?? AppSettings(),
+  child: AppScope(
+    store: store,
+    child: ApiScope(
+      session: session,
+      child: MaterialApp(
+        theme: sfMaterialTheme(SfColors.light, dark: false),
+        home: SfTheme(
+          colors: SfColors.light,
+          child: Scaffold(body: child),
         ),
       ),
-    );
+    ),
+  ),
+);
 
 void _surface(WidgetTester tester) {
   tester.view.devicePixelRatio = 1;
@@ -475,10 +479,53 @@ void main() {
     expect(find.text('Payment received'), findsNothing);
     expect(find.textContaining('Yangi bildirishnoma yo‘q'), findsOneWidget);
 
-    await tester.tap(find.text('История'));
+    await tester.tap(find.text('Tarix'));
     await tester.pumpAndSettle();
     expect(find.text('Payment received'), findsOneWidget);
     expect(find.text('Old message'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('notification cards localize nested server data and time', (
+    tester,
+  ) async {
+    _surface(tester);
+    final client = _NotificationClient();
+    client.records
+      ..clear()
+      ..add({
+        'id': 'notification-nested-1',
+        'event_type': 'payment.received',
+        'is_read': false,
+        'data': {
+          'title': 'Оплата получена',
+          'body': 'Платёж ученика успешно принят',
+          'created_at': DateTime.now()
+              .subtract(const Duration(minutes: 2))
+              .toUtc()
+              .toIso8601String(),
+        },
+      });
+    final session = ApiSession(client: client);
+    final store = AppStore.seed(SfRole.manager);
+    addTearDown(session.dispose);
+    addTearDown(store.dispose);
+
+    await tester.pumpWidget(
+      _notificationHost(
+        session,
+        store,
+        const LiveNotificationsPage(),
+        settings: AppSettings(lang: SfLang.ru),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Оплата получена'), findsOneWidget);
+    expect(find.text('Платёж ученика успешно принят'), findsOneWidget);
+    expect(find.text('ПЛАТЁЖ'), findsOneWidget);
+    expect(find.textContaining('мин назад'), findsOneWidget);
+    expect(find.textContaining('payment.received'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

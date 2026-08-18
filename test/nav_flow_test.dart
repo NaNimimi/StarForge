@@ -40,16 +40,33 @@ void main() {
   });
 
   testWidgets('CEO: profile → edit profile', (t) async {
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(390, 844);
+    addTearDown(() {
+      t.view.resetDevicePixelRatio();
+      t.view.resetPhysicalSize();
+    });
     await t.pumpWidget(_app(AppStore.seed(SfRole.ceo)));
     await t.pump(const Duration(seconds: 1));
-    await t.tap(find.byIcon(Icons.person_rounded).last);
+    final bottomNavigation = find.byKey(
+      const ValueKey('console-bottom-navigation'),
+    );
+    final profileTab = find
+        .descendant(
+          of: bottomNavigation,
+          matching: find.byIcon(Icons.person_rounded),
+        )
+        .hitTestable();
+    expect(profileTab, findsOneWidget, reason: 'profile tab missing');
+    await t.tap(profileTab);
     await t.pump(const Duration(seconds: 1));
-    // Tap the profile card (edit) — the edit pencil icon.
-    final edit = find.byIcon(Icons.edit_rounded);
-    expect(edit, findsWidgets, reason: 'profile edit affordance missing');
-    await t.tap(edit.first);
-    await t.pump();
-    await t.pump(const Duration(seconds: 1));
+    final edit = find
+        .byKey(const ValueKey('profile-edit-action'))
+        .hitTestable();
+    expect(edit, findsOneWidget, reason: 'profile edit affordance missing');
+    await t.tap(edit);
+    await t.pumpAndSettle();
+    expect(find.byType(EditProfileScreen), findsOneWidget);
     expect(t.takeException(), isNull);
   });
 

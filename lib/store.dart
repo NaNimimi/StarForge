@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart'
-    show ChangeNotifier, Color, DateTimeRange, IconData, Icons;
+    show ChangeNotifier, DateTimeRange, IconData, Icons;
 import 'package:flutter/widgets.dart' show BuildContext, InheritedNotifier;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'chat_media_cache.dart';
 import 'data.dart';
-import 'widgets.dart';
 
 /// A chat turn in the AI assistant.
 class AiTurn {
@@ -43,8 +42,23 @@ enum ChatMessageKind { text, image, video, voice }
 
 enum ChatDeliveryState { sent, sending, failed }
 
+enum ChatTransferState {
+  preparing,
+  recording,
+  uploading,
+  sending,
+  sent,
+  failed,
+}
+
+int _chatLocalSequence = 0;
+
+String newChatLocalId() =>
+    'local-${DateTime.now().microsecondsSinceEpoch}-${_chatLocalSequence++}';
+
 /// One message inside a conversation thread.
 class ChatMsg {
+  final String localId;
   final String? serverId;
   final String text;
   final bool mine;
@@ -54,17 +68,39 @@ class ChatMsg {
   final DateTime? createdAt;
   final List<String> attachmentKeys;
   final ChatDeliveryState delivery;
-  const ChatMsg(
+  final ChatTransferState transferState;
+  final String? reaction;
+  final Map<String, int> reactions;
+  final String? mimeType;
+  final int? sizeBytes;
+  final bool edited;
+  final bool deleted;
+  ChatMsg(
     this.text, {
     required this.mine,
     this.kind = ChatMessageKind.text,
     this.path,
     this.duration,
+    String? localId,
     this.serverId,
     this.createdAt,
     this.attachmentKeys = const [],
     this.delivery = ChatDeliveryState.sent,
-  });
+    ChatTransferState? transferState,
+    this.reaction,
+    this.reactions = const <String, int>{},
+    this.mimeType,
+    this.sizeBytes,
+    this.edited = false,
+    this.deleted = false,
+  }) : localId = localId ?? newChatLocalId(),
+       transferState =
+           transferState ??
+           switch (delivery) {
+             ChatDeliveryState.sent => ChatTransferState.sent,
+             ChatDeliveryState.sending => ChatTransferState.sending,
+             ChatDeliveryState.failed => ChatTransferState.failed,
+           };
 
   ChatMsg copyWith({
     String? text,
@@ -72,20 +108,38 @@ class ChatMsg {
     ChatMessageKind? kind,
     String? path,
     Duration? duration,
+    String? localId,
     String? serverId,
     DateTime? createdAt,
     List<String>? attachmentKeys,
     ChatDeliveryState? delivery,
+    ChatTransferState? transferState,
+    String? reaction,
+    Map<String, int>? reactions,
+    String? mimeType,
+    int? sizeBytes,
+    bool? edited,
+    bool? deleted,
+    bool clearPath = false,
+    bool clearReaction = false,
   }) => ChatMsg(
     text ?? this.text,
     mine: mine ?? this.mine,
     kind: kind ?? this.kind,
-    path: path ?? this.path,
+    path: clearPath ? null : path ?? this.path,
     duration: duration ?? this.duration,
+    localId: localId ?? this.localId,
     serverId: serverId ?? this.serverId,
     createdAt: createdAt ?? this.createdAt,
     attachmentKeys: attachmentKeys ?? this.attachmentKeys,
     delivery: delivery ?? this.delivery,
+    transferState: transferState ?? this.transferState,
+    reaction: clearReaction ? null : reaction ?? this.reaction,
+    reactions: reactions ?? this.reactions,
+    mimeType: mimeType ?? this.mimeType,
+    sizeBytes: sizeBytes ?? this.sizeBytes,
+    edited: edited ?? this.edited,
+    deleted: deleted ?? this.deleted,
   );
 }
 
@@ -94,6 +148,200 @@ class ChatThread {
   final Thread meta;
   final List<ChatMsg> messages;
   ChatThread(this.meta, this.messages);
+}
+
+String _chatMessageCacheKey(ChatMsg message) {
+  final serverId = message.serverId?.trim() ?? '';
+  if (serverId.isNotEmpty) return 'id:$serverId';
+  return 'local:${message.localId}';
+}
+
+List<ChatMsg> _mergeChatMessages(
+  Iterable<ChatMsg> cached,
+  Iterable<ChatMsg> incoming,
+) {
+  final merged = <String, ChatMsg>{};
+  for (final message in cached) {
+    merged[_chatMessageCacheKey(message)] = message;
+  }
+  // The server snapshot wins for edits, reactions and final delivery state.
+  for (final message in incoming) {
+    if ((message.serverId ?? '').isNotEmpty) {
+      final acceptedAt = message.createdAt;
+      String? closestLocalKey;
+      Duration? closestDistance;
+      for (final entry in merged.entries) {
+        final local = entry.value;
+        if ((local.serverId ?? '').isNotEmpty ||
+            local.mine != message.mine ||
+            local.kind != message.kind ||
+            local.text != message.text) {
+          continue;
+        }
+        final localAt = local.createdAt;
+        if (acceptedAt == null || localAt == null) continue;
+        final distance = acceptedAt.difference(localAt).abs();
+        if (distance > const Duration(minutes: 2)) continue;
+        if (closestDistance == null || distance < closestDistance) {
+          closestDistance = distance;
+          closestLocalKey = entry.key;
+        }
+      }
+      if (closestLocalKey != null) merged.remove(closestLocalKey);
+    }
+    final key = _chatMessageCacheKey(message);
+    final cachedMessage = merged[key];
+    merged[key] = cachedMessage == null
+        ? message
+        : message.copyWith(
+            path: cachedMessage.path,
+            duration: cachedMessage.duration,
+            localId: cachedMessage.localId,
+            mimeType: message.mimeType ?? cachedMessage.mimeType,
+            sizeBytes: message.sizeBytes ?? cachedMessage.sizeBytes,
+          );
+  }
+  final values = merged.values.toList(growable: false)
+    ..sort((left, right) {
+      final leftAt = left.createdAt;
+      final rightAt = right.createdAt;
+      if (leftAt == null && rightAt == null) return 0;
+      if (leftAt == null) return -1;
+      if (rightAt == null) return 1;
+      return leftAt.compareTo(rightAt);
+    });
+  return values.length <= 300 ? values : values.sublist(values.length - 300);
+}
+
+Map<String, dynamic> _chatThreadToJson(ChatThread thread) => {
+  'meta': {
+    'server_id': thread.meta.serverId,
+    'participant_ids': thread.meta.participantIds,
+    'name': thread.meta.name,
+    'group': thread.meta.group,
+    'last': thread.meta.last,
+    'time': thread.meta.time,
+    'unread': thread.meta.unread,
+    'online': thread.meta.online,
+    'last_seen_at': thread.meta.lastSeenAt?.toUtc().toIso8601String(),
+    'is_group': thread.meta.isGroup,
+    'avatar_url': thread.meta.avatarUrl,
+  },
+  'messages': thread.messages.reversed
+      .take(300)
+      .toList(growable: false)
+      .reversed
+      .map((message) {
+        final storedDelivery = message.delivery == ChatDeliveryState.sending
+            ? ChatDeliveryState.failed
+            : message.delivery;
+        return <String, dynamic>{
+          'server_id': message.serverId,
+          'local_id': message.localId,
+          'text': message.text,
+          'mine': message.mine,
+          'kind': message.kind.name,
+          'path': message.path,
+          'duration_ms': message.duration?.inMilliseconds,
+          'created_at': message.createdAt?.toUtc().toIso8601String(),
+          'attachment_keys': message.attachmentKeys,
+          'delivery': storedDelivery.name,
+          'transfer_state': storedDelivery == ChatDeliveryState.failed
+              ? ChatTransferState.failed.name
+              : message.transferState.name,
+          'reaction': message.reaction,
+          'reactions': message.reactions,
+          'mime_type': message.mimeType,
+          'size_bytes': message.sizeBytes,
+          'edited': message.edited,
+          'deleted': message.deleted,
+        };
+      })
+      .toList(growable: false),
+};
+
+ChatThread? _chatThreadFromJson(Map<String, dynamic> value) {
+  try {
+    final meta = Map<String, dynamic>.from(value['meta'] as Map);
+    final serverId = '${meta['server_id'] ?? ''}'.trim();
+    if (serverId.isEmpty) return null;
+    final messages = (value['messages'] as List? ?? const [])
+        .whereType<Map>()
+        .map((raw) {
+          final row = Map<String, dynamic>.from(raw);
+          final kindName = '${row['kind'] ?? ''}';
+          final deliveryName = '${row['delivery'] ?? ''}';
+          final transferName = '${row['transfer_state'] ?? ''}';
+          final kind = ChatMessageKind.values.firstWhere(
+            (value) => value.name == kindName,
+            orElse: () => ChatMessageKind.text,
+          );
+          final delivery = ChatDeliveryState.values.firstWhere(
+            (value) => value.name == deliveryName,
+            orElse: () => ChatDeliveryState.sent,
+          );
+          final transfer = ChatTransferState.values.firstWhere(
+            (value) => value.name == transferName,
+            orElse: () => switch (delivery) {
+              ChatDeliveryState.sent => ChatTransferState.sent,
+              ChatDeliveryState.sending => ChatTransferState.failed,
+              ChatDeliveryState.failed => ChatTransferState.failed,
+            },
+          );
+          final durationMs = int.tryParse('${row['duration_ms'] ?? ''}');
+          return ChatMsg(
+            '${row['text'] ?? ''}',
+            mine: row['mine'] == true,
+            kind: kind,
+            path: row['path'] as String?,
+            duration: durationMs == null
+                ? null
+                : Duration(milliseconds: durationMs),
+            localId: '${row['local_id'] ?? ''}'.trim().isEmpty
+                ? null
+                : '${row['local_id']}',
+            serverId: row['server_id'] as String?,
+            createdAt: DateTime.tryParse('${row['created_at'] ?? ''}'),
+            attachmentKeys: (row['attachment_keys'] as List? ?? const [])
+                .map((item) => '$item')
+                .toList(growable: false),
+            delivery: delivery,
+            transferState: transfer,
+            reaction: row['reaction'] as String?,
+            reactions: row['reactions'] is Map
+                ? <String, int>{
+                    for (final entry in (row['reactions'] as Map).entries)
+                      '${entry.key}': int.tryParse('${entry.value}') ?? 0,
+                  }
+                : const <String, int>{},
+            mimeType: row['mime_type'] as String?,
+            sizeBytes: int.tryParse('${row['size_bytes'] ?? ''}'),
+            edited: row['edited'] == true,
+            deleted: row['deleted'] == true,
+          );
+        })
+        .toList(growable: true);
+    return ChatThread(
+      Thread(
+        '${meta['name'] ?? 'Диалог'}',
+        '${meta['group'] ?? 'Диалог'}',
+        '${meta['last'] ?? ''}',
+        '${meta['time'] ?? ''}',
+        unread: int.tryParse('${meta['unread'] ?? 0}') ?? 0,
+        online: meta['online'] == true,
+        lastSeenAt: DateTime.tryParse('${meta['last_seen_at'] ?? ''}'),
+        isGroup: meta['is_group'] == true,
+        serverId: serverId,
+        participantIds: (meta['participant_ids'] as List? ?? const [])
+            .map((item) => '$item')
+            .toList(growable: false),
+        avatarUrl: meta['avatar_url'] as String?,
+      ),
+      messages,
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 /// A group created locally before a backend is connected. Seed groups are
@@ -119,6 +367,7 @@ class ManagedGroup {
 /// Minimal staff record used by the offline mobile preview. The API adapter
 /// can map its own DTO to this shape later without changing the form UI.
 class StaffMember {
+  final String? serverId;
   final String firstName;
   final String lastName;
   final String username;
@@ -148,6 +397,7 @@ class StaffMember {
     required this.gender,
     required this.hireDate,
     this.groups = const <String>[],
+    this.serverId,
   });
 
   String get fullName => '$firstName $lastName'.trim();
@@ -169,6 +419,7 @@ class StaffMember {
     gender: gender,
     hireDate: hireDate,
     groups: groups,
+    serverId: serverId,
   );
 }
 
@@ -368,6 +619,11 @@ class AppStore extends ChangeNotifier {
   final List<AuditCase> cases;
   final List<ChatThread> threads;
   final Map<ChatMsg, String> messageReactions = <ChatMsg, String>{};
+  final Map<String, String> chatDrafts = <String, String>{};
+  final Map<String, Map<String, Object?>> chatSyncState =
+      <String, Map<String, Object?>>{};
+  final Set<String> deletedMessageIds = <String>{};
+  final ChatMediaCache mediaCache = ChatMediaCache();
 
   /// Role-scoped productivity state used by the command centre.
   ///
@@ -437,7 +693,8 @@ class AppStore extends ChangeNotifier {
     }
   }
 
-  String? reactionFor(ChatMsg message) => messageReactions[message];
+  String? reactionFor(ChatMsg message) =>
+      messageReactions[message] ?? message.reaction;
 
   void setMessageReaction(ChatMsg message, String reaction) {
     if (messageReactions[message] == reaction) {
@@ -446,6 +703,174 @@ class AppStore extends ChangeNotifier {
       messageReactions[message] = reaction;
     }
     notifyListeners();
+    _scheduleChatHistoryPersist();
+  }
+
+  String _chatThreadKey(int threadIdx) {
+    if (threadIdx < 0 || threadIdx >= threads.length) return '';
+    return threads[threadIdx].meta.serverId?.trim().isNotEmpty == true
+        ? threads[threadIdx].meta.serverId!.trim()
+        : 'local-thread-$threadIdx';
+  }
+
+  String draftForThread(int threadIdx) =>
+      chatDrafts[_chatThreadKey(threadIdx)] ?? '';
+
+  void saveThreadDraft(int threadIdx, String value) {
+    final key = _chatThreadKey(threadIdx);
+    if (key.isEmpty) return;
+    final normalized = value;
+    if (normalized.isEmpty) {
+      chatDrafts.remove(key);
+    } else {
+      chatDrafts[key] = normalized;
+    }
+    _scheduleChatHistoryPersist();
+  }
+
+  void clearThreadDraft(int threadIdx) => saveThreadDraft(threadIdx, '');
+
+  Map<String, Object?> syncStateForThread(int threadIdx) =>
+      Map<String, Object?>.unmodifiable(
+        chatSyncState[_chatThreadKey(threadIdx)] ?? const {},
+      );
+
+  void saveThreadSyncState(int threadIdx, Map<String, Object?> value) {
+    final key = _chatThreadKey(threadIdx);
+    if (key.isEmpty) return;
+    chatSyncState[key] = Map<String, Object?>.from(value);
+    _scheduleChatHistoryPersist();
+  }
+
+  int indexOfLocalMessage(int threadIdx, String localId) {
+    if (threadIdx < 0 || threadIdx >= threads.length) return -1;
+    return threads[threadIdx].messages.indexWhere(
+      (message) => message.localId == localId,
+    );
+  }
+
+  void appendChatMessage(int threadIdx, ChatMsg message) {
+    if (threadIdx < 0 || threadIdx >= threads.length) return;
+    final messages = threads[threadIdx].messages;
+    if (messages.any(
+      (current) =>
+          current.localId == message.localId ||
+          (message.serverId?.isNotEmpty == true &&
+              current.serverId == message.serverId),
+    )) {
+      return;
+    }
+    messages.add(message);
+    notifyListeners();
+    _scheduleChatHistoryPersist();
+  }
+
+  void updateChatMessage(
+    int threadIdx,
+    String localId,
+    ChatMsg Function(ChatMsg current) update,
+  ) {
+    final index = indexOfLocalMessage(threadIdx, localId);
+    if (index < 0) return;
+    final messages = threads[threadIdx].messages;
+    final previous = messages[index];
+    final next = update(previous);
+    messages[index] = next;
+    final legacyReaction = messageReactions.remove(previous);
+    if (legacyReaction != null) messageReactions[next] = legacyReaction;
+    notifyListeners();
+    _scheduleChatHistoryPersist();
+  }
+
+  void acceptServerMessage(
+    int threadIdx,
+    String localId,
+    ChatMsg serverMessage, {
+    bool preserveLocalPath = true,
+  }) {
+    final index = indexOfLocalMessage(threadIdx, localId);
+    final messages = threads[threadIdx].messages;
+    final accepted = index < 0
+        ? serverMessage
+        : serverMessage.copyWith(
+            localId: localId,
+            path: preserveLocalPath ? messages[index].path : null,
+            clearPath: !preserveLocalPath,
+            duration: messages[index].duration,
+            delivery: ChatDeliveryState.sent,
+            transferState: ChatTransferState.sent,
+          );
+    if (index >= 0) {
+      messages[index] = accepted;
+    } else {
+      final serverIndex = accepted.serverId?.isNotEmpty == true
+          ? messages.indexWhere(
+              (message) => message.serverId == accepted.serverId,
+            )
+          : -1;
+      if (serverIndex >= 0) {
+        messages[serverIndex] = accepted;
+      } else {
+        messages.add(accepted);
+      }
+    }
+    final seenServerIds = <String>{};
+    messages.removeWhere((message) {
+      final id = message.serverId?.trim() ?? '';
+      return id.isNotEmpty && !seenServerIds.add(id);
+    });
+    notifyListeners();
+    _scheduleChatHistoryPersist();
+  }
+
+  void mergeThreadMessages(int threadIdx, Iterable<ChatMsg> incoming) {
+    if (threadIdx < 0 || threadIdx >= threads.length) return;
+    final received = incoming.toList(growable: false);
+    for (final message in received.where((message) => message.deleted)) {
+      final id = message.serverId?.trim() ?? '';
+      if (id.isNotEmpty) deletedMessageIds.add(id);
+    }
+    final filtered = received.where(
+      (message) =>
+          !message.deleted &&
+          (message.serverId == null ||
+              !deletedMessageIds.contains(message.serverId)),
+    );
+    final cached = threads[threadIdx].messages.where(
+      (message) =>
+          message.serverId == null ||
+          !deletedMessageIds.contains(message.serverId),
+    );
+    final merged = _mergeChatMessages(cached, filtered);
+    threads[threadIdx].messages
+      ..clear()
+      ..addAll(merged);
+    notifyListeners();
+    _scheduleChatHistoryPersist();
+  }
+
+  ChatMsg? removeChatMessage(
+    int threadIdx,
+    String localId, {
+    bool tombstone = false,
+  }) {
+    final index = indexOfLocalMessage(threadIdx, localId);
+    if (index < 0) return null;
+    final removed = threads[threadIdx].messages.removeAt(index);
+    if (tombstone && removed.serverId?.isNotEmpty == true) {
+      deletedMessageIds.add(removed.serverId!);
+    }
+    messageReactions.remove(removed);
+    notifyListeners();
+    _scheduleChatHistoryPersist();
+    return removed;
+  }
+
+  void restoreChatMessage(int threadIdx, ChatMsg message) {
+    if (message.serverId?.isNotEmpty == true) {
+      deletedMessageIds.remove(message.serverId);
+    }
+    appendChatMessage(threadIdx, message);
   }
 
   /// Runtime-created objects. They deliberately live in the store so a form
@@ -822,9 +1247,26 @@ class AppStore extends ChangeNotifier {
         ..addAll(cases);
     }
     if (threads != null) {
+      final previous = <String, ChatThread>{
+        for (final thread in this.threads)
+          if ((thread.meta.serverId ?? '').isNotEmpty)
+            thread.meta.serverId!: thread,
+      };
       this.threads
         ..clear()
-        ..addAll(threads);
+        ..addAll(
+          threads.map((thread) {
+            final id = thread.meta.serverId ?? '';
+            final cached = id.isEmpty ? null : previous[id];
+            return cached == null
+                ? thread
+                : ChatThread(
+                    thread.meta,
+                    _mergeChatMessages(cached.messages, thread.messages),
+                  );
+          }),
+        );
+      _scheduleChatHistoryPersist();
     }
     if (groups != null) {
       extraGroups
@@ -852,17 +1294,15 @@ class AppStore extends ChangeNotifier {
   /// Headline KPI numbers for this console's dashboard.
   DashStats get stats => kDashStats[role]!;
 
-  /// The logged-in user's chosen avatar (null = their default photo). Set from
-  /// the avatar picker; read by the top bar and profile so it updates live.
-  AvatarChoice? avatarChoice;
   String? _profileStorageIdentity;
   Future<void> _aiWriteQueue = Future<void>.value();
+  Future<void> _chatWriteQueue = Future<void>.value();
   bool _disposed = false;
 
-  String get _avatarStorageKey =>
-      'profile.${_profileStorageIdentity ?? 'offline.${role.name}'}.avatar';
   String get _aiStorageKey =>
       'profile.${_profileStorageIdentity ?? 'offline.${role.name}'}.ai.v1';
+  String get _chatStorageKey =>
+      'profile.${_profileStorageIdentity ?? 'offline.${role.name}'}.chat.v1';
 
   /// Select a per-account storage namespace and restore device-local profile
   /// state. AI conversations are deliberately account-scoped so one signed-in
@@ -871,42 +1311,37 @@ class AppStore extends ChangeNotifier {
     final safe = identity.trim().replaceAll(RegExp(r'[^a-zA-Z0-9_.-]+'), '_');
     if (safe.isEmpty || _profileStorageIdentity == safe) return;
     await _aiWriteQueue;
+    await _chatWriteQueue;
     if (_disposed) return;
+    final switchingAccount = _profileStorageIdentity != null;
     _profileStorageIdentity = safe;
-    avatarChoice = null;
+    if (switchingAccount) {
+      threads.clear();
+      pinned.clear();
+      archived.clear();
+      pinnedMessages.clear();
+      messageReactions.clear();
+      chatDrafts.clear();
+      chatSyncState.clear();
+      deletedMessageIds.clear();
+    }
     conversations
       ..clear()
       ..add(AiConversation('Yangi suhbat', []));
     activeConv = 0;
 
     try {
+      await mediaCache.configure(safe);
+    } catch (_) {
+      // Media caching is optional. A path-provider failure must never prevent
+      // the small transcript/draft database from opening.
+    }
+    try {
       final prefs = await SharedPreferences.getInstance();
       if (_disposed || _profileStorageIdentity != safe) return;
 
-      final avatarEncoded = prefs.getString(_avatarStorageKey);
-      if (avatarEncoded != null && avatarEncoded.isNotEmpty) {
-        try {
-          final data = Map<String, dynamic>.from(
-            jsonDecode(avatarEncoded) as Map,
-          );
-          final memory = data['memory'] as String?;
-          final gradient = (data['gradient'] as List?)
-              ?.map((value) => int.tryParse('$value'))
-              .whereType<int>()
-              .map(Color.new)
-              .toList(growable: false);
-          avatarChoice = AvatarChoice(
-            photo: data['photo'] as String?,
-            memoryBytes: memory == null ? null : base64Decode(memory),
-            emoji: data['emoji'] as String?,
-            gradient: gradient,
-          );
-        } catch (_) {
-          avatarChoice = null;
-        }
-      }
-
       _restoreAiHistory(prefs.getString(_aiStorageKey));
+      _restoreChatHistory(prefs.getString(_chatStorageKey));
       notifyListeners();
     } catch (_) {
       if (_disposed) return;
@@ -971,48 +1406,123 @@ class AppStore extends ChangeNotifier {
         });
   }
 
+  void _restoreChatHistory(String? encoded) {
+    if (encoded == null || encoded.isEmpty) return;
+    try {
+      final data = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
+      final rawThreads = data['threads'];
+      if (rawThreads is! List) return;
+      final cached = rawThreads
+          .whereType<Map>()
+          .map((value) => _chatThreadFromJson(Map<String, dynamic>.from(value)))
+          .whereType<ChatThread>()
+          .toList(growable: false);
+      final currentById = <String, int>{
+        for (var index = 0; index < threads.length; index++)
+          if ((threads[index].meta.serverId ?? '').isNotEmpty)
+            threads[index].meta.serverId!: index,
+      };
+      for (final saved in cached) {
+        final id = saved.meta.serverId ?? '';
+        final index = currentById[id];
+        if (index == null) {
+          threads.add(saved);
+          continue;
+        }
+        final current = threads[index];
+        threads[index] = ChatThread(
+          current.meta,
+          _mergeChatMessages(saved.messages, current.messages),
+        );
+      }
+      final drafts = data['drafts'];
+      if (drafts is Map) {
+        chatDrafts
+          ..clear()
+          ..addEntries(
+            drafts.entries
+                .map((entry) => MapEntry('${entry.key}', '${entry.value}'))
+                .where(
+                  (entry) => entry.key.isNotEmpty && entry.value.isNotEmpty,
+                ),
+          );
+      }
+      final sync = data['sync_state'];
+      if (sync is Map) {
+        chatSyncState.clear();
+        for (final entry in sync.entries) {
+          if (entry.value is Map) {
+            chatSyncState['${entry.key}'] = Map<String, Object?>.from(
+              entry.value as Map,
+            );
+          }
+        }
+      }
+      final tombstones = data['deleted_message_ids'];
+      if (tombstones is List) {
+        deletedMessageIds
+          ..clear()
+          ..addAll(
+            tombstones
+                .map((value) => '$value')
+                .where((value) => value.isNotEmpty),
+          );
+      }
+      for (final thread in threads) {
+        for (final message in thread.messages.where(
+          (message) => message.deleted,
+        )) {
+          final id = message.serverId?.trim() ?? '';
+          if (id.isNotEmpty) deletedMessageIds.add(id);
+        }
+        thread.messages.removeWhere(
+          (message) =>
+              message.deleted ||
+              (message.serverId != null &&
+                  deletedMessageIds.contains(message.serverId)),
+        );
+      }
+    } catch (_) {
+      // A corrupt cache never blocks the live messaging API.
+    }
+  }
+
+  void _scheduleChatHistoryPersist() {
+    final identity = _profileStorageIdentity;
+    if (identity == null || identity.isEmpty || _disposed) return;
+    final key = _chatStorageKey;
+    final payload = jsonEncode(<String, dynamic>{
+      'version': 2,
+      'threads': threads
+          .where((thread) => (thread.meta.serverId ?? '').isNotEmpty)
+          .take(50)
+          .map(_chatThreadToJson)
+          .toList(growable: false),
+      'drafts': chatDrafts,
+      'sync_state': chatSyncState,
+      'deleted_message_ids': deletedMessageIds.toList(growable: false),
+    });
+    _chatWriteQueue = _chatWriteQueue
+        .then((_) async {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(key, payload);
+        })
+        .catchError((_) {
+          // Keep the in-memory transcript when device storage is unavailable.
+        });
+  }
+
   /// Lets tests and lifecycle owners wait until queued AI history writes have
   /// reached platform storage.
   Future<void> flushAiHistory() => _aiWriteQueue;
+  Future<void> flushChatHistory() => _chatWriteQueue;
+
+  Future<void> clearCurrentUserMediaCache() => mediaCache.clearCurrentUser();
 
   @override
   void dispose() {
     _disposed = true;
     super.dispose();
-  }
-
-  void setAvatar(AvatarChoice? choice) {
-    avatarChoice = choice;
-    notifyListeners();
-    unawaited(_persistAvatar(choice));
-  }
-
-  void setAvatarBytes(Uint8List bytes) =>
-      setAvatar(AvatarChoice(memoryBytes: Uint8List.fromList(bytes)));
-
-  Future<void> _persistAvatar(AvatarChoice? choice) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (choice == null) {
-        await prefs.remove(_avatarStorageKey);
-        return;
-      }
-      await prefs.setString(
-        _avatarStorageKey,
-        jsonEncode({
-          if (choice.photo != null) 'photo': choice.photo,
-          if (choice.memoryBytes != null)
-            'memory': base64Encode(choice.memoryBytes!),
-          if (choice.emoji != null) 'emoji': choice.emoji,
-          if (choice.gradient != null)
-            'gradient': choice.gradient!
-                .map((color) => color.toARGB32())
-                .toList(),
-        }),
-      );
-    } catch (_) {
-      // The in-memory selection remains usable when platform storage is absent.
-    }
   }
 
   /// User-edited profile fields (null = fall back to the role config defaults).
@@ -1413,6 +1923,7 @@ class AppStore extends ChangeNotifier {
       if (pins.isEmpty) pinnedMessages.remove(threadIdx);
     }
     notifyListeners();
+    _scheduleChatHistoryPersist();
   }
 
   void toggleMessagePin(int threadIdx, int messageIdx) {
@@ -1522,6 +2033,7 @@ class AppStore extends ChangeNotifier {
     if (t.isEmpty) return;
     threads[threadIdx].messages.add(ChatMsg(t, mine: true));
     notifyListeners();
+    _scheduleChatHistoryPersist();
   }
 
   /// Replaces one transcript after an authoritative messaging API read. This
@@ -1533,6 +2045,7 @@ class AppStore extends ChangeNotifier {
       ..clear()
       ..addAll(values);
     notifyListeners();
+    _scheduleChatHistoryPersist();
   }
 
   /// Adds an image, video, or recorded voice note to the live local thread.
@@ -1554,6 +2067,7 @@ class AppStore extends ChangeNotifier {
       ),
     );
     notifyListeners();
+    _scheduleChatHistoryPersist();
   }
 
   LedgerEntry recordPayment({

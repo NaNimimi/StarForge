@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'theme.dart';
 
@@ -67,49 +66,20 @@ const Map<String, String> kUserPhotos = {
   'Jamshid Qodirov': 'assets/avatars/jamshid.jpg',
 };
 
-/// A user-selectable avatar: either a bundled [photo] or a [gradient] badge with
-/// an [emoji]. Stored on the [AppStore] so the choice shows everywhere at once.
-class AvatarChoice {
-  final String? photo;
-  final Uint8List? memoryBytes;
-  final List<Color>? gradient;
-  final String? emoji;
-  const AvatarChoice({this.photo, this.memoryBytes, this.gradient, this.emoji});
-}
-
-/// Real-photo avatar options offered in the picker.
-const List<AvatarChoice> kAvatarPhotos = [
-  AvatarChoice(photo: 'assets/avatars/sardor.jpg'),
-  AvatarChoice(photo: 'assets/avatars/dilnoza.jpg'),
-  AvatarChoice(photo: 'assets/avatars/jamshid.jpg'),
-];
-
-/// Colourful emoji badge options offered in the picker.
-const List<AvatarChoice> kAvatarBadges = [
-  AvatarChoice(gradient: [Color(0xFFB85535), Color(0xFFD89A2E)], emoji: '🦁'),
-  AvatarChoice(gradient: [Color(0xFF2E9B8F), Color(0xFF4F7B3B)], emoji: '🌿'),
-  AvatarChoice(gradient: [Color(0xFF7A4A82), Color(0xFF2A3D8F)], emoji: '🔮'),
-  AvatarChoice(gradient: [Color(0xFF2A3D8F), Color(0xFF2E9B8F)], emoji: '🌊'),
-  AvatarChoice(gradient: [Color(0xFFB33A2A), Color(0xFFD89A2E)], emoji: '🔥'),
-  AvatarChoice(gradient: [Color(0xFF4F7B3B), Color(0xFFC68423)], emoji: '⭐'),
-];
-
 /// Deterministic warm avatar from initials; branded users get a real photo
 /// (with their gradient as the loading/fallback backdrop).
 class SfAvatar extends StatelessWidget {
   final String name;
   final double size;
   final Color? color;
+  final String? imageUrl;
 
-  /// When set, overrides the name-derived avatar — used for the logged-in user
-  /// after they pick a custom photo or badge in the avatar picker.
-  final AvatarChoice? choice;
   const SfAvatar({
     super.key,
     required this.name,
     this.size = 34,
     this.color,
-    this.choice,
+    this.imageUrl,
   });
 
   String get _initials {
@@ -119,69 +89,38 @@ class SfAvatar extends StatelessWidget {
         .toUpperCase();
   }
 
-  /// Render a [photo] / gradient+emoji avatar at [size].
-  Widget _choice(AvatarChoice ch) {
-    final grad = ch.gradient ?? const [Color(0xFFB85535), Color(0xFFD89A2E)];
-    return Container(
-      width: size,
-      height: size,
-      clipBehavior: Clip.antiAlias,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: grad,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(size * 0.3),
-        boxShadow: [
-          BoxShadow(
-            color: grad.last.withValues(alpha: 0.32),
-            blurRadius: size * 0.2,
-            offset: Offset(0, size * 0.07),
-          ),
-        ],
-      ),
-      child: ch.memoryBytes != null
-          ? Image.memory(
-              ch.memoryBytes!,
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Text(
-                _initials,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: size * 0.4,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
-              ),
-            )
-          : ch.photo != null
-          ? Image.asset(
-              ch.photo!,
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Text(
-                _initials,
-                style: TextStyle(
-                  fontFamily: SfType.ui,
-                  fontSize: size * 0.4,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
-              ),
-            )
-          : Text(ch.emoji ?? _initials, style: TextStyle(fontSize: size * 0.5)),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = SfTheme.of(context);
-    if (choice != null) return _choice(choice!);
+    final remote = imageUrl?.trim() ?? '';
+    if (remote.isNotEmpty) {
+      return Container(
+        width: size,
+        height: size,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: color ?? c.primarySoft,
+          borderRadius: BorderRadius.circular(size * 0.3),
+        ),
+        child: Image.network(
+          remote,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => Center(
+            child: Text(
+              _initials,
+              style: TextStyle(
+                fontFamily: SfType.ui,
+                fontSize: size * 0.4,
+                fontWeight: FontWeight.w800,
+                color: c.primary,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     // Branded users: a vivid gradient backdrop with their real photo on top.
     final grad = kUserAvatars[name];
     if (grad != null) {

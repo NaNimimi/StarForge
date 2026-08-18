@@ -16,6 +16,35 @@ Map<String, dynamic> decodeNotificationPayload(Object? payload) {
   return {'route': text};
 }
 
+/// Stable event identity shared by FCM and the API notification feed.
+///
+/// Message ids are globally unique on the messaging backend and are present
+/// both in FCM data and in `notification.data`. Prefer them over the outer
+/// notification row id so an immediate push and a later feed refresh cannot
+/// play two sounds for the same message.
+String notificationDedupeKey(Map<String, dynamic> payload) {
+  final nested = payload['data'];
+  final values = <String, dynamic>{
+    if (nested is Map) ...Map<String, dynamic>.from(nested),
+    ...payload,
+  };
+  String value(String key) => values[key]?.toString().trim() ?? '';
+  final messageId = value('message_id');
+  if (messageId.isNotEmpty) return 'message:$messageId';
+  final eventId = value('event_id');
+  if (eventId.isNotEmpty) return 'event:$eventId';
+  final notificationId = value('notification_id');
+  if (notificationId.isNotEmpty) return 'notification:$notificationId';
+  final id = value('id');
+  if (id.isNotEmpty) return 'notification:$id';
+  final createdAt = value('created_at');
+  final eventType = value('event_type');
+  if (createdAt.isNotEmpty || eventType.isNotEmpty) {
+    return 'event:$eventType:$createdAt';
+  }
+  return '';
+}
+
 /// Device-notification bridge for events already issued by the StarForge API.
 ///
 /// This is deliberately separate from the API session: the backend remains the
@@ -29,14 +58,15 @@ class DeviceNotificationService {
 
   // Must match infrastructure/push/fcm_client.py on the StarForge backend.
   static const _channelId = 'starforge_messages';
-  static const _channelName = 'StarForge messages';
+  static const _channelName = 'Уведомления StarForge EDU';
   static const _channelDescription =
-      'Approvals, attendance, payment and risk alerts';
+      'Сообщения, платежи, посещаемость и важные события';
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   final StreamController<Map<String, dynamic>> _tapController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final Map<String, DateTime> _recentlyShown = <String, DateTime>{};
   Map<String, dynamic>? _pendingTapPayload;
   bool _initialized = false;
 
@@ -119,20 +149,47 @@ class DeviceNotificationService {
     Map<String, dynamic> payload = const {},
   }) async {
     await initialize();
-    const details = NotificationDetails(
+    final now = DateTime.now();
+    _recentlyShown.removeWhere(
+      (_, shownAt) => now.difference(shownAt) > const Duration(minutes: 10),
+    );
+    final eventKey = notificationDedupeKey(payload);
+    if (eventKey.isNotEmpty && _recentlyShown.containsKey(eventKey)) return;
+    if (eventKey.isNotEmpty) _recentlyShown[eventKey] = now;
+    final safeTitle = title.trim().isEmpty ? 'StarForge EDU' : title.trim();
+    final safeBody = body.trim().isEmpty
+        ? 'Откройте приложение, чтобы посмотреть новое событие.'
+        : body.trim();
+    final details = NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
         _channelName,
         channelDescription: _channelDescription,
         importance: Importance.high,
         priority: Priority.high,
+        category: AndroidNotificationCategory.status,
+        visibility: NotificationVisibility.private,
+        ticker: 'StarForge EDU',
+        enableVibration: true,
+        playSound: true,
+        styleInformation: BigTextStyleInformation(
+          safeBody,
+          contentTitle: safeTitle,
+          summaryText: 'StarForge EDU',
+        ),
       ),
-      iOS: DarwinNotificationDetails(
+      iOS: const DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
       ),
     );
-    await _plugin.show(id, title, body, details, payload: jsonEncode(payload));
+    await _plugin.show(
+      id,
+      safeTitle,
+      safeBody,
+      details,
+      payload: jsonEncode(payload),
+    );
   }
 }

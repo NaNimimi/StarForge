@@ -84,6 +84,7 @@ void main() {
 
       expect(client.paths.toSet(), {
         '/api/v1/messaging/threads/',
+        '/api/v1/messaging/contacts/',
         '/api/v1/notifications/',
         '/api/v1/notifications/unread-count/',
       }, reason: principal);

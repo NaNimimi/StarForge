@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "387398139981",
+    "project_id": "starforge-789b6",
+    "storage_bucket": "starforge-789b6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:387398139981:android:be55f579ca3d1c7f2d1c04",
+        "android_client_info": {
+          "package_name": "com.starforge.ceo_manager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBdTY4g-N5i262i26IV3oiRvX-7gm3kgkc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

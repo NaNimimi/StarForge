@@ -212,6 +212,10 @@ void main() {
           'notifications',
           'settings',
           'me',
+          'account_preferences',
+          'account_activity',
+          'privacy',
+          'security',
         }),
       );
       expect(buildAdminPage('students', SfColors.dark, SfRole.audit), isNull);
@@ -252,6 +256,10 @@ void main() {
           'notifications',
           'settings',
           'me',
+          'account_preferences',
+          'account_activity',
+          'privacy',
+          'security',
         }),
       );
       for (final forbidden in const [
@@ -272,6 +280,40 @@ void main() {
       }
     });
   });
+
+  testWidgets(
+    'audit messages tab opens read-only oversight with an empty permission list',
+    (tester) async {
+      final session = ApiSession(client: _NoNetworkClient(authenticated: true))
+        ..me = const {
+          'id': 31,
+          'username': 'audit.user',
+          'role': 'audit',
+          'permissions': <String>[],
+        }
+        ..collections['threads'] = const <Map<String, dynamic>>[];
+      addTearDown(session.dispose);
+      _surface(tester, phone);
+      await tester.pumpWidget(_host(SfRole.audit, session: session));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final chatTab = find
+          .descendant(
+            of: find.byKey(const ValueKey('console-bottom-navigation')),
+            matching: find.byIcon(Icons.chat_bubble_rounded),
+          )
+          .hitTestable();
+      expect(chatTab, findsOneWidget);
+      await tester.tap(chatTab);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.textContaining('Audit rejimi'), findsOneWidget);
+      expect(find.byKey(const ValueKey('chat-send-action')), findsNothing);
+      expect(find.byKey(const ValueKey('chat-voice-action')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   for (final role in SfRole.values) {
     testWidgets(

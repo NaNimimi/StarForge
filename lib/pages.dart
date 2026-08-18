@@ -13,6 +13,7 @@ import 'widgets.dart';
 import 'screens.dart'
     show
         SettingsScreen,
+        BranchesScreen,
         BranchWorkspaceScreen,
         StudentsWorkspaceScreen,
         GroupsWorkspaceScreen,
@@ -5594,6 +5595,13 @@ List<MenuGroup> menuFor(SfRole role) {
 /// authenticated role even though it is not duplicated in the sidebar.
 Set<String> navigationRoutesFor(SfRole role) => {
   'me',
+  // Account destinations are opened from the profile rather than duplicated
+  // in every role's sidebar. They remain role-safe because they only expose
+  // the authenticated user's own preferences, activity and security actions.
+  'account_preferences',
+  'account_activity',
+  'privacy',
+  'security',
   for (final group in menuFor(role))
     for (final item in group.items) item.id,
 };
@@ -5618,7 +5626,11 @@ Widget? _adminPageFor(String id, SfColors c, SfRole role) {
     case 'student_report':
       return StudentSelfServiceScreen(colors: c, reportOnly: true);
     case 'branches':
-      return BranchesAdminPage(colors: c);
+      return SfScaffold(
+        colors: c,
+        title: 'Filiallar',
+        body: const BranchesScreen(),
+      );
     case 'students':
       return StudentsWorkspaceScreen(colors: c);
     case 'groups':
@@ -5642,7 +5654,13 @@ Widget? _adminPageFor(String id, SfColors c, SfRole role) {
     case 'payroll':
       return PayrollAdminPage(colors: c, ceo: ceo);
     case 'messages':
-      return MessagesAdminPage(colors: c);
+      // Audit may inspect server transcripts, but must never reach the
+      // writable message workspace (composer, attachments or reactions).
+      // Keep this guard in the shared resolver as well as Console so pushed
+      // and future deep-linked routes preserve the role boundary.
+      return role == SfRole.audit
+          ? ChatsAdminPage(colors: c)
+          : MessagesAdminPage(colors: c);
     case 'chats':
       return ChatsAdminPage(colors: c);
     case 'ai':

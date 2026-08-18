@@ -5,7 +5,7 @@ import 'theme.dart';
 ///
 /// Keep this in one shared place instead of scattering stale version strings
 /// across screens.
-const kAppDisplayVersion = '1.5.8';
+const kAppDisplayVersion = '1.6.15';
 
 /// Display currency for all money formatting. Switchable from the design panel.
 enum SfCurrency { uzs, usd, eur, rub }
@@ -205,6 +205,11 @@ class Student {
   final int attendance;
   final String pay; // paid | debt | partial
   final num debt;
+  final bool attendanceKnown;
+  final bool debtKnown;
+  final String lifecycleStatus;
+  final double? rating;
+  final int? averageScore;
   // Optional direct-entry details. Seed data leaves these null and keeps the
   // original deterministic demo profile; students admitted from the mobile
   // form retain the actual values entered by the user.
@@ -223,6 +228,7 @@ class Student {
   final int? age;
   final String? motherName;
   final String? motherPhone;
+  final String? avatarUrl;
 
   /// True for a record projected from the authenticated API. Missing profile
   /// fields must then stay visibly unavailable instead of being synthesised
@@ -249,9 +255,15 @@ class Student {
     this.age,
     this.motherName,
     this.motherPhone,
+    this.avatarUrl,
     this.serverId,
     this.serverUserId,
     this.serverBacked = false,
+    this.attendanceKnown = true,
+    this.debtKnown = true,
+    this.lifecycleStatus = 'active',
+    this.rating,
+    this.averageScore,
   });
 }
 
@@ -430,6 +442,7 @@ String studentExitDate(Student s) => switch (s.name) {
 };
 
 class Branch {
+  final String? serverId;
   final String name;
   final num revenue;
   final int students;
@@ -442,8 +455,9 @@ class Branch {
     this.students,
     this.attendance,
     this.trend,
-    this.mark,
-  );
+    this.mark, {
+    this.serverId,
+  });
 }
 
 const List<Branch> kBranches = [
@@ -678,7 +692,9 @@ class Thread {
   final String time;
   final int unread;
   final bool online;
+  final DateTime? lastSeenAt;
   final bool isGroup;
+  final String? avatarUrl;
   const Thread(
     this.name,
     this.group,
@@ -686,10 +702,23 @@ class Thread {
     this.time, {
     this.unread = 0,
     this.online = false,
+    this.lastSeenAt,
     this.isGroup = false,
     this.serverId,
     this.participantIds = const [],
+    this.avatarUrl,
   });
+}
+
+/// A conservative online window for backends that publish `last_seen_at`
+/// rather than a dedicated presence socket. The timestamp is still displayed
+/// verbatim once it falls outside this window, so the UI never invents a
+/// permanent online state.
+bool chatPresenceIsOnline(DateTime? lastSeenAt, {DateTime? now}) {
+  if (lastSeenAt == null) return false;
+  final reference = now ?? DateTime.now();
+  final elapsed = reference.toUtc().difference(lastSeenAt.toUtc());
+  return !elapsed.isNegative && elapsed <= const Duration(minutes: 2);
 }
 
 // Manager (Dilnoza · Yunusobod) talks to her teachers and parents.
